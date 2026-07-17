@@ -1,7 +1,7 @@
 # Local Read-Aloud (Kokoro TTS) — Session Audit & Handoff
 
-**Status:** Working, user-accepted 2026-07-16: *"works great … almost instant, maybe
-2-300 milliseconds … flow is very good … experience is seamless."* That day's changes:
+**Status:** Working, user-accepted 2026-07-16 (perceived start ~200–300ms, flow judged
+smooth and seamless in daily use). That day's changes:
 budget chunking verified (0 gaps); START cut to ~500–600ms server-side via
 audio-budgeted first chunk + speech-weighted chars + boot warmup; boundary stalls
 killed via silence trimming + CUT_PAUSE; markdown/TUI sanitizing; terminal reading via
@@ -66,7 +66,7 @@ the safety net now** — repo: https://github.com/sayed-qutob-work/kokoro-read-a
 
 **Dependencies outside the venv:**
 - **eSpeak NG** — `C:\Program Files\eSpeak NG`, on PATH. Required for phonemization.
-- **AutoHotkey v2** — `C:\Users\MrSp\AppData\Local\Programs\AutoHotkey\v2\AutoHotkey64.exe`
+- **AutoHotkey v2** — `%LOCALAPPDATA%\Programs\AutoHotkey\v2\AutoHotkey64.exe`
   (**per-user install** — this is why `assoc .ahk` reports nothing; that's normal).
 
 **Autostart:** shortcut to `start_tts.vbs` in `shell:startup` (Win+R → `shell:startup`).
@@ -212,8 +212,8 @@ into the venv would **silently** enable it.
 
 - **Estimated** gain: chunk-0 synth ~2400ms → ~200ms. **This is an estimate and estimates
   in this session have been consistently wrong. Measure before believing.**
-- **Cost:** ~1–2GB VRAM held permanently, on an 8GB card shared with Ollama and CS2.
-  The server autostarts and runs all day.
+- **Cost:** ~1–2GB VRAM held permanently, on an 8GB card shared with other everyday
+  GPU workloads (local LLMs, games). The server autostarts and runs all day.
 - **Floor:** the 104ms fixed cost is phonemization + Python — CPU-bound. GPU can't touch it.
 - **Verdict:** declined on this machine. Reconsider if the RTX 3090 (24GB) upgrade happens —
   2GB of 24 is noise.
