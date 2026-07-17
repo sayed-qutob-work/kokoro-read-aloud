@@ -12,3 +12,6 @@ sh.Run "cmd /c cd /d C:\kokoro && env\Scripts\python.exe tts_server.py > C:\koko
 ' --- 2. Read-aloud hotkeys (AutoHotkey v2, default per-user install path) ---
 ahk = sh.ExpandEnvironmentStrings("%LOCALAPPDATA%") & "\Programs\AutoHotkey\v2\AutoHotkey64.exe"
 sh.Run """" & ahk & """ ""C:\kokoro\read_aloud.ahk""", 0, False
+
+' --- 3. Caption overlay (highlights the word being spoken; windowless python) ---
+sh.Run "C:\kokoro\env\Scripts\pythonw.exe C:\kokoro\overlay.py", 0, False

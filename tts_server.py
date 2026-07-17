@@ -155,12 +155,14 @@ def split_atoms(text):
 def trim_silence(x, sr, thresh=0.01, keep_ms=50):
     """Cut Kokoro's leading/trailing silence padding, keeping keep_ms of
     natural breath on each side. Boundary pauses are then controlled by
-    SENTENCE_PAUSE / CUT_PAUSE alone."""
+    SENTENCE_PAUSE / CUT_PAUSE alone. Returns (audio, lead_seconds); lead
+    is what was cut from the front, needed to keep word timestamps aligned."""
     idx = np.where(np.abs(x) > thresh)[0]
     if len(idx) == 0:
-        return x
+        return x, 0.0
     keep = int(keep_ms / 1000 * sr)
-    return x[max(0, idx[0] - keep):min(len(x), idx[-1] + keep)]
+    a = max(0, idx[0] - keep)
+    return x[a:min(len(x), idx[-1] + keep)], a / sr
 
 
 def time_stretch(x, sr, factor):
@@ -216,24 +218,26 @@ def compress_final_word(audio, sr, words):
     2-4x, as if the sentence ended there (measured 2026-07-17; clause cuts
     at , ; : are clean). Compress that word back to the chunk's own
     per-phoneme rate so cuts don't sound like the voice randomly slowing.
-    words = [(text, n_phonemes, start_ts, end_ts)] in raw-synthesis time."""
+    words = [(text, n_phonemes, start_ts, end_ts)] in raw-synthesis time.
+    Returns (audio, words) with the final word's end_ts updated to match."""
     if len(words) < 4:
-        return audio
+        return audio, words
     *rest, (wtext, nph, t0, t1) = words
     rates = [(b - a) / n for _, n, a, b in rest if n and b > a]
     if not rates or not nph or t1 <= t0:
-        return audio
+        return audio, words
     factor = (t1 - t0) / max(float(np.median(rates)) * nph, 1e-3)
     if factor < 1.3:
-        return audio
+        return audio, words
     factor = min(factor, 2.5)
     i0, i1 = int(t0 * sr), min(int(t1 * sr), len(audio))
     if i1 - i0 < sr // 20:
-        return audio
+        return audio, words
     if VERBOSE:
         print(f"cutfix '{wtext}' {t1 - t0:.2f}s / {factor:.2f}", flush=True)
     seg = time_stretch(audio[i0:i1], sr, factor)
-    return _xjoin(_xjoin(audio[:i0], seg, sr), audio[i1:], sr)
+    audio = _xjoin(_xjoin(audio[:i0], seg, sr), audio[i1:], sr)
+    return audio, rest + [(wtext, nph, t0, t0 + (t1 - t0) / factor)]
 
 
 class KokoroEngine:
@@ -301,6 +305,7 @@ class Player:
         self.play_until = 0.0                # wallclock when banked audio ends
         self.density = 0.075                 # sec of audio per character
         self.rt = 4.0                        # synthesis throughput, x realtime
+        self.now = None                      # chunk being played, for /now
 
         self.lock = threading.Lock()
         self.cv = threading.Condition()
@@ -347,6 +352,7 @@ class Player:
     def stop(self):
         with self.lock:
             self.gen += 1
+        self.now = None
         self._reset_audio()
         self._drain(self.audio_q)
         with self.cv:
@@ -421,8 +427,12 @@ class Player:
 
             last = buf.rstrip('"\')')[-1:]
             if last not in ".!?…,;:":
-                audio = compress_final_word(audio, sr, words)
-            audio = trim_silence(time_stretch(audio, sr, PLAYBACK_SPEED), sr)
+                audio, words = compress_final_word(audio, sr, words)
+            audio, lead = trim_silence(time_stretch(audio, sr, PLAYBACK_SPEED), sr)
+            # word times in playback coordinates, for the /now endpoint
+            wordmap = [(w, round(max(0.0, s / PLAYBACK_SPEED - lead), 3),
+                           round(max(0.0, e / PLAYBACK_SPEED - lead), 3))
+                       for w, _, s, e in words]
             # a real sentence end earns a real pause; a mid-sentence cut gets
             # almost none, so slicing is inaudible instead of a ~0.5s stall
             pause = SENTENCE_PAUSE if last in ".!?…" else CUT_PAUSE
@@ -431,17 +441,20 @@ class Player:
                     [audio, np.zeros(int(pause * sr), np.float32)])
             now = time.perf_counter()
             self.play_until = max(self.play_until, now) + len(audio) / sr
-            self.audio_q.put((gen, audio, sr))
+            self.audio_q.put((gen, audio, sr, buf, wordmap))
 
     def _play_loop(self):
         last_gen = None
         while True:
             starved = self.audio_q.empty()
             t0 = time.perf_counter()
-            gen, audio, sr = self.audio_q.get()
+            gen, audio, sr, buf, wordmap = self.audio_q.get()
             waited = time.perf_counter() - t0
             if gen != self.gen:
                 continue
+            # what /now reports; replaced whole so reads stay consistent
+            self.now = {"gen": gen, "t0": time.perf_counter(),
+                        "dur": len(audio) / sr, "text": buf, "words": wordmap}
             if gen != last_gen:
                 last_gen = gen
                 if VERBOSE:
@@ -464,6 +477,10 @@ class Player:
 app = Flask(__name__)
 player = None
 
+# the overlay polls /now up to 12x/s all day; keep it out of server.log
+import logging
+logging.getLogger("werkzeug").addFilter(lambda r: "/now" not in r.getMessage())
+
 
 @app.post("/speak")
 def speak():
@@ -478,6 +495,26 @@ def speak():
 def stop():
     player.stop()
     return jsonify(ok=True)
+
+
+@app.get("/now")
+def now():
+    """What is being spoken right now, for the caption overlay: the chunk
+    text, its word timings, and which word is sounding at this instant."""
+    s = player.now
+    if not s or s["gen"] != player.gen:
+        return jsonify(active=False)
+    t = time.perf_counter() - s["t0"]
+    if t > s["dur"] + 0.3:
+        return jsonify(active=False)
+    idx = -1
+    for i, (_, a, _b) in enumerate(s["words"]):
+        if a <= t:
+            idx = i
+        else:
+            break
+    return jsonify(active=True, text=s["text"], words=s["words"],
+                   word=idx, t=round(t, 3))
 
 
 @app.route("/config", methods=["GET", "POST"])
