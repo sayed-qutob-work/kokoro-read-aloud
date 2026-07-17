@@ -312,6 +312,8 @@ class Player:
         self.density = 0.075                 # sec of audio per character
         self.rt = 4.0                        # synthesis throughput, x realtime
         self.now = None                      # chunk being played, for /now
+        self.source = ""                     # original text of the utterance
+        self.source_gen = 0
 
         self.lock = threading.Lock()
         self.cv = threading.Condition()
@@ -346,6 +348,8 @@ class Player:
             self.gen += 1
             gen = self.gen
             self.t_speak = time.perf_counter()
+            self.source = text          # original, pre-sanitize: /utterance
+            self.source_gen = gen
         self._reset_audio()
         self._drain(self.audio_q)
         with self.cv:
@@ -533,7 +537,14 @@ def now():
         else:
             break
     return jsonify(active=True, text=s["text"], words=s["words"],
-                   word=idx, t=round(t, 3))
+                   word=idx, t=round(t, 3), utt=s["gen"])
+
+
+@app.get("/utterance")
+def utterance():
+    """Original (pre-sanitize) text of the current utterance, so the native
+    highlighter can anchor it inside the source document via UI Automation."""
+    return jsonify(utt=player.source_gen, text=player.source)
 
 
 @app.route("/config", methods=["GET", "POST"])

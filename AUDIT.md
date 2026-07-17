@@ -63,8 +63,9 @@ so there is no per-invocation load cost.
 |---|---|
 | `C:\kokoro\tts_server.py` | The server. All tuning lives in its config block. |
 | `C:\kokoro\read_aloud.ahk` | Hotkey front-end (AutoHotkey **v2**). |
-| `C:\kokoro\overlay.py` | Caption overlay: highlights the word being spoken (polls `/now`). |
-| `C:\kokoro\extension\` | Browser extension: Speechify-style in-page word highlighting (load unpacked). |
+| `C:\kokoro\highlighter.py` | **In-place** word highlighter for native apps (UIA + layered window). |
+| `C:\kokoro\extension\` | Browser extension: in-page word highlighting (load unpacked). |
+| `C:\kokoro\overlay.py` | Caption strip (retired from autostart — user wants no bottom transcript). |
 | `C:\kokoro\start_tts.vbs` | Launches all three, hidden, logs to `server.log`. |
 | `C:\kokoro\server.log` | Server output when started via the `.vbs`. **Read this first on any failure.** |
 | `C:\kokoro\env\` | The virtualenv (not in git; rebuild via `requirements.txt`). |
@@ -466,6 +467,35 @@ extension in `C:\kokoro\extension\` (the only way to paint inside a page):
 - **NOT yet verified in a real browser** (built blind); the server side it
   depends on (`/now`) is verified. First-run check: select a paragraph, hit
   Ctrl+Alt+R, watch for the blue word marker following the voice.
+
+**Round 3 (same day): highlight the ORIGINAL text, everywhere — deployed.**
+User clarified: no transcript anywhere, the source text itself must light up —
+browser, Notepad, `.md` files, wherever. Windows cannot restyle another
+process's rendered text, but `highlighter.py` achieves the same look:
+
+- Per utterance it anchors the spoken text in the focused app via **UI
+  Automation TextPattern**: the live selection if the app kept it (editors do
+  after ^C), else `FindText` of the utterance head in the document (terminals
+  drop selections). New `GET /utterance` serves the original pre-sanitize text;
+  `/now` gained an `utt` counter to detect utterance changes.
+- Each spoken token is located with `FindText` inside the not-yet-spoken
+  remainder (self-aligning; tolerant of markdown that `sanitize()` stripped,
+  so `**bold**` in an `.md` still matches its inner word). Bounding rects are
+  re-queried every 80ms, so scrolling moves the marker.
+- The marker is a tiny **per-pixel-alpha layered window** (`UpdateLayeredWindow`,
+  premultiplied BGRA, `WS_EX_TRANSPARENT` = click-through, `NOACTIVATE`,
+  PerMonitorV2 DPI-aware — ctypes prototypes matter, handles truncate to 32-bit
+  without them) that jumps word to word, tinting the word `#3d5afe` at ~43%.
+- **Verified end-to-end 2026-07-17 in Notepad**: scripted select-all + `/speak`,
+  screenshot mid-read shows the word "pine" tinted in place at the moment it
+  was spoken. Known cosmetic: the marker is line-height tall (UIA reports full
+  line rects), so it can poke above short glyphs.
+- Apps with no TextPattern (or Chromium with accessibility off) simply get no
+  marker — the browser extension covers web pages properly. `overlay.py` was
+  removed from `start_tts.vbs` per the user's explicit "no bottom transcript";
+  the file stays for anyone who wants it back.
+- Needs `comtypes` (added to requirements.txt). Highlighter is a third hidden
+  `pythonw.exe` pair at startup; killing it affects nothing else.
 
 ---
 

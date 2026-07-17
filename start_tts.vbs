@@ -13,5 +13,8 @@ sh.Run "cmd /c cd /d C:\kokoro && env\Scripts\python.exe tts_server.py > C:\koko
 ahk = sh.ExpandEnvironmentStrings("%LOCALAPPDATA%") & "\Programs\AutoHotkey\v2\AutoHotkey64.exe"
 sh.Run """" & ahk & """ ""C:\kokoro\read_aloud.ahk""", 0, False
 
-' --- 3. Caption overlay (highlights the word being spoken; windowless python) ---
-sh.Run "C:\kokoro\env\Scripts\pythonw.exe C:\kokoro\overlay.py", 0, False
+' --- 3. In-place word highlighter (tints the spoken word in the SOURCE app
+'        via UI Automation; windowless python). The caption-strip overlay.py
+'        was retired from autostart 2026-07-17 (user: no bottom transcript);
+'        add a line like this one back if it is ever wanted again. ---
+sh.Run "C:\kokoro\env\Scripts\pythonw.exe C:\kokoro\highlighter.py", 0, False
