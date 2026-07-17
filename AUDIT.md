@@ -1,7 +1,10 @@
 # Local Read-Aloud (Kokoro TTS) — Session Audit & Handoff
 
 **Status:** Working, user-accepted 2026-07-16 (perceived start ~200–300ms, flow judged
-smooth and seamless in daily use). That day's changes:
+smooth and seamless in daily use). **2026-07-17:** fixed user-reported "random slow
+words" (bare-cut final-word lengthening, §5 item 6) and added the word-highlight
+caption overlay (`overlay.py` + `/now`, §8) — both deployed, awaiting user's ear/eye
+verdict. Earlier (2026-07-16) changes:
 budget chunking verified (0 gaps); START cut to ~500–600ms server-side via
 audio-budgeted first chunk + speech-weighted chars + boot warmup; boundary stalls
 killed via silence trimming + CUT_PAUSE; markdown/TUI sanitizing; terminal reading via
@@ -53,7 +56,8 @@ so there is no per-invocation load cost.
 |---|---|
 | `C:\kokoro\tts_server.py` | The server. All tuning lives in its config block. |
 | `C:\kokoro\read_aloud.ahk` | Hotkey front-end (AutoHotkey **v2**). |
-| `C:\kokoro\start_tts.vbs` | Launches both, hidden, logs to `server.log`. |
+| `C:\kokoro\overlay.py` | Caption overlay: highlights the word being spoken (polls `/now`). |
+| `C:\kokoro\start_tts.vbs` | Launches all three, hidden, logs to `server.log`. |
 | `C:\kokoro\server.log` | Server output when started via the `.vbs`. **Read this first on any failure.** |
 | `C:\kokoro\env\` | The virtualenv (not in git; rebuild via `requirements.txt`). |
 | `C:\kokoro\README.md` | Fresh-machine setup guide. |
@@ -378,18 +382,34 @@ misfire-shaped and stoppable with Ctrl+Alt+S. Ctrl+Alt+T = explicit clipboard re
 
 Done 2026-07-17 — ONNX files deleted with the rest of the cleanup (§2).
 
-### OPEN: word-by-word highlighting (Speechify-style), user-requested 2026-07-17
+### DEPLOYED 2026-07-17: word-by-word highlighting (Speechify-style), user-requested
 
-Feasibility established: KPipeline already emits per-word `start_ts`/`end_ts`
-(§4, now flowing through `synth()`), and the transforms after synthesis are all
-deterministic (stretch ÷ PLAYBACK_SPEED, leading-trim offset, pauses), so the
-server can know exactly which word is sounding. Display options assessed:
-**(a) always-on-top overlay caption window** — separate small process polling the
-server, works for EVERY text source (web, PDF, terminal, editor; other apps'
-windows cannot be painted into, so this is the only universal form);
-**(b) browser extension** — true in-page highlighting like Speechify, web-only,
-substantially more code. Recommended a → optionally b later. Awaiting user's
-choice of form factor; not yet built.
+User chose the **overlay caption window** form (the only universal one — other
+apps' windows cannot be painted into; a browser extension would be web-only and
+remains a possible phase 2). How it works:
+
+- `synth()` returns per-word `(text, n_phonemes, start_ts, end_ts)` from
+  KPipeline tokens (§4). `_synth_loop` maps them through every audio transform:
+  `compress_final_word` updates the final word's end, `time_stretch` divides by
+  `PLAYBACK_SPEED`, `trim_silence` now returns the leading-trim offset which is
+  subtracted. `_play_loop` stamps wallclock at chunk start.
+- **`GET /now`** returns `{active, text, words:[[w,start,end]...], word: idx, t}`
+  — which word is sounding at this instant. Werkzeug logging for `/now` is
+  filtered out of `server.log` (12 polls/s all day would bloat it).
+- `overlay.py` — tkinter strip, frameless, topmost, bottom-center, launched by
+  `start_tts.vbs` via `pythonw.exe` (so: TWO `pythonw.exe` processes = one
+  overlay, same venv-launcher pattern as the server, don't re-diagnose). Polls
+  80ms while visible / 500ms hidden; shows the current chunk, dims spoken words,
+  blue-highlights the sounding word; hides ~0.7s after playback ends.
+  **Drag to move, right-click to close.** Server never knows it exists; killing
+  the overlay changes nothing else.
+
+Verified 2026-07-17: `/now` word index tracks reading order across chunks
+(sampled live), goes inactive after `/stop`, screenshot confirmed the rendered
+strip mid-playback ("into the" dimmed, "quiet" highlighted). Not yet judged by
+eye at real reading speed — highlight lag vs audio, if any, is bounded by the
+output-stream latency (~tens of ms) + ≤80ms poll; if it feels late, lower
+POLL_MS or subtract a fixed offset in overlay.py.
 
 ---
 
