@@ -1,0 +1,10 @@
+# virtualenv - rebuilt from requirements.txt (see README)
+env/
+
+# runtime output
+server.log
+__pycache__/
+
+# local scratch
+*.bak
+.claude/
