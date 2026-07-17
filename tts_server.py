@@ -68,6 +68,18 @@ PREFETCH = 2
 
 _CLAUSE = re.compile(r"[,;:]\s")
 
+# Words a chunk must not end on when cut at a bare word boundary. Kokoro
+# treats any cut as a sentence end and lengthens the final word 2-4x
+# (measured 2026-07-17: "the" 0.087s whole -> 0.350s cut); a drawn-out
+# stranded function word is the worst-sounding case, so the cut backs up
+# past these.
+_STOP_TAIL = {"a", "an", "the", "of", "to", "in", "on", "at", "for", "and",
+              "or", "but", "nor", "with", "that", "as", "by", "from", "is",
+              "are", "was", "were", "be", "been", "his", "her", "its",
+              "their", "this", "these", "those", "my", "your", "our", "he",
+              "she", "it", "they", "we", "i", "you", "not", "so", "if",
+              "than", "then", "when", "while", "which", "who", "whose"}
+
 # Digits and currency symbols expand ~5-7x when read aloud ("2024" ->
 # "twenty twenty four", "%" -> "percent"). This is the main source of the
 # 4x audio-per-char swing, so all chunk sizing uses weighted chars.
@@ -100,7 +112,13 @@ def cut_point(text, limit):
         best = m.end() - 1
     if best >= limit // 2:
         return best
-    return text.rfind(" ", 0, limit)
+    cut = text.rfind(" ", 0, limit)
+    while cut > limit // 4:
+        prev = text.rfind(" ", 0, cut)
+        if text[prev + 1:cut].lower().strip("\"'(),;:") not in _STOP_TAIL:
+            break
+        cut = prev
+    return cut
 
 
 def sanitize(text):
@@ -184,6 +202,40 @@ def time_stretch(x, sr, factor):
     return (y[:target] / wsum[:target]).astype(np.float32)
 
 
+def _xjoin(a, b, sr, ms=4):
+    """Concatenate with a short crossfade so splices can't click."""
+    n = min(int(ms * sr // 1000), len(a), len(b))
+    if n <= 0:
+        return np.concatenate([a, b])
+    f = np.linspace(0.0, 1.0, n, dtype=np.float32)
+    return np.concatenate([a[:-n], a[-n:] * (1 - f) + b[:n] * f, b[n:]])
+
+
+def compress_final_word(audio, sr, words):
+    """A bare mid-sentence cut makes Kokoro lengthen the chunk's last word
+    2-4x, as if the sentence ended there (measured 2026-07-17; clause cuts
+    at , ; : are clean). Compress that word back to the chunk's own
+    per-phoneme rate so cuts don't sound like the voice randomly slowing.
+    words = [(text, n_phonemes, start_ts, end_ts)] in raw-synthesis time."""
+    if len(words) < 4:
+        return audio
+    *rest, (wtext, nph, t0, t1) = words
+    rates = [(b - a) / n for _, n, a, b in rest if n and b > a]
+    if not rates or not nph or t1 <= t0:
+        return audio
+    factor = (t1 - t0) / max(float(np.median(rates)) * nph, 1e-3)
+    if factor < 1.3:
+        return audio
+    factor = min(factor, 2.5)
+    i0, i1 = int(t0 * sr), min(int(t1 * sr), len(audio))
+    if i1 - i0 < sr // 20:
+        return audio
+    if VERBOSE:
+        print(f"cutfix '{wtext}' {t1 - t0:.2f}s / {factor:.2f}", flush=True)
+    seg = time_stretch(audio[i0:i1], sr, factor)
+    return _xjoin(_xjoin(audio[:i0], seg, sr), audio[i1:], sr)
+
+
 class KokoroEngine:
     name = "kokoro"
 
@@ -201,13 +253,24 @@ class KokoroEngine:
         return self.pipes[code]
 
     def synth(self, sentence):
+        """Returns (audio, sr, words); words carry per-word timestamps
+        (text, n_phonemes, start_ts, end_ts) in raw-synthesis time."""
         pipe = self._pipe_for(self.voice)
-        chunks = [np.asarray(a, dtype=np.float32)
-                  for _, _, a in pipe(sentence, voice=self.voice,
-                                      speed=self.model_speed)]
-        if not chunks:
-            return None, 24000
-        return np.concatenate(chunks), 24000
+        parts, words, offset = [], [], 0.0
+        for r in pipe(sentence, voice=self.voice, speed=self.model_speed):
+            if r.audio is None:
+                continue
+            a = np.asarray(r.audio, dtype=np.float32)
+            for t in (r.tokens or []):
+                if (t.start_ts is not None and t.end_ts is not None
+                        and any(c.isalnum() for c in t.text)):
+                    words.append((t.text, len(t.phonemes or ""),
+                                  offset + t.start_ts, offset + t.end_ts))
+            offset += len(a) / 24000
+            parts.append(a)
+        if not parts:
+            return None, 24000, []
+        return np.concatenate(parts), 24000, words
 
 
 class KokoroOnnxEngine:
@@ -223,7 +286,7 @@ class KokoroOnnxEngine:
         lang = "en-gb" if self.voice.startswith("b") else "en-us"
         samples, sr = self.k.create(sentence, voice=self.voice,
                                     speed=self.model_speed, lang=lang)
-        return np.asarray(samples, dtype=np.float32), sr
+        return np.asarray(samples, dtype=np.float32), sr, []
 
 
 class Player:
@@ -338,7 +401,7 @@ class Player:
                 continue
             try:
                 t0 = time.perf_counter()
-                audio, sr = self.engine.synth(buf)
+                audio, sr, words = self.engine.synth(buf)
                 dt = time.perf_counter() - t0
             except Exception as e:
                 print("synth failed:", e, flush=True)
@@ -356,10 +419,13 @@ class Player:
                       f"{dt*1000:6.0f}ms ({d/max(dt,1e-6):5.1f}x RT) "
                       f"[want {target:3d}w, dens {self.density:.3f}]", flush=True)
 
+            last = buf.rstrip('"\')')[-1:]
+            if last not in ".!?…,;:":
+                audio = compress_final_word(audio, sr, words)
             audio = trim_silence(time_stretch(audio, sr, PLAYBACK_SPEED), sr)
             # a real sentence end earns a real pause; a mid-sentence cut gets
             # almost none, so slicing is inaudible instead of a ~0.5s stall
-            pause = SENTENCE_PAUSE if buf.rstrip('"\')')[-1:] in ".!?…" else CUT_PAUSE
+            pause = SENTENCE_PAUSE if last in ".!?…" else CUT_PAUSE
             if pause > 0:
                 audio = np.concatenate(
                     [audio, np.zeros(int(pause * sr), np.float32)])

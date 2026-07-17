@@ -133,6 +133,9 @@ this session was wrong, and always optimistic.** Trust only these.
 | Kokoro silence padding | **~280ms leading, ~400–500ms trailing, EVERY synthesis** | measured via silence-run analysis |
 | Inline markdown (`**` `` ` ``) | **inert** — byte-identical audio | same analysis; do NOT re-suspect it |
 | Markdown list markers (`- `) | real pauses (752ms vs 432ms) and +2s audio on a 2-bullet text | same analysis |
+| Bare word-boundary cut | final word lengthened **2–4x** ("the" 0.087→0.350s, "jumps" 0.300→0.550s, "and" 0.113→0.425s) | 2026-07-17 token-timestamp test |
+| Clause-boundary cut (`, ; :`) | **no** artificial lengthening ("dog" 0.600→0.525s) | same test; comma cuts are benign |
+| Per-word timestamps | KPipeline `Result.tokens` carry `start_ts`/`end_ts` per word, aligned with the audio buffer | verified in installed pkg, used by cutfix |
 
 Current measured behaviour: **START ≈ 500–600ms**, steady-state playback clean, no gaps.
 
@@ -188,6 +191,23 @@ prosody. A sentence is sliced only if it alone blows the budget with nothing buf
 5. **Input sanitizing** (`sanitize()`): markdown list markers, headers, table pipes,
    box-drawing chars and arrows are stripped before chunking (terminal text is full
    of them). Inline `**`/backticks are inert to Kokoro (measured) but stripped anyway.
+
+**Added 2026-07-17 — the "random slow words" fix (user-reported):**
+
+6. **Bare-cut final-word compression** (`compress_final_word()` + `_STOP_TAIL` in
+   `cut_point()`). User heard the voice "slowing down on some words" arrhythmically.
+   Measured cause: Kokoro treats ANY cut as an utterance end and lengthens the final
+   word 2–4x (§4). Clause cuts at `, ; :` are clean; **bare word-boundary cuts** (the
+   `cut_point` fallback, common in the small early chunks of the START ramp) each
+   produced one drawn-out word. Two-part fix, both verified live: (a) bare cuts back
+   up past trailing function words (a 4x-stretched "the" was the worst case), so cuts
+   end on content words; (b) the chunk's per-word timestamps (`Result.tokens`) locate
+   the final word, and if its duration exceeds ~1.3x the chunk's own median
+   per-phoneme rate it is WSOLA-compressed back to it (factor clamped ≤2.5, crossfaded
+   splices), *before* the global time-stretch. Logged as `cutfix 'word' 0.60s / 1.92`.
+   Live test 2026-07-17: 5/5 bare cuts caught, 0 gaps. The remaining word-to-word
+   pacing variation is Kokoro's natural prosody (stressed/content words are longer),
+   which the 2.07x speed makes more noticeable — that part is the model, not a bug.
 
 **Known limit:** a chunk whose density is far off the running average still gaps *once*,
 then adapts (weighting has removed the *predictable* part of that variance). The fixed
@@ -357,6 +377,19 @@ misfire-shaped and stoppable with Ctrl+Alt+S. Ctrl+Alt+T = explicit clipboard re
 ### Remaining from before
 
 Done 2026-07-17 — ONNX files deleted with the rest of the cleanup (§2).
+
+### OPEN: word-by-word highlighting (Speechify-style), user-requested 2026-07-17
+
+Feasibility established: KPipeline already emits per-word `start_ts`/`end_ts`
+(§4, now flowing through `synth()`), and the transforms after synthesis are all
+deterministic (stretch ÷ PLAYBACK_SPEED, leading-trim offset, pauses), so the
+server can know exactly which word is sounding. Display options assessed:
+**(a) always-on-top overlay caption window** — separate small process polling the
+server, works for EVERY text source (web, PDF, terminal, editor; other apps'
+windows cannot be painted into, so this is the only universal form);
+**(b) browser extension** — true in-page highlighting like Speechify, web-only,
+substantially more code. Recommended a → optionally b later. Awaiting user's
+choice of form factor; not yet built.
 
 ---
 
