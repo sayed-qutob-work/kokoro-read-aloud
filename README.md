@@ -92,3 +92,16 @@ Invoke-RestMethod -Uri http://127.0.0.1:5111/config    # current values + measur
 
 **Important:** editing `tts_server.py` does nothing to a running server. Kill it,
 verify port 5111 is free, then start it again — the procedure is in AUDIT.md §7.
+
+## Credits & licensing
+
+The code in this repository is MIT-licensed (see `LICENSE`). It builds on:
+
+- [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) and the
+  [kokoro](https://github.com/hexgrad/kokoro) library by hexgrad — Apache 2.0.
+  Neither is redistributed here; the library installs from PyPI and the model
+  downloads from Hugging Face on first run.
+- [eSpeak NG](https://github.com/espeak-ng/espeak-ng) (GPL-3.0) — installed
+  separately by the user, used by Kokoro for phonemization.
+- Flask, NumPy, PyTorch, sounddevice — installed from PyPI under their own
+  permissive licenses.
