@@ -1,25 +1,31 @@
-r"""In-place spoken-word highlighter for native apps (Notepad, editors,
-terminals - anything that implements the UI Automation TextPattern).
+r"""In-place spoken-word highlighter for any app that implements the UI
+Automation TextPattern: Notepad, Firefox, VS Code, editors, terminals.
 
 The point: highlight the word being spoken ON the original text, not a
 copy of it. Windows won't let one process restyle another's rendered
 text, but UI Automation exposes the exact on-screen rectangle of any
 text range, and a layered click-through window can tint just that
 rectangle. Visually the word in the source document gets a translucent
-marker, Speechify-style. Browsers are covered separately (and better)
-by the extension in C:\kokoro\extension; if an app exposes no
-TextPattern, this process simply does nothing.
+marker, Speechify-style. If an app exposes no TextPattern at all, this
+process simply does nothing. (The Chromium extension in
+C:\kokoro\extension is optional; Firefox works through UIA directly.)
 
 Flow, per utterance (tracked via /now's `utt` counter):
   1. Fetch the original text from /utterance.
-  2. Anchor it in the focused app: the current UIA text selection if it
-     still exists (editors keep it after Ctrl+C), else FindText of the
-     text's head in the document (covers terminals, which drop
-     selections).
+  2. Anchor it in the source app. The TextPattern is searched near the
+     focused element (itself, then ancestors, then first descendant);
+     within each, the current text selection is preferred (editors keep
+     it after Ctrl+C), else FindText of the utterance's first line.
+     Anchoring retries for a few seconds: Firefox instantiates its
+     accessibility engine lazily, so the very first queries after
+     startup come back empty and only later ones succeed.
   3. Per spoken token from /now: FindText the token within the not-yet-
      spoken remainder (self-aligning, tolerant of markdown the server
      sanitized away), then draw its bounding rectangles. Rects are
      re-queried every poll, so scrolling moves the marker correctly.
+     If a range reports no rectangles, the word is Select()ed once and
+     rects re-queried: VS Code only exposes geometry for lines near its
+     accessibility "page", and moving the selection moves the page.
 
 Launched hidden by start_tts.vbs with pythonw.exe. Kill it and nothing
 else changes.
@@ -34,10 +40,13 @@ import numpy as np
 import comtypes  # noqa: F401  (initializes COM)
 import comtypes.client
 
+import os
+
 NOW = "http://127.0.0.1:5111/now"
 UTTER = "http://127.0.0.1:5111/utterance"
 POLL_ACTIVE = 0.08
 POLL_IDLE = 0.5
+DEBUG = os.environ.get("KOKORO_HL_DEBUG")   # path to append (token, rects) log
 HL_RGB = (0x3D, 0x5A, 0xFE)   # marker color
 HL_ALPHA = 110                # 0-255; text stays readable underneath
 PAD = 2                       # px around the word
@@ -195,15 +204,49 @@ def get(url):
         return None
 
 
-def text_pattern_of_focus():
+def _tp_of(el):
     try:
-        el = uia.GetFocusedElement()
+        if not el:
+            return None
         pat = el.GetCurrentPattern(UIA.UIA_TextPatternId)
         if not pat:
             return None
         return pat.QueryInterface(UIA.IUIAutomationTextPattern)
     except Exception:
         return None
+
+
+def candidate_patterns():
+    """TextPatterns near the focused element, most specific first: the
+    element itself (VS Code's editor lives only here), its ancestors
+    (Firefox's document), then the first TextPattern descendant."""
+    try:
+        el = uia.GetFocusedElement()
+    except Exception:
+        return
+    tp = _tp_of(el)
+    if tp:
+        yield tp
+    p = el
+    walker = uia.ControlViewWalker
+    for _ in range(8):
+        try:
+            p = walker.GetParentElement(p)
+        except Exception:
+            break
+        if not p:
+            break
+        tp = _tp_of(p)
+        if tp:
+            yield tp
+    try:
+        cond = uia.CreatePropertyCondition(
+            UIA.UIA_IsTextPatternAvailablePropertyId, True)
+        tp = _tp_of(el.FindFirst(UIA.TreeScope_Subtree, cond))
+        if tp:
+            yield tp
+    except Exception:
+        pass
 
 
 class Anchor:
@@ -213,37 +256,38 @@ class Anchor:
 
     def __init__(self, utt_text):
         self.ok = False
-        self.token_ranges = {}      # (chunk_text, idx) -> UIA range or None
-        tp = text_pattern_of_focus()
-        if tp is None:
-            return
-        rng = None
-        try:
-            sel = tp.GetSelection()
-            if sel and sel.Length > 0:
-                r = sel.GetElement(0)
-                if (r.GetText(200) or "").strip():
-                    rng = r.Clone()
-        except Exception:
+        self.token_ranges = {}      # (chunk_text, idx) -> located UIA range
+        self.select_tried = set()   # keys whose Select() fallback already ran
+        # first line only: a multi-line head can never match FindText
+        lines = [ln.strip() for ln in utt_text.strip().splitlines()
+                 if ln.strip()]
+        head = lines[0][:60] if lines else ""
+        for tp in candidate_patterns():
             rng = None
-        if rng is None:
-            head = utt_text.strip()[:60]
-            if not head:
-                return
             try:
-                doc = tp.DocumentRange
-                found = doc.FindText(head, False, True)
-                if found is None:
-                    return
-                # only the head matched; the utterance continues past it
-                found.MoveEndpointByRange(
-                    UIA.TextPatternRangeEndpoint_End, doc,
-                    UIA.TextPatternRangeEndpoint_End)
-                rng = found
+                sel = tp.GetSelection()
+                if sel and sel.Length > 0:
+                    r = sel.GetElement(0)
+                    if (r.GetText(200) or "").strip():
+                        rng = r.Clone()
             except Exception:
+                rng = None
+            if rng is None and head:
+                try:
+                    doc = tp.DocumentRange
+                    found = doc.FindText(head, False, True)
+                    if found is not None:
+                        # only the head matched; the utterance continues
+                        found.MoveEndpointByRange(
+                            UIA.TextPatternRangeEndpoint_End, doc,
+                            UIA.TextPatternRangeEndpoint_End)
+                        rng = found
+                except Exception:
+                    rng = None
+            if rng is not None:
+                self.remaining = rng
+                self.ok = True
                 return
-        self.remaining = rng
-        self.ok = True
 
     def locate(self, chunk_text, idx, token):
         key = (chunk_text, idx)
@@ -259,7 +303,8 @@ class Anchor:
                 self.remaining = nxt
         except Exception:
             r = None
-        self.token_ranges[key] = r
+        if r is not None:           # misses are NOT cached: a later poll
+            self.token_ranges[key] = r   # may succeed once the app warms up
         return r
 
 
@@ -272,12 +317,18 @@ def rects_of(rng):
         return []
 
 
+ANCHOR_WINDOW = 6.0     # keep retrying the anchor this long per utterance
+ANCHOR_RETRY = 0.5      # ...but attempt at most every this often
+
+
 def main():
     marker = Marker()
     anchor = None
     utt_seen = None
     chunk_seen = None
     resolved = -1               # tokens of current chunk located so far
+    anchor_until = 0.0
+    anchor_next = 0.0
 
     while True:
         pump()
@@ -292,34 +343,65 @@ def main():
         if d.get("utt") != utt_seen:
             utt_seen = d.get("utt")
             chunk_seen = None
-            u = get(UTTER)
-            anchor = Anchor(u["text"]) if u and u.get("utt") == utt_seen \
-                else None
-            if anchor is not None and not anchor.ok:
-                anchor = None
+            anchor = None
+            anchor_until = time.time() + ANCHOR_WINDOW
+            anchor_next = 0.0
 
         if anchor is None:
-            marker.hide()
-            time.sleep(POLL_ACTIVE)
-            continue
+            # retry across polls: Firefox's accessibility engine warms up
+            # lazily, so early attempts return empty selections/misses
+            t = time.time()
+            if anchor_next <= t < anchor_until:
+                anchor_next = t + ANCHOR_RETRY
+                u = get(UTTER)
+                if u and u.get("utt") == utt_seen:
+                    a = Anchor(u["text"])
+                    if a.ok:
+                        anchor = a
+            if anchor is None:
+                marker.hide()
+                time.sleep(POLL_ACTIVE)
+                continue
 
         if d["text"] != chunk_seen:
             chunk_seen = d["text"]
             resolved = -1
 
         idx = d.get("word", -1)
-        if idx < 0:
+        words = d.get("words") or []
+        if idx < 0 or idx >= len(words):
             time.sleep(POLL_ACTIVE)
             continue
-        # resolve tokens in order so FindText's cursor advances correctly
-        while resolved < idx:
+        # resolve tokens in order so FindText's cursor advances correctly;
+        # already-passed tokens get one attempt, the current one retries
+        while resolved < idx - 1:
             resolved += 1
-            anchor.locate(chunk_seen, resolved, d["words"][resolved][0])
+            anchor.locate(chunk_seen, resolved, words[resolved][0])
+        if resolved < idx and \
+                anchor.locate(chunk_seen, idx, words[idx][0]) is not None:
+            resolved = idx
         rng = anchor.token_ranges.get((chunk_seen, idx))
         if rng is None:
             marker.hide()
         else:
-            marker.draw(rects_of(rng))
+            rr = rects_of(rng)
+            if not rr and (chunk_seen, idx) not in anchor.select_tried:
+                # VS Code: geometry exists only near its accessibility
+                # page; selecting the word moves the page onto it
+                anchor.select_tried.add((chunk_seen, idx))
+                try:
+                    rng.Select()
+                    rr = rects_of(rng)
+                except Exception:
+                    pass
+            marker.draw(rr)
+        if DEBUG:
+            try:
+                with open(DEBUG, "a", encoding="utf-8") as f:
+                    f.write(f"chunk={chunk_seen[:20]!r} idx={idx} "
+                            f"tok={words[idx][0]!r} rects={rr}\n")
+            except Exception:
+                pass
         time.sleep(POLL_ACTIVE)
 
 
