@@ -133,22 +133,28 @@ def sanitize(text):
 
 
 def split_atoms(text):
-    """Sentences are the packing unit. Only oversized ones get cut, and the
-    packer rejoins atoms before synthesis, so joins are invisible to Kokoro."""
+    """Clauses are the packing unit: sentences are split at , ; : as well as
+    sentence ends, so chunk boundaries only ever land where the voice would
+    pause anyway. A bare mid-clause cut lengthens the cut word 2-4x
+    (measured) - user-audible as random slowing - so it is reserved for
+    single clauses that alone exceed CHUNK_CHARS. Atoms are rejoined before
+    synthesis (clauses keep their punctuation), so Kokoro still sees whole
+    sentences and joins stay free."""
     text = re.sub(r"\s+", " ", sanitize(text)).strip()
     if not text:
         return []
     atoms = []
     for p in re.split(r"(?<=[.!?])\s+", text):
-        p = p.strip()
-        while len(p) > CHUNK_CHARS:
-            cut = cut_point(p, CHUNK_CHARS)
-            if cut <= 0:
-                cut = CHUNK_CHARS
-            atoms.append(p[:cut].strip())
-            p = p[cut:].strip()
-        if p:
-            atoms.append(p)
+        for c in re.split(r"(?<=[,;:])\s+", p.strip()):
+            c = c.strip()
+            while wlen(c) > CHUNK_CHARS:
+                cut = cut_point(c, windex(c, CHUNK_CHARS))
+                if cut <= 0:
+                    cut = windex(c, CHUNK_CHARS)
+                atoms.append(c[:cut].strip())
+                c = c[cut:].strip()
+            if c:
+                atoms.append(c)
     return atoms
 
 
@@ -374,8 +380,13 @@ class Player:
                        min(CHUNK_CHARS, audio_affordable / max(self.density, 1e-4))))
 
     def _take(self):
-        """Pack whole sentences up to the current budget. Slice a sentence only
-        when it alone exceeds the budget and we have nothing yet."""
+        """Pack whole clause atoms up to the current budget. Atoms are never
+        sliced here: a chunk boundary inside a clause costs audible prosody,
+        an overshoot only costs START/bank time. An underfilled chunk (below
+        half target) also takes the next atom whole - a tiny chunk banks so
+        little audio that the following one can't be synthesized in time
+        (the 2.24x constraint, §4 of the audit).
+        Returns (gen, buf, target, final) - final marks the utterance end."""
         with self.cv:
             while not self.pending:
                 self.cv.wait()
@@ -384,25 +395,17 @@ class Player:
             buf = ""
             while self.pending and self.pending[0][0] == gen:
                 atom = self.pending[0][1]
-                if not buf and wlen(atom) > target:
-                    cut = cut_point(atom, windex(atom, target))
-                    if cut <= 0:
-                        cut = min(windex(atom, target), len(atom))
-                    buf = atom[:cut].strip()
-                    rest = atom[cut:].strip()
-                    self.pending.popleft()
-                    if rest:
-                        self.pending.appendleft((gen, rest))
-                    break
-                if buf and wlen(buf) + wlen(atom) + 1 > target:
+                if (buf and wlen(buf) >= target // 2
+                        and wlen(buf) + wlen(atom) + 1 > target):
                     break
                 self.pending.popleft()
                 buf = (buf + " " + atom).strip() if buf else atom
-            return gen, buf, target
+            final = not (self.pending and self.pending[0][0] == gen)
+            return gen, buf, target, final
 
     def _synth_loop(self):
         while True:
-            gen, buf, target = self._take()
+            gen, buf, target, final = self._take()
             if not buf or gen != self.gen:
                 continue
             try:
@@ -415,32 +418,48 @@ class Player:
             if audio is None or gen != self.gen:
                 continue
 
+            d_raw = len(audio) / sr
+            audio, lead = trim_silence(audio, sr)
             d = len(audio) / sr
-            # learn from what actually happened (density is per WEIGHTED char)
+            words = [(t, n, min(max(s - lead, 0.0), d),
+                            min(max(e - lead, 0.0), d))
+                     for t, n, s, e in words]
+            # learn from what actually happened. density is SPEECH seconds
+            # per weighted char - Kokoro's fixed ~0.7s silence padding used
+            # to be counted, which inflated density after every short read
+            # and shrank all later chunks. rt stays on raw audio (the §4 fit).
             w = wlen(buf)
             self.density = 0.7 * self.density + 0.3 * (d / max(w, 1))
-            self.rt = 0.7 * self.rt + 0.3 * (d / max(dt, 1e-6))
+            self.rt = 0.7 * self.rt + 0.3 * (d_raw / max(dt, 1e-6))
             if VERBOSE:
                 print(f"synth {len(buf):3d}ch {w:3d}w -> {d:5.1f}s audio in "
-                      f"{dt*1000:6.0f}ms ({d/max(dt,1e-6):5.1f}x RT) "
+                      f"{dt*1000:6.0f}ms ({d_raw/max(dt,1e-6):5.1f}x RT) "
                       f"[want {target:3d}w, dens {self.density:.3f}]", flush=True)
 
+            # only a bare mid-clause cut (rare: oversized clause) needs the
+            # final-word repair; a chunk that ends the utterance keeps its
+            # natural final lengthening even without punctuation
             last = buf.rstrip('"\')')[-1:]
-            if last not in ".!?…,;:":
+            if not final and last not in ".!?…,;:":
                 audio, words = compress_final_word(audio, sr, words)
-            audio, lead = trim_silence(time_stretch(audio, sr, PLAYBACK_SPEED), sr)
+            audio = time_stretch(audio, sr, PLAYBACK_SPEED)
             # word times in playback coordinates, for the /now endpoint
-            wordmap = [(w, round(max(0.0, s / PLAYBACK_SPEED - lead), 3),
-                           round(max(0.0, e / PLAYBACK_SPEED - lead), 3))
-                       for w, _, s, e in words]
-            # a real sentence end earns a real pause; a mid-sentence cut gets
-            # almost none, so slicing is inaudible instead of a ~0.5s stall
-            pause = SENTENCE_PAUSE if last in ".!?…" else CUT_PAUSE
+            wordmap = [(t, round(s / PLAYBACK_SPEED, 3),
+                           round(e / PLAYBACK_SPEED, 3))
+                       for t, _, s, e in words]
+            # a real sentence end - or the end of the whole selection - earns
+            # a real pause; clause boundaries and cuts get almost none
+            pause = SENTENCE_PAUSE if final or last in ".!?…" else CUT_PAUSE
             if pause > 0:
                 audio = np.concatenate(
                     [audio, np.zeros(int(pause * sr), np.float32)])
             now = time.perf_counter()
-            self.play_until = max(self.play_until, now) + len(audio) / sr
+            with self.lock:
+                # a /speak that arrived after the gen check above must not
+                # inherit this chunk's playback time as its budget
+                if gen != self.gen:
+                    continue
+                self.play_until = max(self.play_until, now) + len(audio) / sr
             self.audio_q.put((gen, audio, sr, buf, wordmap))
 
     def _play_loop(self):

@@ -1,10 +1,17 @@
 # Local Read-Aloud (Kokoro TTS) — Session Audit & Handoff
 
 **Status:** Working, user-accepted 2026-07-16 (perceived start ~200–300ms, flow judged
-smooth and seamless in daily use). **2026-07-17:** fixed user-reported "random slow
-words" (bare-cut final-word lengthening, §5 item 6) and added the word-highlight
-caption overlay (`overlay.py` + `/now`, §8) — both deployed, awaiting user's ear/eye
-verdict. Earlier (2026-07-16) changes:
+smooth and seamless in daily use). **2026-07-17, two rounds:** (1) fixed "random slow
+words" via final-word compression (§5 item 6) + word-highlight caption overlay
+(`overlay.py` + `/now`, §8). (2) User reported reads after the first were choppy
+(fast/slow churn, stalls, worst on small texts) and mandated **steady flow — chunk
+boundaries only at commas/periods**. Root causes found and fixed (§5 item 7):
+stopword-backup shrank chunks past the 2.24x gap constraint; density learned from
+raw audio was inflated by Kokoro's fixed ~0.7s padding after every short read;
+the compressor fired on unpunctuated text ends. Chunking now packs whole CLAUSE
+atoms — verified live, zero gaps/cutfixes across long, short, unpunctuated and
+interrupted reads. Also added in-page browser-extension highlighting (§8).
+Earlier (2026-07-16) changes:
 budget chunking verified (0 gaps); START cut to ~500–600ms server-side via
 audio-budgeted first chunk + speech-weighted chars + boot warmup; boundary stalls
 killed via silence trimming + CUT_PAUSE; markdown/TUI sanitizing; terminal reading via
@@ -57,6 +64,7 @@ so there is no per-invocation load cost.
 | `C:\kokoro\tts_server.py` | The server. All tuning lives in its config block. |
 | `C:\kokoro\read_aloud.ahk` | Hotkey front-end (AutoHotkey **v2**). |
 | `C:\kokoro\overlay.py` | Caption overlay: highlights the word being spoken (polls `/now`). |
+| `C:\kokoro\extension\` | Browser extension: Speechify-style in-page word highlighting (load unpacked). |
 | `C:\kokoro\start_tts.vbs` | Launches all three, hidden, logs to `server.log`. |
 | `C:\kokoro\server.log` | Server output when started via the `.vbs`. **Read this first on any failure.** |
 | `C:\kokoro\env\` | The virtualenv (not in git; rebuild via `requirements.txt`). |
@@ -212,6 +220,34 @@ prosody. A sentence is sliced only if it alone blows the budget with nothing buf
    Live test 2026-07-17: 5/5 bare cuts caught, 0 gaps. The remaining word-to-word
    pacing variation is Kokoro's natural prosody (stressed/content words are longer),
    which the 2.07x speed makes more noticeable — that part is the model, not a bug.
+
+**Added 2026-07-17 later — clause-atom rewrite (supersedes how often item 6 fires):**
+
+7. **Chunk boundaries only at `, ; : . ! ?` — user-mandated steady flow.** After
+   item 6 shipped, real use showed reads after the first were choppy: (a) the
+   `_STOP_TAIL` backup shrank sliced chunks below the audio the budget planned,
+   violating the 2.24x gap constraint (§4) → stalls; (b) `density` was learned
+   from RAW audio including Kokoro's fixed ~0.7s silence padding — negligible on
+   long chunks, dominant on short ones, so every small read inflated density and
+   shrank all later chunks (matches "the smaller the text, the worse");
+   (c) `compress_final_word` fired on selections without ending punctuation,
+   speeding up natural endings. Fixes, all deployed + verified live:
+   - `split_atoms` splits sentences into **clause atoms** at `[,;:]\s` (clauses
+     keep their punctuation, so rejoining reconstructs the exact sentence —
+     joins stay free). Bare cuts only remain for a single clause > CHUNK_CHARS.
+   - `_take` never slices: first atom is always taken whole; an underfilled buf
+     (< target/2) also takes the next atom whole (a tiny chunk banks too little
+     audio for the 2.24x constraint). Returns a `final` flag.
+   - density = SPEECH seconds per wchar (trim now happens BEFORE stretch and
+     before learning); `rt` stays on raw audio, matching the §4 synth fit.
+   - compression skipped when `final` or chunk ends in any of `.!?…,;:`;
+     the utterance's last chunk gets SENTENCE_PAUSE even unpunctuated.
+   - `play_until` update is gen-guarded under `self.lock`: a `/speak` racing a
+     finishing synth could inherit ~2–14s of stale budget → monster first chunk.
+   **Cost, measured:** START on a clause-poor opening is now the whole first
+   clause: observed 1332ms on a 76-char opening clause (was ~500–600ms). This is
+   the user's explicit trade: flow > start latency. `FIRST_CHUNK_AUDIO` is now a
+   packing target, not a cap. Supersedes §9's START figure.
 
 **Known limit:** a chunk whose density is far off the running average still gaps *once*,
 then adapts (weighting has removed the *predictable* part of that variance). The fixed
@@ -411,10 +447,33 @@ eye at real reading speed — highlight lag vs audio, if any, is bounded by the
 output-stream latency (~tens of ms) + ≤80ms poll; if it feels late, lower
 POLL_MS or subtract a fixed offset in overlay.py.
 
+**Round 2 (same day): in-page highlighting** — user wants the highlight ON the
+word in the page (Speechify proper), not a strip underneath. Built as a browser
+extension in `C:\kokoro\extension\` (the only way to paint inside a page):
+
+- `content.js` snapshots the selection as one DOM Range per word on
+  `selectionchange`, polls `/now` through `background.js` (MV3 content scripts
+  are CORS-bound; the service worker fetches with `host_permissions`), aligns
+  spoken tokens to the snapshot in reading order (normalized match, bounded
+  forward scan), and paints via the **CSS Custom Highlight API** — zero DOM
+  mutation, cannot break page layout.
+- Install: browser → extensions page → Developer mode → **Load unpacked** →
+  `C:\kokoro\extension` (works in Chrome/Edge/Brave/Vivaldi).
+- Limits: DOM text only — no PDFs in the built-in viewer, no Google Docs
+  (canvas). Non-web sources never match; the overlay covers those. The overlay
+  and extension coexist; right-click the overlay to close it, or remove its
+  line from `start_tts.vbs` to stop autostarting it.
+- **NOT yet verified in a real browser** (built blind); the server side it
+  depends on (`/now`) is verified. First-run check: select a paragraph, hit
+  Ctrl+Alt+R, watch for the blue word marker following the voice.
+
 ---
 
 ## 9. Accepted trade-offs (settled — reopen only with new information)
 
+- **START — superseded 2026-07-17 (§5 item 7):** now = synthesis of the whole first
+  clause (observed 1332ms on a 76-char clause; short clauses still ~500–600ms). The
+  user explicitly traded start latency for steady flow. Historical figure below:
 - **START ≈ 500–600ms** (re-opened and improved 2026-07-16; was 640–800ms nominal,
   1103–1461ms observed on real text). It is ~100% chunk-0 synthesis: 104ms fixed +
   248ms per second of first-chunk audio. `FIRST_CHUNK_AUDIO` is the knob; the CPU
