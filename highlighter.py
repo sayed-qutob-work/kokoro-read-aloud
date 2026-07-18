@@ -1,5 +1,12 @@
 r"""In-place spoken-word highlighter for any app that implements the UI
-Automation TextPattern: Notepad, Firefox, VS Code, editors, terminals.
+Automation TextPattern: Notepad, Firefox, the VS Code editor.
+
+Terminals are out of scope and cannot be supported. VS Code's integrated
+terminal (xterm.js) paints text to a canvas and exposes it to
+accessibility through a hidden DOM mirror parked far off-screen -- it
+reports rects at x=-11571 with a 58557px height for a window living in
+x=-1928..8. UIA yields the terminal's text but no usable geometry, and
+nothing bridges the two. Don't spend time here again.
 
 The point: highlight the word being spoken ON the original text, not a
 copy of it. Windows won't let one process restyle another's rendered
@@ -32,6 +39,8 @@ else changes.
 """
 import ctypes
 import json
+import os
+import re
 import time
 from ctypes import wintypes
 from urllib.request import urlopen
@@ -40,13 +49,15 @@ import numpy as np
 import comtypes  # noqa: F401  (initializes COM)
 import comtypes.client
 
-import os
-
 NOW = "http://127.0.0.1:5111/now"
 UTTER = "http://127.0.0.1:5111/utterance"
 POLL_ACTIVE = 0.08
-POLL_IDLE = 0.5
-DEBUG = os.environ.get("KOKORO_HL_DEBUG")   # path to append (token, rects) log
+POLL_IDLE = 0.12       # not lazier: this is the lag before a read is even
+                       # noticed, and the voice is already speaking by then,
+                       # so a slow idle poll eats the utterance's first word
+DEBUG = os.environ.get("KOKORO_HL_DEBUG")   # path: log anchor decisions +
+                                            # per-token rects. Diagnose with
+                                            # this, don't guess (AUDIT.md §8)
 HL_RGB = (0x3D, 0x5A, 0xFE)   # marker color
 HL_ALPHA = 110                # 0-255; text stays readable underneath
 PAD = 2                       # px around the word
@@ -204,6 +215,49 @@ def get(url):
         return None
 
 
+def head_candidates(utt_text):
+    """Search strings for locating the utterance, most specific first.
+
+    FindText only matches contiguous text, but the server flattens the
+    selection into one line, joining a heading to the paragraph under it
+    with whitespace. In the document those are separate text runs, so the
+    full head matches nothing -- which is why a read used to work while a
+    selection was live (anchored off the selection) and fail once it was
+    cleared. Runs of 2+ spaces mark where the flattening happened, so the
+    segment before the first such run is a real contiguous run of text.
+    Longest first: short fragments risk matching a nav item instead.
+    """
+    lines = [ln.strip() for ln in utt_text.strip().splitlines() if ln.strip()]
+    if not lines:
+        return []
+    first = lines[0]
+    seg = re.split(r"\s{2,}", first)[0]
+    out = []
+    for c in (first[:60], seg[:60], seg[:30], " ".join(seg.split()[:4])):
+        c = c.strip()
+        if len(c) >= 8 and c not in out:
+            out.append(c)
+    return out
+
+
+def dlog(msg):
+    """Timestamped diagnostic line; no-op unless KOKORO_HL_DEBUG is set."""
+    if not DEBUG:
+        return
+    try:
+        with open(DEBUG, "a", encoding="utf-8") as f:
+            f.write(f"{time.strftime('%H:%M:%S')} {msg}\n")
+    except Exception:
+        pass
+
+
+def _doc_head(tp, n=50):
+    try:
+        return (tp.DocumentRange.GetText(n) or "").replace("\n", " ")
+    except Exception:
+        return "<no text>"
+
+
 def _tp_of(el):
     try:
         if not el:
@@ -258,36 +312,37 @@ class Anchor:
         self.ok = False
         self.token_ranges = {}      # (chunk_text, idx) -> located UIA range
         self.select_tried = set()   # keys whose Select() fallback already ran
-        # first line only: a multi-line head can never match FindText
-        lines = [ln.strip() for ln in utt_text.strip().splitlines()
-                 if ln.strip()]
-        head = lines[0][:60] if lines else ""
-        for tp in candidate_patterns():
-            rng = None
+        heads = head_candidates(utt_text)
+        for i, tp in enumerate(candidate_patterns()):
+            rng, how = None, None
             try:
                 sel = tp.GetSelection()
                 if sel and sel.Length > 0:
                     r = sel.GetElement(0)
                     if (r.GetText(200) or "").strip():
-                        rng = r.Clone()
+                        rng, how = r.Clone(), "selection"
             except Exception:
                 rng = None
-            if rng is None and head:
+            for h in (heads if rng is None else []):
                 try:
                     doc = tp.DocumentRange
-                    found = doc.FindText(head, False, True)
+                    found = doc.FindText(h, False, True)
                     if found is not None:
                         # only the head matched; the utterance continues
                         found.MoveEndpointByRange(
                             UIA.TextPatternRangeEndpoint_End, doc,
                             UIA.TextPatternRangeEndpoint_End)
-                        rng = found
+                        rng, how = found, f"findtext[{h[:24]!r}]"
+                        break
                 except Exception:
-                    rng = None
+                    pass
+            dlog(f"  cand[{i}] how={how} doc={_doc_head(tp)!r}")
             if rng is not None:
                 self.remaining = rng
                 self.ok = True
+                dlog(f"ANCHOR ok via={how} cand={i}")
                 return
+        dlog(f"ANCHOR FAILED heads={heads}")
 
     def locate(self, chunk_text, idx, token):
         key = (chunk_text, idx)
@@ -381,7 +436,8 @@ def main():
                 anchor.locate(chunk_seen, idx, words[idx][0]) is not None:
             resolved = idx
         rng = anchor.token_ranges.get((chunk_seen, idx))
-        if rng is None:
+        rr = []                 # reset every poll: a stale rr would make
+        if rng is None:         # a failed lookup log as the last success
             marker.hide()
         else:
             rr = rects_of(rng)
@@ -392,16 +448,20 @@ def main():
                 try:
                     rng.Select()
                     rr = rects_of(rng)
+                    # rects are harvested; now collapse to a bare caret so
+                    # VS Code stops painting its own selection over the
+                    # word. Without this the first word of every line keeps
+                    # a blue block until the next line's Select() moves it.
+                    caret = rng.Clone()
+                    caret.MoveEndpointByRange(
+                        UIA.TextPatternRangeEndpoint_End, caret,
+                        UIA.TextPatternRangeEndpoint_Start)
+                    caret.Select()
                 except Exception:
                     pass
             marker.draw(rr)
-        if DEBUG:
-            try:
-                with open(DEBUG, "a", encoding="utf-8") as f:
-                    f.write(f"chunk={chunk_seen[:20]!r} idx={idx} "
-                            f"tok={words[idx][0]!r} rects={rr}\n")
-            except Exception:
-                pass
+        dlog(f"chunk={chunk_seen[:20]!r} idx={idx} "
+             f"tok={words[idx][0]!r} rects={rr}")
         time.sleep(POLL_ACTIVE)
 
 

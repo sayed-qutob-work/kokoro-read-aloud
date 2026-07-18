@@ -265,6 +265,7 @@ ramp gapped *every* time.
 | **torch thread tuning** | No headroom | Already 6/6 P-cores. |
 | **`MODEL_SPEED` > 1.3** | Rejected | Garbles onsets/endings. Use `PLAYBACK_SPEED` instead. |
 | **Trimming AHK `Sleep`/`KeyWait`** | Pointless | AHK contributes ~0 to START. Measured. |
+| **In-place highlighting in a terminal** | **Impossible — proven 2026-07-18** | xterm.js (VS Code's integrated terminal) paints text to a canvas and exposes it to accessibility through a hidden off-screen DOM mirror. Probed live: terminal text reports rects at `x=-11571` and `x=-14907`, height `58557`, for a window occupying `x=-1928..8`. UIA gives the text but no usable geometry and nothing bridges the two. Reading terminal text still works (that is `copyOnSelection`, unrelated). Do not spend time here again. |
 
 ### GPU — the one open option, **untested**
 
@@ -496,6 +497,60 @@ process's rendered text, but `highlighter.py` achieves the same look:
   the file stays for anyone who wants it back.
 - Needs `comtypes` (added to requirements.txt). Highlighter is a third hidden
   `pythonw.exe` pair at startup; killing it affects nothing else.
+
+**Round 4 (2026-07-18): multi-app support finished; verified by the user.**
+Round 3 worked only in Notepad. Each remaining app failed for its own reason;
+all diagnosed from live UIA probes and a debug log, none by guessing.
+
+- **Firefox** — the TextPattern is not on the focused element but on a
+  *document ancestor* of it, and the accessibility engine warms up **lazily**
+  (the first queries after startup return empty selections and zero rects).
+  Fix: `candidate_patterns()` yields the focused element, then up to 8
+  ancestors, then the first TextPattern descendant; anchoring retries for
+  `ANCHOR_WINDOW` (6s) instead of giving up on the first miss, and `locate()`
+  no longer caches misses.
+- **VS Code editor (`.md`)** — needs `"editor.accessibilitySupport": "on"` in
+  user settings, *and* `FindText` ranges report **zero rects** until the range
+  is `Select()`-ed: VS Code only materializes geometry near its accessibility
+  "page", and selecting moves the page. Fix: on empty rects, `Select()` once
+  per word, harvest rects, then collapse to a bare caret so VS Code stops
+  painting its own selection block over the word.
+- **The paragraph-boundary anchoring bug** (this is the one that made the
+  browser feel random). The server flattens the selection into one line,
+  joining a heading to the paragraph beneath it with whitespace; in the
+  document those are separate text runs, so `FindText` of a 60-char head
+  matched *nothing*. With a live selection the anchor came from the selection
+  and worked; the moment the user clicked away and cleared it, the FindText
+  fallback failed on every passage spanning a heading — i.e. most real ones.
+  Fix: `head_candidates()` returns progressively shorter search strings,
+  longest first, splitting on runs of 2+ spaces (the tell that flattening
+  happened) so a bare heading is tried. Longest-first matters: a short
+  fragment can match a nav item and anchor the whole read in the wrong place.
+- **First word of a read was never highlighted** — not a highlighting bug.
+  `POLL_IDLE` was 0.5s, so up to half a second passed before the highlighter
+  even noticed a read had started, by which time the voice was a word or two
+  in. Continuation chunks always started at word 0; only an utterance's first
+  chunk lost words — that asymmetry is what identified it. Now 0.12s.
+- **Debug logging**: set `KOKORO_HL_DEBUG=<path>` before launching
+  `highlighter.py` and it appends timestamped anchor decisions (which document
+  it locked onto, via selection or which search string) and per-token rects.
+  Off unless the variable is set. This is how Round 4 was diagnosed — every
+  earlier attempt guessed and was wrong. Use it before theorising.
+- **Verified by the user 2026-07-18**: `.md` in VS Code — every word, correct
+  positions. Firefox — repeated reads with the selection cleared between them,
+  including heading-spanning passages, all correct; first word included.
+- **Known cosmetic (accepted by the user):** in VS Code, the `Select()` needed
+  to materialize geometry moves the caret into the word, and VS Code's own
+  `editor.occurrencesHighlight` then faintly tints every other instance of
+  that word. It cannot be suppressed from outside the editor. Optional user
+  fix, scoped so code files keep the feature:
+  `"[markdown]": {"editor.occurrencesHighlight": "off", "editor.selectionHighlight": false}`.
+- **Deliberately NOT changed:** `Anchor.__init__` accepts the first non-empty
+  selection without checking it matches the text being spoken, so a stale
+  selection elsewhere could in principle hijack the anchor. Logged as a latent
+  risk, not a fix — the debug log showed the selection path anchoring to the
+  correct document every single time, and this is the path everything relies
+  on. Do not "fix" it without evidence it actually bites.
 
 ---
 
