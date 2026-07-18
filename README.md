@@ -13,8 +13,13 @@ no clipboard polling. Starts speaking ~0.5s after the hotkey.
         ▼
   tts_server.py         Flask on 127.0.0.1:5111, Kokoro-82M resident in memory,
         │               budget-driven chunking + WSOLA time-stretch
+        ├──────────────► [speakers]
+        │
+        │  GET /now, /utterance
         ▼
-  [speakers]
+  highlighter.py        Tints the word being spoken, in place, in the source
+                        app itself — via UI Automation + a click-through
+                        layered window. Read-only; never touches audio.
 ```
 
 For the full engineering history — measured performance facts, rejected
@@ -25,9 +30,49 @@ changing anything.
 
 | Keys | Action |
 |---|---|
-| `Ctrl+Alt+R` | Read the current selection (works in browsers, PDFs, editors, terminals) |
+| `Ctrl+Alt+R` | Read the current selection (works in browsers, PDFs, editors, terminals — see [Word highlighting](#word-highlighting) for where the visual marker is supported) |
 | `Ctrl+Alt+T` | Read the clipboard as-is |
 | `Ctrl+Alt+S` | Stop |
+
+## Word highlighting
+
+While a passage is read, the word being spoken lights up **in the original
+text, where it already is** — no caption strip, no copy of the text. This runs
+as a separate process (`highlighter.py`), reads the source app through UI
+Automation, and paints a click-through translucent marker on top. It cannot
+affect playback: kill it and audio continues unchanged.
+
+| Where | Highlighting | Notes |
+|---|---|---|
+| Firefox | ✅ | Also Chrome/Edge and other UIA-exposing browsers |
+| Notepad, text editors | ✅ | |
+| VS Code editor (`.md`, code) | ✅ | Requires the setting below |
+| **Terminals** | ❌ **Not possible** | See below — reading still works |
+| PDFs in a browser viewer, Google Docs | ❌ | Canvas-rendered; no text geometry exists |
+
+**VS Code** needs `"editor.accessibilitySupport": "on"` in your user settings,
+otherwise VS Code exposes no editor text at all and there is nothing to locate.
+
+Optionally, to stop VS Code faintly tinting other copies of the current word
+while reading markdown (its `occurrencesHighlight` feature reacting to the
+cursor the highlighter has to move), scope it off for markdown only:
+
+```json
+"[markdown]": {
+    "editor.occurrencesHighlight": "off",
+    "editor.selectionHighlight": false
+}
+```
+
+**Terminals cannot be highlighted, by design of the terminal — not a bug.**
+VS Code's integrated terminal (xterm.js) draws text to a canvas and exposes it
+to accessibility through a hidden buffer parked far off-screen, so the position
+it reports has no relation to where the pixels are. *Reading* terminal text
+works fine (that's step 5 below); only the visual marker is unavailable.
+
+Troubleshooting: launch it with `KOKORO_HL_DEBUG=C:\path\to\log.txt` set and it
+records which document it anchored to and the rectangle for every word. Check
+that before theorising — see AUDIT.md §8 "Round 4".
 
 ## Setting up on a fresh Windows machine
 
@@ -68,7 +113,8 @@ changing anything.
 5. **Terminal reading** (optional): in VS Code settings, set
    `"terminal.integrated.copyOnSelection": true`. In Windows Terminal, set
    `"copyOnSelect": true`. This lets Ctrl+Alt+R work on terminal text, where
-   simulating Ctrl+C is not an option (it means "interrupt" there).
+   simulating Ctrl+C is not an option (it means "interrupt" there). Terminal
+   text is read aloud but not visually highlighted — see above for why.
 
 6. **Mouse button** (optional): a Logitech G Hub macro bound to a spare button —
    on press: left-click down; on release: left-click up, then Ctrl+Alt+R. Then
