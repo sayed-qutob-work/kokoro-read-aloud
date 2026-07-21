@@ -191,7 +191,12 @@ The debug infrastructure exists and diagnosed Round 4; it is simply off.
    for as long as the utterance is active. A late highlight beats none.
 3. Do not raise `POLL_IDLE`; 0.12s is already the floor of "noticing" a read.
 
-### Phase 3 — Anchor correctness (RC3, RC4)
+### Phase 3 — Anchor correctness (RC3, RC4) — **items 1 & 3 DEPLOYED 2026-07-21**
+
+Selection validation (item 1) and a wider candidate net (item 3, via the
+foreground window rather than the second line's head) are in; see AUDIT §8
+"Bug B". `head_candidates` (item 2) untouched — no read has yet failed for
+the short-first-line reason it describes.
 
 1. Validate the selection before trusting it: normalized comparison of the
    selection text against the utterance head (same normalization the
@@ -210,7 +215,17 @@ The debug infrastructure exists and diagnosed Round 4; it is simply off.
 3. On repeated all-heads-miss, try FindText of the *second* line's head —
    the first line may be a heading rendered in a separate run.
 
-### Phase 4 — Survive transient inactivity (RC6) — likely the biggest UX win
+### Phase 4 — Survive transient inactivity (RC6) — **DEPLOYED 2026-07-21** (item 1; 2–3 not needed)
+
+Measured first: RC6 hit 5 of 19 reads (~26%) and cost the *whole rest* of a
+read, not a gap. Item 1 (a 2s grace in the highlighter) is deployed and
+verified on both paths. Items 2 (server-side `/now` change) and 3 (latency
+offset) were not needed once the grace was in place — leave them unless
+`RESUME` lines reappear. Phase 6 is **unjustified by the data** (0 fetch
+timeouts, ever). Phase 2 was called unjustified too — **that was corrected
+the same night**: it held only because the sample had no Firefox reads. See
+AUDIT §8 "DIAGNOSED 2026-07-21 (late)" for the two remaining bugs and the
+priority order.
 
 1. In the highlighter: on `active:false`, **do not wipe state immediately**.
    Keep `anchor`, `utt_seen`, `remaining`, and the resolved-token cache for a
@@ -224,7 +239,10 @@ The debug infrastructure exists and diagnosed Round 4; it is simply off.
 3. Re-check the `+0.3s` slack and the `t0`-at-dequeue lead against the output
    stream latency; if the lead is measurable, subtract a fixed offset.
 
-### Phase 5 — Token matching precision (RC7)
+### Phase 5 — Token matching precision (RC7) — **DEPLOYED 2026-07-21**
+
+Both items done, plus a cursor-rewind rule the plan didn't anticipate (a bad
+hit was permanent, not merely local). See AUDIT §8 "Bug A fixed".
 
 1. After a `FindText` hit, verify word boundaries: expand the range by one
    character on each side (Move/GetText) and require non-letter neighbors.

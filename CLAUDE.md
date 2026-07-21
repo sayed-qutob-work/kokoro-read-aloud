@@ -67,6 +67,11 @@ guess** — every guessed highlighter diagnosis in past sessions was wrong
 (slow anchor = symptom C), `FETCH fail` (RC9), `POLL ERROR`/`FATAL`. A
 crash before logging exists shows up in `highlighter.err`.
 
+On per-token lines, `found=0` (FindText couldn't locate the token —
+anchoring/alignment) and `found=1 rects=[]` (located, but the app exposes no
+geometry — viewport effect) are **different failures**; don't lump them.
+`cand[] … who=` names the app that supplied each candidate TextPattern.
+
 ## Key endpoints
 
 - `POST /speak {"text":...}`, `POST /stop`

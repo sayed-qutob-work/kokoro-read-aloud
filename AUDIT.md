@@ -267,7 +267,7 @@ ramp gapped *every* time.
 | **torch thread tuning** | No headroom | Already 6/6 P-cores. |
 | **`MODEL_SPEED` > 1.3** | Rejected | Garbles onsets/endings. Use `PLAYBACK_SPEED` instead. |
 | **Trimming AHK `Sleep`/`KeyWait`** | Pointless | AHK contributes ~0 to START. Measured. |
-| **In-place highlighting in a terminal** | **Impossible — proven 2026-07-18** | xterm.js (VS Code's integrated terminal) paints text to a canvas and exposes it to accessibility through a hidden off-screen DOM mirror. Probed live: terminal text reports rects at `x=-11571` and `x=-14907`, height `58557`, for a window occupying `x=-1928..8`. UIA gives the text but no usable geometry and nothing bridges the two. Reading terminal text still works (that is `copyOnSelection`, unrelated). Do not spend time here again. |
+| **In-place highlighting in a terminal, via the terminal's OWN TextPattern** | **Impossible — proven 2026-07-18, still true** | xterm.js (VS Code's integrated terminal) paints text to a canvas and exposes it to accessibility through a hidden off-screen DOM mirror. Probed live: terminal text reports rects at `x=-11571` and `x=-14907`, height `58557`, for a window occupying `x=-1928..8`. UIA gives the text but no usable geometry and nothing bridges the two. Reading terminal text still works (that is `copyOnSelection`, unrelated). **Narrowed 2026-07-21** — the *ancestor* path is a different story, see §8. |
 
 ### GPU — the one open option, **untested**
 
@@ -607,6 +607,299 @@ the 0.15s HTTP timeout) is Phase 2+ and deliberately untouched.
   `WIPE`→`RESUME` pair is an RC6 event; and for RC9 read the exception type —
   `timeout`/`TimeoutError` clustering mid-read is RC9, `URLError` (connection
   refused) just means the server wasn't running.
+
+### OBSERVED 2026-07-21, hours after the logging went in: the VS Code terminal partly highlights — §6 was too broad
+
+User read Claude Code's output in the VS Code integrated terminal and saw the
+highlight track it — "the last maybe four lines, not 100% accurate but a good
+amount". Nothing was changed to make that happen; it has presumably worked
+since Round 4 and nobody noticed. The log says exactly why:
+
+```
+cand[0] how=None doc='Terminal 5, ✳ Implement Phase 0 and Phase 1 loggin'
+cand[1] how=findtext['Two smaller things in th'] doc='… File Edit Selection View Go Run Terminal'
+ANCHOR ok via=findtext['Two smaller things in th'] cand=1
+```
+
+`cand[0]` **is** the terminal element and it is as useless as §6 says — no
+selection, FindText miss. The anchor came from `cand[1]`: an **ancestor, the
+whole VS Code window's document**, reached by the 8-level parent walk that
+Round 4 added for *Firefox*. Ranges found there report sane geometry —
+17px-tall lines at real screen coordinates — not the `h=58557` garbage the
+terminal's own pattern hands out. So §6's verdict is correct about the
+mechanism it tested and wrong as a blanket claim.
+
+**Measured, same reads** (154 unique tokens across 4 utterances):
+
+- **83 of 154 tokens (54%) ever got a rect.** The rest never did.
+- Every hit landed on one of **6 distinct line tops** (y = 425, 1141, 1158,
+  1175, 1209, 1345) — i.e. the highlight worked on a handful of lines and was
+  dark everywhere else, which is precisely "the last four lines". Why those
+  lines materialize geometry and the others don't is **not yet diagnosed** —
+  the obvious suspect is the same viewport/accessibility-page effect that
+  forces the `Select()` fallback in the VS Code editor, but that is a guess
+  and this project's guesses have a 0% hit rate. Instrument first.
+- **Added the same evening** (still behavior-preserving), because both gaps
+  showed up while reading the numbers above:
+  - `cand[]` lines now carry
+    `who=<image.exe> '<Name>' [<ClassName>]` — e.g.
+    `who=Notepad.exe 'Text editor' [RichEditD2DPT]`. Process name is resolved
+    via `QueryFullProcessImageNameW` and cached per pid; the whole `_ident()`
+    path is skipped unless `KOKORO_HL_DEBUG` is set, since each property read
+    is a cross-process COM call.
+  - Per-token lines now carry **`found=` and `sel=`**. This split matters:
+    `found=0` means FindText could not locate the token in the remainder (an
+    alignment / anchoring failure) while `found=1 rects=[]` means it was
+    located but the app materializes no geometry for it (the viewport /
+    accessibility-page effect). **Both used to log as `rects=[]`**, so the
+    "54% of tokens" figure above cannot distinguish them — treat it as a
+    ceiling on one cause, not a measurement of either. `sel=1` marks the poll
+    where the `Select()` fallback ran.
+
+**Also confirmed in the same 60 seconds: RC6 is real, in the wild.**
+`RESUME utt=15 after 0.12s dark` and `RESUME utt=17 after 0.37s dark` — two
+mid-read state wipes in one minute of normal use, each one a re-anchor plus a
+cursor reset to the utterance head. That is `plan.md` Phase 4's evidence gate,
+met on day one.
+
+### MEASURED 2026-07-21 evening: the Phase 0 ranking. RC6 is the whole problem; RC1/RC2/RC9 never fired
+
+19 real user reads (utt 9–28, ~22:40–23:04, `highlighter.log` + `.log.1`).
+Counts are structural — parse on the `HH:MM:SS ` prefix + keyword, **never
+`"RESUME" in line`**: the user reads this project's own prose aloud, so token
+lines contain the words `RESUME`, `GIVEUP`, `ANCHOR try#`. The first pass at
+this analysis reported 89 RC6 events; the real number was 1. Don't repeat it.
+
+| RC | What the log says | Verdict |
+|---|---|---|
+| **RC6** wipe on transient `active:false` | **5 events / 19 reads ≈ 26%.** Dark gaps 0.12, 0.37, 0.49, 0.61, 0.74s | **Confirmed, dominant, worse than predicted — fix this** |
+| RC1/RC2 slow or abandoned anchor | **0.** Every one of the 19 anchored on `try#1`, 0.01–0.03s. Zero `GIVEUP` | Not observed — Phase 2 is unjustified |
+| RC9 HTTP timeout | **0** `FETCH fail` in ~25 min of polling at 12/s | Not observed — leave the 0.15s timeout alone |
+| RC5 crash | 0 `POLL ERROR`, 0 `FATAL`, 1 `START`, empty `.err` | No crash since the guards; window too short to claim they were needed |
+
+**RC6 costs more than `plan.md` predicted.** The plan expected "0.5s dark gap
++ backwards jumps". Observed on utt 26 (markdown preview of `plan.md`, live
+selection, anchored on try#1, painting correctly):
+
+```
+23:02:38 WIPE utt=26 anchored=True chunk='3. Optional hardening:'
+23:02:39 RESUME utt=26 after 0.61s dark -- RC6
+23:02:39   cand[0] how=None who=Code.exe 'plan.md - kokoro - Visual Studio Code - ' []
+23:02:40   cand[0] how=None who=Code.exe 'Terminal 5, …' [xterm-helper-textarea]
+         … 6 attempts, all ANCHOR FAILED, rest of the read dark
+```
+
+The preview element that had the selection **was no longer among the
+candidates** — in those 0.61s the focus moved (by try#3 the candidates are
+the terminal). The discarded anchor was still a perfectly valid UIA range;
+nothing about it had gone stale. So the real cost of RC6 is not a gap, it's
+**losing the whole remainder of a read**, because re-anchoring depends on
+focus and focus is a moving target. That is the argument for Phase 4's grace
+period: never re-derive an anchor that still works. All five observed gaps
+are ≤0.74s, so the plan's ~2s grace covers them with room to spare.
+
+**Not concluded, deliberately:** VS Code tokens located at 2% (7/321) looks
+alarming but 2 of those 3 reads were *terminal* reads (§6: unsupported), and
+the third is utt 26, which worked until RC6 killed it. Notepad was 16/16 =
+100%. There is no Firefox or `.md`-editor read in this sample — i.e. **no
+data yet on the surfaces the highlighter is actually for.** Get some before
+theorising about VS Code.
+
+### DEPLOYED 2026-07-21: Phase 4 — the anchor survives a transient `active:false`
+
+The fix the measurements above justified. `/now` going inactive no longer
+destroys anything: the marker still hides immediately (nothing is sounding),
+but `anchor`, `utt_seen`, `chunk_seen` and the resolved-token cursor are held
+for `GRACE = 2.0s`. If the same `utt` comes back inside that window the read
+continues untouched — no `candidate_patterns()` re-run, no cursor reset to the
+utterance head, no backwards jumps. Only a genuine end (>2s) or a different
+`utt` releases the anchor.
+
+Why holding beats re-deriving: the anchor is a UIA range that never went
+stale — but rebuilding it depends on *focus*, and focus moves. Utt 26 is the
+proof (§8 above): 0.61s of silence, and by the third retry the candidate list
+was the terminal instead of the markdown preview that had the selection.
+
+New log vocabulary: `IDLE` (inactive, anchor held) → either `HELD after Xs
+idle — RC6 avoided` or `DROP … read is over`. `RESUME` now means something
+sharper than before: a same-`utt` read reappearing *after* the grace already
+expired, i.e. **GRACE was too short** — if those start showing up, raise it.
+
+**Verified 2026-07-21, both paths:**
+
+- Real read, Notepad, 131 tokens: 131/131 located and painted (100%),
+  `IDLE` → `DROP utt=39 idle 2.09s` at the end. No behavior change to a
+  normal read.
+- Forced RC6, deterministic: a mock `/now` on port 5112 (scratch, deleted)
+  served active → `active:false` for 0.7s → active again with the same `utt`
+  and an advanced word index. Log: `IDLE` → `HELD after 0.77s idle (utt=1
+  prev=1) -- RC6 avoided, no re-anchor`, and the tokens continue *forward*
+  across the gap — idx=17 at x=-1118 before, idx=20 at x=-1006 after, same
+  line, same anchor. Pre-fix this is precisely where the read went dark or
+  jumped backwards.
+
+**Also added (instrumentation, not a fix):** on `found=0` the token line now
+carries `rem=` — the first 30 chars of the search cursor's remaining range.
+Every observed all-miss read (terminal 0%, Firefox 4%) located a few tokens
+and then missed *every* subsequent one, which smells like `remaining` having
+collapsed to nothing or been dragged past the text by one bad `FindText` hit.
+`rem=''` would confirm collapse; `rem=` showing text far past the spoken word
+would confirm the jump. **Not yet diagnosed — read this field before
+theorising.** That is the next open question, and it is worth more than the
+remaining phases: it is what stands between a 4% Firefox read and a 98% one.
+
+### DIAGNOSED 2026-07-21 (late): the two remaining bugs, both named by the log
+
+The `rem=` field paid for itself on the first read. Both all-miss failures
+have concrete mechanisms now; neither is fixed yet.
+
+**Bug A — cursor runaway.** `locate()` only ever moves `remaining` forward,
+and `FindText` has no word-boundary concept, so **one bad hit is permanent**.
+Utt 40 (terminal read, anchored on the VS Code *window* document):
+
+```
+idx=0 tok='So'     found=1 rects=[(-1279,886,16,17)]      <- correct
+idx=1 tok='.md'    found=1 sel=1 rects=[]                 <- matched the "AUDIT.md" TAB LABEL
+idx=2 tok='worked' found=1 sel=1 rects=[]
+idx=4 tok='first'  found=0 rem='￼ ￼ Terminal 5, ✳ Implement Ph'
+... every later token: found=0, same rem
+```
+
+`rem=` shows the cursor parked in VS Code's *chrome* — tab labels, the
+terminal's a11y label — miles past the prose being read. Another read shows
+`rem='d Succeeded '` (the status bar). The text the next token needs is now
+*behind* the cursor, so nothing matches again, ever. This is why terminal /
+window-anchored reads score 0–2% while the same code scores 98–100% elsewhere.
+Two composing fixes, both in `plan.md` Phase 5's spirit: (1) verify word
+boundaries after a `FindText` hit — that alone rejects `.md` inside
+`AUDIT.md`; (2) a recovery rule — after K consecutive misses, reset
+`remaining` to the anchor's original range instead of staying lost forever.
+A hit yielding no rects while earlier hits had them is also a strong
+wrong-match tell, but the VS Code editor legitimately needs `Select()` first,
+so don't use rect-emptiness alone as the reject signal.
+
+**Bug B — the anchor can't reach the page document in Firefox.** Utt 38 and
+43 never anchored (12 tries, `GIVEUP`, read dark). The only candidate offered
+was `who=firefox.exe 'Not impossible, but "hardware-free" and…'` whose whole
+document *is* that one paragraph — a fragment of the page, not the page.
+The ancestor walk surfaced the real page document on utt 37 and 42
+(`'WiFi-based through-wall person detection'`) but not on 38 and 43, in the
+same browser minutes apart. When it does surface, Firefox is excellent:
+**utt 42 = 94/94 tokens, 100%.** So Firefox isn't broken — reaching the right
+element is. Needs a wider net than "focused element + 8 ancestors" (e.g. the
+foreground window's element via `ElementFromHandle`), which is Phase 3.
+
+**Correction to the ranking above:** the earlier entry says Phase 2 (anchor
+retry cadence) is "unjustified by the data". That sample contained **no
+Firefox reads**. With them, anchoring took **3, 7 and 12+ attempts** — at
+`ANCHOR_RETRY = 0.5s` that is 1.1s, 3.2s and never. Firefox's lazy
+accessibility engine is exactly the cold-start case Phase 2 was written for,
+so **Phase 2 is justified for Firefox specifically**; it remains pointless for
+Notepad/VS Code, which anchor on try #1 every time. Phase 6 (HTTP timeout)
+is still unjustified: zero `FETCH fail` across every read so far.
+
+### DEPLOYED 2026-07-21: Bug A fixed — word-bounded matching + a cursor that can rewind
+
+Two changes in `Anchor`, addressing the runaway diagnosed above:
+
+1. **`_word_bounded()`** — after a `FindText` hit, expand one character each
+   way (`MoveEndpointByUnit(…Character, ±1)`) and reject the hit if either
+   neighbour is alphanumeric. `Anchor._find()` then skips up to
+   `FIND_RETRIES = 4` bogus hits before giving up on a token for that poll.
+   Punctuation neighbours stay legal, so markdown tolerance survives
+   (`bold` inside `**bold**` still matches).
+2. **`MISS_RESET = 8`** consecutive `locate()` failures rewind `remaining`
+   to `last_good` — the cursor position after the last *verified* hit.
+   Previously the cursor only moved forward, so being wrong once meant being
+   wrong for the rest of the read.
+
+**Found while testing, and it is the subtler bug of the two:** a fruitless
+`FindText` sometimes returns a **NULL COM pointer rather than `None`**.
+`if found is not None` is therefore true for a hit that raises on every use.
+The old code cached that NULL as a located range (`found=1 rects=[]`, cursor
+stuck); with `_word_bounded` in front of it the NULL would have been *treated
+as a valid hit*, since the boundary check can't inspect it and fails open.
+Both call sites now test `if found:` / `if not r:`. Don't revert these to
+`is not None`.
+
+**Verified 2026-07-21, three ways:**
+
+- Scripted against live Notepad holding `The raining season ended. It rains
+  in the evening.` — raw `FindText('in')` returns 5 hits in order; the
+  boundary check rejects hits 1, 2, 3 and 5 (inside `raining`, `rains`,
+  `evening`) and accepts only hit 4, the standalone word. `_find('in')`
+  picks hit 4.
+- End-to-end at 1.2 words/s (mock `/now`, so the poll dwells on the short
+  word): `tok='in'` painted at **x=-1606 w=16**, sitting exactly between
+  `rains` (ends -1614) and `the` (starts -1582). Pre-fix this bound inside
+  `rains`.
+- No regression: the same rig still logs `HELD after 0.63s idle -- RC6
+  avoided`, and a full Notepad read stays 100%. 0 `POLL ERROR`, 0 `FATAL`,
+  empty `.err`.
+
+**Still open: Bug B** (Firefox anchor reach) and the Phase 2 retry cadence
+that Bug B's data justified. Nothing about Bug A's fix touches those.
+
+### DEPLOYED 2026-07-21: Bug B — and the real reason Firefox reads died
+
+Bug B turned out to be two mechanisms, and the second one was invisible until
+the `rem=` field printed the exception instead of swallowing it.
+
+**B1 — the anchor could not reach the page document.** Firefox sometimes
+gives focus to a single message block whose document *is* that block, with no
+TextPattern ancestor above it; those reads never anchored (12 tries, `GIVEUP`,
+dark — utt 38, 43, 57). `candidate_patterns()` now ends with the **foreground
+window** (`GetForegroundWindow` → `ElementFromHandle`) and a subtree search
+for the first TextPattern under it. Measured cost of that search: **9.9ms on
+VS Code, 9.8ms on Firefox, 3.3ms on Notepad** — cheap, but it is deliberately
+*last* so the common path never pays for it.
+
+**B2 — the anchored range dies mid-read. This is the one that mattered.**
+Firefox rebuilds its accessibility tree as a page re-renders, and every range
+into the old tree starts raising. Signature in the log:
+
+```
+idx=4 tok='and' found=0 rects=[] rem='<err>'      ... and every token after it
+CURSOR rewind x194
+```
+
+`locate()` could not tell "no match here" from "this range is dead", so it
+rewound 194 times to a `last_good` that was equally dead, and the read stayed
+dark to the end. Now `_find()` counts *consecutive COM failures* separately
+from misses; `DEAD_ERRORS = 3` flips `Anchor.broken`, and the main loop
+rebuilds the anchor mid-read (re-arming the retry window, since the
+utterance's original one has usually expired). **This is not a violation of
+Phase 4** — Phase 4 says don't discard a *working* anchor during a transient
+silence; a range that raises on every call is provably not working.
+
+**Selection validation, finally added** (the latent risk from round 4).
+Widening the net to the whole foreground window made "take the first
+non-empty selection" genuinely dangerous, so `_selection_matches()` now
+compares normalized text (lowercase, alphanumerics only, first 20 chars,
+either may be the longer). Mismatch logs `stale selection ignored` and falls
+through to the FindText heads.
+
+**Verified 2026-07-21:**
+
+- Dead-range handling, forced for real: anchored and painting in Notepad
+  (idx=11 `moves`, real rect), then Notepad was killed mid-read. Log:
+  `rem="<err COMError: (-2147220991, 'An event was unable to invoke any of
+  the subscribers')"` → `ANCHOR DEAD utt=1 (COMError…) -- re-anchoring
+  mid-read`, and **CURSOR rewinds: 0** (was 194). `-2147220991` is
+  `UIA_E_ELEMENTNOTAVAILABLE` — exactly what a rebuilt Firefox tree yields.
+- Selection validation unit-checked: exact match / longer selection / short
+  selection all accepted, unrelated clipboard text rejected, empty rejected.
+- No regression: full Notepad read **48/48 painted (100%)**, anchor on try#1
+  in 0.02s, zero stale-selection rejections, zero rewinds, zero `POLL ERROR`.
+
+**Still open:** the Phase 2 retry cadence (Firefox needed 2–12 attempts at
+0.5s apart; the first attempt almost always fails there because the a11y
+engine is cold). And **VS Code terminal reads remain ~0-2%** — but the log
+now shows why, and it is not a bug to fix: the window-level document
+interleaves the terminal's text with chrome (`rem=' Analyze and plan
+highlight sy'` = the tab title), so token order does not follow reading
+order. That is §6's "terminals are impossible" reasserting itself one level
+up. The 2026-07-21 22:45 batch that painted 6 lines was luck, not support.
 
 ---
 
