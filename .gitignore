@@ -3,6 +3,9 @@ env/
 
 # runtime output
 server.log
+highlighter.log
+highlighter.log.1
+highlighter.err
 __pycache__/
 
 # local scratch
