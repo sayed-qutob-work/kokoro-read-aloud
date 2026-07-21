@@ -445,7 +445,11 @@ def candidate_patterns():
         pass
 
 
-WINDOW_DOCS = 6         # page documents to offer from the foreground window
+WINDOW_DOCS = 12        # page documents to offer from the foreground window
+                        # (a browser window holds one per open TAB, so this
+                        # is a tab count, not a page count -- 6 silently
+                        # dropped the Outlook tab on a 7-tab window and the
+                        # read never anchored)
 
 try:
     _DOC_COND = uia.CreateAndCondition(
@@ -481,8 +485,21 @@ def window_candidates(hwnd):
     if _DOC_COND is not None:
         try:
             docs = win.FindAll(UIA.TreeScope_Descendants, _DOC_COND)
-            for i in range(min(docs.Length if docs else 0, WINDOW_DOCS)):
+            found = []
+            for i in range(docs.Length if docs else 0):
                 d = docs.GetElement(i)
+                try:
+                    off = bool(d.CurrentIsOffscreen)
+                except Exception:
+                    off = True
+                found.append((off, d))
+            # Visible tab first. A background tab's document is real and
+            # searchable but parked off-screen (measured: rects at
+            # x=-31942), so anchoring to one paints the marker where nobody
+            # can see it -- identical, to the user, to no highlight at all.
+            # Stable sort, so tree order survives within each group.
+            found.sort(key=lambda t: t[0])
+            for off, d in found[:WINDOW_DOCS]:
                 tp = _tp_of(d)
                 if tp:
                     yield tp, d

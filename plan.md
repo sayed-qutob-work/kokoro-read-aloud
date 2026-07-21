@@ -278,5 +278,66 @@ hit was permanent, not merely local). See AUDIT §8 "Bug A fixed".
 - Terminals (impossible — AUDIT §6, proven).
 - The VS Code caret/occurrences tint (accepted cosmetic, has a user-side
   setting).
-- The bottom-caption overlay (retired by user preference).
+- ~~The bottom-caption overlay (retired by user preference).~~ **Reopened
+  2026-07-22 as a fallback only — see "Deferred work" below.**
 - Chromium-extension parity work, unless the user actually reads in Chromium.
+
+---
+
+## Deferred work (agreed, not started)
+
+### D1 — Caption-box fallback for surfaces in-place can never reach (user-requested 2026-07-22)
+
+**Do not build this without re-reading the trade-off note in AUDIT §9.** The
+bottom strip was *retired* on 2026-07-17 because the user wanted no bottom
+transcript. This is a deliberate, narrow reopening by the same user: **not a
+replacement for in-place highlighting — a fallback for the cases where
+in-place is provably impossible.**
+
+What was asked for:
+
+- A box at the bottom of the screen holding **a few lines** (~4) of the text
+  being read — not one line, and not the whole utterance.
+- **Sentence-level** highlighting: the sentence currently being spoken is
+  highlighted, rather than the single word. (The retired `overlay.py` did
+  word-level on a single chunk; this is a different granularity and a
+  different amount of context.)
+- It exists for terminals (§6, proven impossible) and for sites/apps where
+  anchoring fails or no usable TextPattern exists.
+
+Design notes for whoever picks this up:
+
+- **`overlay.py` is the starting point, not the answer.** It already has the
+  hard parts: frameless topmost tkinter window, bottom-centre, drag to move,
+  right-click to close, 80ms/500ms polling of `/now`, no focus stealing. It
+  needs: multi-line layout, sentence segmentation, sentence highlight, and a
+  trigger.
+- **The trigger is the real design question.** The box must appear *only*
+  when in-place highlighting isn't working, or it becomes the bottom
+  transcript the user rejected. The highlighter already knows: it logs
+  `GIVEUP` (never anchored), `ANCHOR DEAD` without recovery, and sustained
+  `found=0`. Two shapes, undecided:
+  (a) the highlighter owns the box — it has the state already, but it is a
+      ctypes/message-pump process and tkinter would have to coexist with
+      `pump()`;
+  (b) the box stays a separate process and the highlighter publishes its
+      state (a status file, or a new field on `/now` if the server grows one).
+  Pick with evidence, not taste.
+- **Sentence segmentation is nearly free server-side.** §5 chunking already
+  cuts on clause/sentence punctuation, and `/now` returns the current chunk
+  plus word timings, so "the sentence being read" ≈ the current chunk. Prefer
+  that to re-splitting text in the box.
+- Don't let it steal focus, don't let it cover the taskbar, and keep
+  right-click-to-close.
+
+### D2 — Hotmail/Outlook still failing (open, undiagnosed)
+
+Fixed candidates-cap bug did **not** resolve it: the user reports Outlook
+"sometimes works but rarely". The *intermittent* shape is the clue —
+see AUDIT §8 for the one-line diagnostic to run next time it fails.
+
+### D3 — Phase 2 retry cadence
+
+Still justified for Firefox only (cold a11y engine). Note the constraint
+recorded in AUDIT §8: a failing attempt costs up to 238ms, so schedule the
+next attempt *after* the previous finishes rather than on a fixed timer.

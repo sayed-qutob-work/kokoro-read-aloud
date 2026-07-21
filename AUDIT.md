@@ -951,9 +951,89 @@ the new ladder reaches a hit with a real rect. Regression: Notepad read
 **47/47 painted (100%)**, anchor try#1 in 0.02s, `IDLE`→`DROP` clean, empty
 `.err`.
 
+### DEPLOYED 2026-07-22: Outlook/Hotmail — it was a tab-count bug, not a site quirk
+
+User: "Gmail and claude.ai now work 100%, Hotmail doesn't — is this
+site-specific? We can't tune per site." Correct instinct, wrong culprit. The
+log shows the Outlook read offering 8 candidates, and **the Outlook document
+is not among them**:
+
+```
+cand[1..6]  = the OTHER six tabs (Anikai, VibePlayer, claude.ai, YouTube, Gmail, Anikai)
+cand[7]     = urlbar-input, doc='outlook.live.com/mail/0/inbox/id/AQQkADAwATY0MDABL'
+ANCHOR FAILED
+```
+
+The URL bar proves Outlook was the active tab. It was missing because
+`WINDOW_DOCS` was **6** and a browser window exposes **one Document per open
+tab** — the 7th tab silently fell off the list. Nothing to do with Outlook;
+any site would fail as tab 7. Cap raised to 12.
+
+**Tab ordering, and why it is a correctness fix.** Documents now sort
+`IsOffscreen == False` first (stable, so tree order survives within groups).
+Measured with Firefox in the foreground: exactly one document reports
+`offscreen=0` — the active tab — while background tabs report `offscreen=1`.
+The trap: with the window focused, background tabs report **plausible
+on-screen rects** (`50,40,2510,1352`), *not* the parked `-31942` they show
+when the window is occluded. So anchoring to a background tab whose text
+happens to match would paint a marker at a real but wrong position — a
+"glitchy highlight", not an absent one. `IsOffscreen` discriminates; rect
+coordinates do not. Do not swap this test for a rect check.
+
+**Answering the architectural question, with the evidence to date:** none of
+the four fixes contains a site name or a per-site branch, and each one was a
+*class* of failure:
+
+| Symptom | Actual mechanism | Scope |
+|---|---|---|
+| Gmail never highlighted | inline mention chip = its own text run, so contiguous `FindText` of the head missed | any link/bold/emoji/mention, any site |
+| claude.ai worked sometimes | Firefox rebuilds the a11y tree on re-render, killing the anchored range | any dynamic/SPA page |
+| Hotmail never highlighted | 7th tab dropped by a hardcoded cap | any site, any tab beyond the cap |
+| terminal reads ~0% | window document interleaves chrome with content, so token order ≠ reading order | structural, see §6 — not fixable |
+
+The remaining hard limit is text that never reaches the accessibility tree at
+all (canvas-rendered: Google Docs, the terminal). That is a wall, not a
+tuning problem, and no amount of per-site work would move it.
+
+**CORRECTION, 2026-07-22, same night.** The claim above that Hotmail "was a
+tab-count bug, not a site quirk" was stated with more confidence than the
+evidence carried, and the user's next session disproved it: with the cap
+raised to 12, Outlook **still fails most of the time — "sometimes works but
+rarely."** What was actually proven is only that the cap dropped candidates
+on a 7-tab window. Whether Outlook's document was among the dropped ones was
+never established; it simply was not in the list.
+
+**The intermittency is the clue, and it points away from a site quirk.**
+"Rarely works" is the signature of a *lazily built* accessibility tree — the
+same shape as Firefox's engine warm-up in §8 round 4, where the first queries
+after a cold start return nothing and later ones succeed. If OWA's document
+only materializes sometimes, the fix is retry persistence (Phase 2/D3), not
+anything Outlook-specific.
+
+**Diagnostic to run next time it fails — one question, one answer:** read the
+`cand[]` lines of that utterance and check whether **any** candidate's
+`who=`/`doc=` mentions `outlook.live.com`.
+- Present but head missed → run-boundary problem, extend the head ladder.
+- Present only on later `try#` numbers → lazy tree, Phase 2 fixes it.
+- Absent from every attempt → OWA does not expose its content as a Document
+  control type at all, and needs a different condition (probe what control
+  type it *does* use before writing code).
+Do not guess between these three.
+
 ---
 
 ## 9. Accepted trade-offs (settled — reopen only with new information)
+
+- **Bottom caption strip — NARROWLY REOPENED 2026-07-22.** "No bottom
+  transcript" (2026-07-17) still stands for everything the in-place
+  highlighter can reach. The user has since asked for a caption box **as a
+  fallback for the surfaces it cannot reach** — terminals (§6, proven
+  impossible) and pages where anchoring fails: a few lines of text at the
+  bottom of the screen with the **sentence** being read highlighted. Deferred,
+  not started; the requirements and the open design questions are in
+  `plan.md` → "Deferred work" → D1. The load-bearing constraint: it must
+  appear *only* when in-place highlighting is not working, or it silently
+  becomes the transcript that was rejected.
 
 - **START — superseded 2026-07-17 (§5 item 7):** now = synthesis of the whole first
   clause (observed 1332ms on a 76-char clause; short clauses still ~500–600ms). The
