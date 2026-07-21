@@ -901,6 +901,56 @@ highlight sy'` = the tab title), so token order does not follow reading
 order. That is §6's "terminals are impossible" reasserting itself one level
 up. The 2026-07-21 22:45 batch that painted 6 lines was luck, not support.
 
+### DEPLOYED 2026-07-21 (late): why some pages worked and Gmail never did
+
+User report: "some pages work, claude.ai works sometimes, Gmail not at all."
+Both causes found by probing the live a11y tree, not by reasoning.
+
+**1. The foreground-window fallback was finding the URL bar.**
+`FindFirst(Descendants, IsTextPatternAvailable)` returns the *first* pattern
+in tree order, and in a browser that is browser chrome:
+
+```
+cand[1] who=firefox.exe 'Search with Google or enter address' [urlbar-input]
+        doc='mail.google.com/mail/u/1/#inbox/FMfcgzQhVWxSxlLJPm'
+```
+
+Fixed by searching for `ControlType == Document` **and** TextPattern, and
+offering up to `WINDOW_DOCS = 6` of them (`window_candidates()`, factored out
+so it can be probed directly with a window handle). On the user's Firefox
+that yields all five open pages — including Gmail — with the URL bar demoted
+to last resort. Cost: 53ms Firefox, 20ms VS Code.
+
+**2. Gmail's head never matched, because of a mention chip.** The Gmail
+document *does* contain the text; the heads the anchor tried did not match it:
+
+```
+'My Cousin @Ryan H. was tasked with'  miss
+'My Cousin @Ryan H.'                  miss
+'My Cousin @Ryan'                     HIT  (rects=1)
+```
+
+`@Ryan H.` is its own text run, so any head spanning it fails contiguous
+`FindText`. The old ladder bottomed out at *four words* and never got below
+the chip. `head_candidates()` now descends 60ch → 30ch → 6 → 4 → 3 → **2
+words**, and falls back to the raw first line when the ≥8-char rule would
+otherwise return an empty list (short first lines like `Hello.` used to yield
+*nothing*). Any inline element — mention, link, `<b>`, emoji — splits a line
+the same way, so this is general, not a Gmail quirk.
+
+**Cost of the longer ladder, measured on the pathological case** (text that
+matches nowhere, so every candidate × every head is tried): **238ms on VS
+Code** (12 FindText over its huge flattened UI document), **69ms on Firefox**
+(42 FindText). Inside the 0.5s retry budget, and only paid by reads that were
+previously dark anyway. **Note for Phase 2:** if the retry cadence is ever
+tightened to ~0.15s, schedule the next attempt *after the previous finishes*
+rather than on a fixed timer, or attempts will overlap.
+
+**Verified:** Gmail's exact failed read re-probed against the live document —
+the new ladder reaches a hit with a real rect. Regression: Notepad read
+**47/47 painted (100%)**, anchor try#1 in 0.02s, `IDLE`→`DROP` clean, empty
+`.err`.
+
 ---
 
 ## 9. Accepted trade-offs (settled — reopen only with new information)

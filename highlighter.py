@@ -290,11 +290,22 @@ def head_candidates(utt_text):
         return []
     first = lines[0]
     seg = re.split(r"\s{2,}", first)[0]
+    w = seg.split()
     out = []
-    for c in (first[:60], seg[:60], seg[:30], " ".join(seg.split()[:4])):
+    # ...down to two words. Measured on a Gmail read that never anchored:
+    # every head tried contained '@Ryan H.', a mention chip that is its own
+    # text run, so FindText matched nothing -- while plain 'My Cousin' hit
+    # with a real rect. Any inline element (mention, link, <b>, emoji) splits
+    # a line the same way, so the ladder has to reach short.
+    for c in (first[:60], seg[:60], seg[:30], " ".join(w[:6]),
+              " ".join(w[:4]), " ".join(w[:3]), " ".join(w[:2])):
         c = c.strip()
         if len(c) >= 8 and c not in out:
             out.append(c)
+    if not out:         # a short first line ('Hello.', a one-word heading)
+        for c in (first.strip(), seg.strip()):   # still deserves an attempt
+            if c and c not in out:
+                out.append(c)
     return out
 
 
@@ -421,25 +432,69 @@ def candidate_patterns():
             yield tp, sub
     except Exception:
         pass
-    # Last resort, and deliberately last: a subtree search of the whole
-    # foreground window is the expensive call here. Firefox sometimes gives
-    # focus to a single message block whose document IS that block, with no
-    # TextPattern ancestor above it -- measured 2026-07-21, those reads never
-    # anchored at all (12 tries, GIVEUP, dark). The window root finds the
-    # page document those walks miss.
+    # Last resort, and deliberately last: the subtree searches below are the
+    # expensive calls here (~10-45ms). Firefox sometimes gives focus to a
+    # single message block whose document IS that block, with no TextPattern
+    # ancestor above it -- measured 2026-07-21, those reads never anchored at
+    # all (12 tries, GIVEUP, dark).
     try:
         hwnd = user32.GetForegroundWindow()
-        win = uia.ElementFromHandle(hwnd) if hwnd else None
-        if win:
-            tp = _tp_of(win)
-            if tp:
-                yield tp, win
-            cond = uia.CreatePropertyCondition(
-                UIA.UIA_IsTextPatternAvailablePropertyId, True)
-            sub = win.FindFirst(UIA.TreeScope_Descendants, cond)
-            tp = _tp_of(sub)
-            if tp:
-                yield tp, sub
+        for c in window_candidates(hwnd):
+            yield c
+    except Exception:
+        pass
+
+
+WINDOW_DOCS = 6         # page documents to offer from the foreground window
+
+try:
+    _DOC_COND = uia.CreateAndCondition(
+        uia.CreatePropertyCondition(
+            UIA.UIA_IsTextPatternAvailablePropertyId, True),
+        uia.CreatePropertyCondition(
+            UIA.UIA_ControlTypePropertyId, UIA.UIA_DocumentControlTypeId))
+except Exception:
+    _DOC_COND = None
+
+
+def window_candidates(hwnd):
+    """TextPatterns anywhere in a top-level window, documents first.
+
+    Documents *specifically*, not "the first TextPattern in the window":
+    in a browser that first pattern is the URL bar. Measured live on a
+    Gmail read -- `who='Search with Google or enter address'
+    [urlbar-input]`, doc='mail.google.com/mail/u/1/#inbox/...' -- so the
+    read never anchored. Every web page is a Document control type
+    (background tabs included, which costs nothing: a wrong tab simply
+    fails the head match)."""
+    if not hwnd:
+        return
+    try:
+        win = uia.ElementFromHandle(hwnd)
+    except Exception:
+        return
+    if not win:
+        return
+    tp = _tp_of(win)
+    if tp:
+        yield tp, win
+    if _DOC_COND is not None:
+        try:
+            docs = win.FindAll(UIA.TreeScope_Descendants, _DOC_COND)
+            for i in range(min(docs.Length if docs else 0, WINDOW_DOCS)):
+                d = docs.GetElement(i)
+                tp = _tp_of(d)
+                if tp:
+                    yield tp, d
+        except Exception:
+            pass
+    try:        # apps whose text isn't a Document control type
+        cond = uia.CreatePropertyCondition(
+            UIA.UIA_IsTextPatternAvailablePropertyId, True)
+        sub = win.FindFirst(UIA.TreeScope_Descendants, cond)
+        tp = _tp_of(sub)
+        if tp:
+            yield tp, sub
     except Exception:
         pass
 
