@@ -68,6 +68,8 @@ so there is no per-invocation load cost.
 | `C:\kokoro\overlay.py` | Caption strip (retired from autostart — user wants no bottom transcript). |
 | `C:\kokoro\start_tts.vbs` | Launches all three, hidden, logs to `server.log`. |
 | `C:\kokoro\server.log` | Server output when started via the `.vbs`. **Read this first on any failure.** |
+| `C:\kokoro\highlighter.log` | Highlighter diagnostics (on since 2026-07-21). Rotated to `.log.1` at each start. |
+| `C:\kokoro\highlighter.err` | Highlighter stderr — where an import/COM-init crash lands. Empty = healthy. |
 | `C:\kokoro\env\` | The virtualenv (not in git; rebuild via `requirements.txt`). |
 | `C:\kokoro\README.md` | Fresh-machine setup guide. |
 | `C:\kokoro\requirements.txt` | Pinned deps from the known-good venv. |
@@ -551,6 +553,60 @@ all diagnosed from live UIA probes and a debug log, none by guessing.
   risk, not a fix — the debug log showed the selection path anchoring to the
   correct document every single time, and this is the path everything relies
   on. Do not "fix" it without evidence it actually bites.
+
+### DEPLOYED 2026-07-21: highlighter instrumentation + crash-proofing (`plan.md` Phases 0 & 1)
+
+User reports three symptoms in daily use: (A) some reads never highlight,
+(B) some glitch, (C) some start dark and begin working two–three lines in.
+`plan.md` maps them to ten code-verified root causes (RC1–RC10). Nothing about
+*frequency* is known yet, so this deployment **changes no timing and no
+control flow** — it only makes the log answer the ranking question. Anything
+that alters behavior (retry cadence, the 6s give-up, the wipe grace period,
+the 0.15s HTTP timeout) is Phase 2+ and deliberately untouched.
+
+- **Logging is on by default now.** `start_tts.vbs` sets
+  `KOKORO_HL_DEBUG=C:\kokoro\highlighter.log`, and the highlighter rotates the
+  previous log to `highlighter.log.1` at startup (rotate, not truncate: if it
+  died and was relaunched, the traceback that killed it survives).
+- **The launcher no longer uses `pythonw.exe`.** It runs `python.exe` inside a
+  hidden `cmd` with `> highlighter.err 2>&1`, the same pattern as the server.
+  Reason: `pythonw` has *no stderr at all*, so an import or COM-init failure —
+  which happens before `main()`, before any guard, before dlog exists — left
+  literally no trace. That is RC5's worst form: dead all session, invisible.
+  Verified by launching a module that fails to import; the traceback landed in
+  the `.err` file. **So the highlighter is now a `python.exe` pair, not a
+  `pythonw.exe` pair** (two processes is still normal — venv launcher + child).
+- **New log lines**, each tied to the RC it proves or kills:
+  `START` (proof of life) · `UTT n begins` · `ANCHOR try#k +Δs` (RC1: count the
+  rounds before success) · `ANCHOR ok/FAILED` with the head candidates (RC3) ·
+  `GIVEUP … RC2` when the 6s window expires unanchored · `WIPE utt=…` on every
+  `active:false` · **`RESUME utt=… after Δs dark — RC6`** when the *same* gen
+  reappears within 5s of a wipe, which is the signature of a mid-read state
+  wipe rather than a finished read · `FETCH fail/ok` (RC9; first failure of a
+  run always logged, a continuing outage collapses to one line per 10s) ·
+  `POLL ERROR` / `FATAL` with tracebacks.
+- **Crash-proofing (Phase 1):** the whole poll body is now
+  catch-log-continue with an escalating sleep (0.25s → 2s cap) so a repeating
+  fault can't spin the CPU or the log; `main()` itself is wrapped in a
+  restart-after-2s loop; `Marker.draw` checks `CreateDIBSection`/`bits` for
+  NULL (`from_address(None)` was a real process-killer) and releases its DC +
+  bitmap in a `finally` — the old straight-line path leaked a DC per raised
+  exception, and GDI exhaustion is what makes `CreateDIBSection` start
+  returning NULL in the first place. `d["text"]` → `d.get("text") or ""`.
+- **Verified live 2026-07-21** (Notepad, warm): `ANCHOR acquired on try#1,
+  0.01s after utt start`, every token from idx=0 logged with rects, `WIPE` at
+  end of read. Fault injection (raise every 15th poll) confirmed the loop
+  guard: 6 `POLL ERROR` tracebacks logged, process alive, highlighting
+  continued throughout.
+- **Not done, and it's the user's step:** ranking RC1–RC10 by observed
+  frequency needs a day or two of real reads. Read `highlighter.log` then —
+  count `GIVEUP` (A), `RESUME` (B/C), `ANCHOR try#` depth (C), and `FETCH
+  fail` clustering at chunk boundaries (B) before starting Phase 2. Two
+  filters that keep the count honest: **count `RESUME`, never `WIPE`** —
+  `WIPE` fires at the end of every normal read and is pure noise, only a
+  `WIPE`→`RESUME` pair is an RC6 event; and for RC9 read the exception type —
+  `timeout`/`TimeoutError` clustering mid-read is RC9, `URLError` (connection
+  refused) just means the server wasn't running.
 
 ---
 
