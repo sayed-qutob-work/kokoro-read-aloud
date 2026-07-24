@@ -319,6 +319,7 @@ cmd equivalent of the kill: `taskkill /F /IM python.exe` (blunter — kills all 
 | MsgBox "cannot reach tts_server.py" | AHK is fine, Python side is down. |
 | `BadZipFile` | Corrupt download (`curl` without `-L` on a GitHub release). |
 | `ModuleNotFoundError` | Wrong interpreter. Use `env\Scripts\python.exe -m pip`, never bare `pip`. |
+| `ImportError: DLL load failed ... An Application Control policy has blocked this file` | **Smart App Control (SAC) turned ON.** It blocks unsigned compiled `.pyd`s — here spaCy's `transition_system.cp312-win_amd64.pyd`, imported via `misaki → spacy` at server startup. Confirm: `Get-WinEvent -LogName Microsoft-Windows-CodeIntegrity/Operational` shows an event **3077/3033** naming the blocked file; `HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy\VerifiedAndReputablePolicyState` = `1` (On), `0` (Off). **Fix (2026-07-25):** turn SAC Off in Windows Security → App & browser control → Smart App Control settings, then **reboot** (policy loads at boot). SAC has **no per-app exceptions** and turning it Off is **one-way** (can't re-enable without resetting Windows). Not caused by uninstalling an app — SAC just switched on. |
 
 ### Shell traps hit this session
 
@@ -329,6 +330,13 @@ cmd equivalent of the kill: `taskkill /F /IM python.exe` (blunter — kills all 
   to stop PS parsing, or just use `Invoke-RestMethod`.
 - **`curl -L`** is mandatory for GitHub release URLs (they redirect to a CDN).
 - **`env\Scripts\python.exe -m pip`** — never bare `pip`. Guarantees the right interpreter.
+- **`Get-Content -Raw | ConvertTo-Json` sends garbage to `/speak`.** `Get-Content`
+  returns a String *decorated with note properties* (`PSPath`, `PSDrive`, `PSProvider`…),
+  and `ConvertTo-Json` serializes all of them — so `@{text=$t} | ConvertTo-Json`
+  produces `{"text": {"value": "...", "PSPath": ...}}` and the server dies with
+  `AttributeError: 'dict' object has no attribute 'strip'` (a 500, not a 400).
+  **Cast it:** `$t = [string](Get-Content $f -Raw)`. Hit 2026-07-25 while scripting a
+  highlighter test.
 - **Windows 11 suppresses `TrayTip`.** All AHK errors now use `MsgBox`. Do not revert.
 - **AHK tray icon hides** behind the `^` arrow. Settings → Personalization → Taskbar →
   Other system tray icons → toggle AutoHotkey on.
@@ -1019,6 +1027,141 @@ anything Outlook-specific.
   control type at all, and needs a different condition (probe what control
   type it *does* use before writing code).
 Do not guess between these three.
+
+### DEPLOYED 2026-07-25: P0/P0b/P1/P2 — the Select() fallback was killing anchors, and the cursor rewind never worked
+
+User reported highlighting problems after two days of daily use. Diagnosis in
+`plan.md` → "2026-07-25 — Re-diagnosis from real daily use"; the four items
+below are its Track 1, deployed together. **Read that section before
+changing anything here** — in particular §0, which explains why the sample
+behind it is 16 minutes and not two days.
+
+**The sample:** 7 real reads, **62 of 654 tokens painted (9%)**. One read was
+98% correct until it died. 4 of the 7 were VS Code integrated-terminal reads
+(§6, impossible). Two facts the user supplied, which set the scope:
+highlighting is **on the right word when it works** (so the `t0`-at-dequeue
+audio lead in `plan.md` Phase 4 item 3 is a non-issue — dropped, don't
+revisit), and daily reading is **roughly half Firefox pages, half Claude Code
+/ terminal output** (so the caption box D1 is now a first-class item, not a
+someday one).
+
+**P1 — `Select()` was firing on every surface and is the best candidate for
+"a read that was working suddenly stops."** It exists for one thing: the VS
+Code *editor* materializes geometry only near its accessibility "page", and
+selecting a range moves the page onto it. On a window-level document or a
+live browser page the same call moves **the app's real selection**, forcing a
+scroll and a re-render — and Firefox rebuilds its a11y tree on re-render,
+killing every range into the old one. Measured across the 7 reads:
+
+- **10 `Select()` calls. Geometry produced: 0.** It has never once worked in
+  this sample.
+- **8 of the 10 were followed within 1–3 polls by `found=0` or `ANCHOR DEAD`.**
+- The clean case, utt 5: 117 consecutive painting polls in Firefox → one
+  `Select()` → the very next poll returns `-2147220995` (`Object is not
+  connected to server`) → `ANCHOR DEAD` → 9 failed re-anchors → dark tail.
+
+Now gated by `Anchor.can_select` to anchors whose **route is
+`GetFocusedElement()` itself**. **Gate on the route, never on `cand[0]`** —
+the focused element is offered first only when it *has* a TextPattern, so
+`cand[0]` is frequently already an ancestor or a window document, which is
+exactly the dangerous case. After a legal `Select()`, `Anchor.resync()`
+re-derives the cursor from `orig` rather than trusting a range the selection
+may have moved.
+
+**Caveat, stated because this project's rule is to state them:** `sel=1`
+fires *only* on a hit that already had no rects, so it also *marks* an
+already-suspect match — the correlation is not proof of causation. The gate
+is itself the experiment: if utt-5-style deaths stop, P1 was causal. The
+downside is nil, since the fallback produced geometry 0/10 times.
+
+**P2 — the cursor rewind added 2026-07-21 could not recover, by
+construction.** `locate()` assigned `last_good` **after** the advance, so
+when the advance was what destroyed the cursor, the rewind target was equally
+destroyed. **All 245 rewinds in the sample were futile** — one read rewound
+112 times while `rem=''` on 639 consecutive polls. This was also a regression
+against `plan.md` Phase 5's own text, which said reset to *the anchor's
+original range*; the implementation substituted `last_good` and the original
+was never retained. Four changes:
+
+- `Anchor.orig` — the range as acquired, kept for the whole read.
+- `last_good` is promoted **only by `confirm()`**, i.e. only from a hit that
+  actually produced rectangles. A hit that matched but painted nothing is
+  precisely the wrong-document hit that drags the cursor into app chrome;
+  enshrining it as the rewind target is what made recovery impossible.
+- `_degenerate()` — a collapsed range is detected via `CompareEndpoints`, and
+  `locate()` **refuses to adopt** a collapsing advance instead of discovering
+  the damage 8 misses later.
+- Rewind **ladder** `last_good → orig → stuck`, capped at `REWIND_CAP = 6`.
+  Past a handful, rewinding is a symptom, not a strategy — and `stuck` stops
+  the read paying a `FindText` per token.
+
+**The cap is per CHUNK, not per read, and that is deliberate.** `stuck` is a
+new way for a read to go dark: before, a lost cursor kept trying every poll
+and could self-heal on a long unambiguous token. Making it permanent would
+convert "mostly dark with occasional hits" into "guaranteed dark from here",
+which is worse for the user than what it replaced. `Anchor.new_chunk()`
+therefore clears `stuck` at every chunk boundary (a few seconds apart):
+wasted COM calls stay bounded *within* a chunk, and a temporarily confused
+cursor still gets to recover. `rewinds` stays cumulative for `SUMMARY` while
+`chunk_rewinds` carries the budget. **Permanently abandoning a bad anchor is
+P3's job** — it will have the paint rate to decide it properly, which this
+does not.
+
+**P0 — the evidence pipeline, and why it is listed as a fix.** The log kept
+**one** generation, so every restart (and the SAC outage that filled a whole
+log with `FETCH fail`) destroyed the reads before it. That is why two days of
+reported problems left 16 minutes of evidence. Now `LOG_KEEP = 5`
+generations, plus **one `SUMMARY` line per read** at `DROP`:
+
+```
+SUMMARY utt=42 end painted=7/10 (70%) located=9 missed=1 route=focus cand=0
+        tries=1 anchor=try#1/0.02s sel=0 rewinds=3 stuck=1 dead=0 who=Notepad.exe…
+```
+
+Ranking a day of use is now `Select-String SUMMARY`, not a purpose-written
+parser — which is the actual reason nobody had ranked it.
+
+**P0b — candidates carry provenance and identity.** `candidate_patterns()` /
+`window_candidates()` now yield `(tp, el, route, rid)` with `route` one of
+`focus / ancestor / focus-sub / window / window-doc / window-sub`. P1 needs
+the route; the pending P5 dedup needs `rid` (a read was measured offering
+`cand[0..2]` all resolving to the same Firefox document, each paying a full
+head ladder); the pending P3 demotion needs the list labelled.
+
+**Verified 2026-07-25:**
+
+- **Unit** (8 checks): rotation keeps 5 generations with `.1` = previous run;
+  `SUMMARY` counts and idempotence; `can_select` true for `focus` only across
+  all 6 routes; the ladder `last_good → orig → stuck`; **a degenerate
+  `last_good` correctly falls through to `orig`** (the exact 2026-07-25 bug);
+  both-targets-dead → stuck immediately; the cap firing at 6.
+- **Live against Notepad's real UIA document** (anchored from an explicit
+  hwnd via `window_candidates`, so no focus needed): **52/52 tokens painted,
+  0 rewinds, not stuck**, rects sequential on one line. `_find('in')` picks
+  the standalone word (context `'ed in th'`), not the `in` inside `raining`.
+  `_degenerate` returns True on a real collapsed range and False on a healthy
+  one. `can_select` False on a `window-doc` route.
+  **Note the route:** this probe exercised the **window** path
+  (`route=window-doc`, `can_select=False`). A *focused* Notepad or VS Code
+  read takes `GetFocusedElement()` → `route=focus` → `can_select=True`, which
+  is a different branch and is covered only by the outstanding user
+  verification below. It should be inert on Notepad (rects come back
+  non-empty, so the `elif` never fires) — but that is reasoning, not a
+  measurement.
+- Highlighter restarted on the new code: `START … keep=5`, log rotated
+  correctly, `highlighter.err` empty, `SUMMARY` emitted on a real read.
+
+**NOT yet verified, and it needs the user's hands** (a scripted test could
+not take the foreground while the machine was in use — `SetForegroundWindow`
+is blocked for a background process, and the ALT-tap workaround did not
+help):
+
+1. A **Firefox** read of a long article — the case P1 exists for. Expect
+   `sel=0` and no `ANCHOR DEAD` in its `SUMMARY`.
+2. A **`.md` file in the VS Code editor** — the one case `Select()`
+   legitimately serves, and the one thing P1's gate could plausibly break.
+   Expect `route=focus`, `sel>0`, and a high `painted=`. **If that read is
+   dark, the gate is too tight and that is the first thing to look at.**
 
 ---
 

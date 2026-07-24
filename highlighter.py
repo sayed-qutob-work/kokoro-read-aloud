@@ -30,12 +30,18 @@ Flow, per utterance (tracked via /now's `utt` counter):
      spoken remainder (self-aligning, tolerant of markdown the server
      sanitized away), then draw its bounding rectangles. Rects are
      re-queried every poll, so scrolling moves the marker correctly.
-     If a range reports no rectangles, the word is Select()ed once and
-     rects re-queried: VS Code only exposes geometry for lines near its
+     If a range reports no rectangles AND the anchor is the focused
+     element itself, the word is Select()ed once and rects re-queried:
+     the VS Code editor exposes geometry only for lines near its
      accessibility "page", and moving the selection moves the page.
+     That fallback is confined to that one route on purpose -- anywhere
+     else the same call moves the app's real selection and kills the
+     anchor (measured 2026-07-25, see Anchor.can_select).
 
-Launched hidden by start_tts.vbs with pythonw.exe. Kill it and nothing
-else changes.
+Launched hidden by start_tts.vbs as python.exe inside a hidden cmd, with
+stderr redirected to highlighter.err (pythonw has no stderr at all, so an
+import/COM-init crash used to leave no trace). Kill it and nothing else
+changes.
 """
 import ctypes
 import json
@@ -63,6 +69,13 @@ DEBUG = os.environ.get("KOKORO_HL_DEBUG")   # path: log anchor decisions +
 FETCH_LOG_EVERY = 10.0  # a run of consecutive fetch failures (server down)
                         # logs at most this often; the FIRST failure of a run
                         # is always logged, which is the RC9 case that matters
+LOG_KEEP = 5            # generations of the debug log to retain. ONE was not
+                        # enough: the user reported two days of highlighting
+                        # problems and the surviving evidence was 16 minutes,
+                        # because every highlighter restart rotated the rest
+                        # away (plan.md 2026-07-25 §0). Everything in this
+                        # project is ranked from these logs, so keeping them
+                        # is not housekeeping -- it is the measurement.
 HL_RGB = (0x3D, 0x5A, 0xFE)   # marker color
 HL_ALPHA = 110                # 0-255; text stays readable underneath
 PAD = 2                       # px around the word
@@ -321,19 +334,30 @@ def dlog(msg):
 
 
 def log_init():
-    """Rotate the previous log one generation aside, then stamp a startup
-    line. The rotation (rather than truncation) is deliberate: if the
-    process died and was relaunched, `highlighter.log.1` still holds the
-    traceback that killed it. The startup line is the proof-of-life that
-    tells a silent-highlighter session apart from a dead-process one."""
+    """Rotate the log LOG_KEEP generations deep, then stamp a startup line.
+
+    Rotation rather than truncation is deliberate: if the process died and
+    was relaunched, the traceback that killed it survives. Depth matters for
+    the same reason -- a single generation meant one restart (or one server
+    outage that filled the live log with FETCH failures) destroyed every real
+    read before it, which is exactly what happened to the two days of
+    evidence behind the 2026-07-25 diagnosis. The startup line is the
+    proof-of-life that tells a silent highlighter from a dead one."""
     if not DEBUG:
         return
     try:
+        oldest = f"{DEBUG}.{LOG_KEEP - 1}"
+        if os.path.exists(oldest):
+            os.remove(oldest)
+        for i in range(LOG_KEEP - 2, 0, -1):
+            src = f"{DEBUG}.{i}"
+            if os.path.exists(src):
+                os.replace(src, f"{DEBUG}.{i + 1}")
         if os.path.exists(DEBUG):
             os.replace(DEBUG, DEBUG + ".1")
     except Exception:
         pass
-    dlog(f"START highlighter pid={os.getpid()} log={DEBUG}")
+    dlog(f"START highlighter pid={os.getpid()} log={DEBUG} keep={LOG_KEEP}")
 
 
 def _doc_head(tp, n=50):
@@ -400,17 +424,44 @@ def _tp_of(el):
         return None
 
 
+def _rid(el):
+    """A comparable identity for an element, so two candidates that are the
+    same element reached by different routes can be told apart. Measured
+    2026-07-25: a Firefox read offered cand[0..2] all resolving to the same
+    'Just a moment...' document, each paying a full head ladder."""
+    try:
+        return tuple(el.GetRuntimeId())
+    except Exception:
+        return None
+
+
+# Provenance tags. These are not cosmetic: HOW_FOCUS is the only route on
+# which the Select() geometry fallback is legal (see Anchor.can_select), and
+# the identity travels with them so duplicates can be collapsed.
+HOW_FOCUS = "focus"          # the focused element itself -- the VS Code editor
+HOW_ANCESTOR = "ancestor"    # parent walk -- Firefox's document
+HOW_FOCUS_SUB = "focus-sub"  # first TextPattern under the focused element
+HOW_WINDOW = "window"        # the foreground window element itself
+HOW_WINDOW_DOC = "window-doc"    # a Document under it (one per browser tab)
+HOW_WINDOW_SUB = "window-sub"    # last resort: any TextPattern under it
+
+
 def candidate_patterns():
     """TextPatterns near the focused element, most specific first: the
     element itself (VS Code's editor lives only here), its ancestors
-    (Firefox's document), then the first TextPattern descendant."""
+    (Firefox's document), then the first TextPattern descendant.
+
+    Yields (tp, el, how, rid). `how` records the ROUTE, and callers must
+    branch on it rather than on the candidate's index: the focused element is
+    yielded first only when it has a TextPattern, so cand[0] is frequently an
+    ancestor or a window document instead."""
     try:
         el = uia.GetFocusedElement()
     except Exception:
         return
     tp = _tp_of(el)
     if tp:
-        yield tp, el
+        yield tp, el, HOW_FOCUS, _rid(el)
     p = el
     walker = uia.ControlViewWalker
     for _ in range(8):
@@ -422,14 +473,14 @@ def candidate_patterns():
             break
         tp = _tp_of(p)
         if tp:
-            yield tp, p
+            yield tp, p, HOW_ANCESTOR, _rid(p)
     try:
         cond = uia.CreatePropertyCondition(
             UIA.UIA_IsTextPatternAvailablePropertyId, True)
         sub = el.FindFirst(UIA.TreeScope_Subtree, cond)
         tp = _tp_of(sub)
         if tp:
-            yield tp, sub
+            yield tp, sub, HOW_FOCUS_SUB, _rid(sub)
     except Exception:
         pass
     # Last resort, and deliberately last: the subtree searches below are the
@@ -481,7 +532,7 @@ def window_candidates(hwnd):
         return
     tp = _tp_of(win)
     if tp:
-        yield tp, win
+        yield tp, win, HOW_WINDOW, _rid(win)
     if _DOC_COND is not None:
         try:
             docs = win.FindAll(UIA.TreeScope_Descendants, _DOC_COND)
@@ -502,7 +553,7 @@ def window_candidates(hwnd):
             for off, d in found[:WINDOW_DOCS]:
                 tp = _tp_of(d)
                 if tp:
-                    yield tp, d
+                    yield tp, d, HOW_WINDOW_DOC, _rid(d)
         except Exception:
             pass
     try:        # apps whose text isn't a Document control type
@@ -511,7 +562,7 @@ def window_candidates(hwnd):
         sub = win.FindFirst(UIA.TreeScope_Descendants, cond)
         tp = _tp_of(sub)
         if tp:
-            yield tp, sub
+            yield tp, sub, HOW_WINDOW_SUB, _rid(sub)
     except Exception:
         pass
 
@@ -519,6 +570,12 @@ def window_candidates(hwnd):
 FIND_RETRIES = 4        # mid-word hits to skip past before giving up on a token
 MISS_RESET = 8          # consecutive misses before rewinding the search cursor
 DEAD_ERRORS = 3         # consecutive COM failures before the anchor is junk
+REWIND_CAP = 6          # rewinds per read before the cursor is declared stuck.
+                        # Measured 2026-07-25: one read rewound 112 times and
+                        # every one of them restored an equally dead cursor.
+                        # Past a handful, rewinding is not a retry strategy --
+                        # it is a symptom, and the log should say so once
+                        # rather than 112 times.
 
 
 def _norm(s):
@@ -579,12 +636,27 @@ class Anchor:
         self.ok = False
         self.token_ranges = {}      # (chunk_text, idx) -> located UIA range
         self.select_tried = set()   # keys whose Select() fallback already ran
-        self.last_good = None       # cursor position of the last verified hit
+        self.orig = None            # the range AS ACQUIRED, kept for the whole
+                                    # read. `last_good` can die together with
+                                    # the cursor; this cannot, so it is the
+                                    # rewind target of last resort (plan.md
+                                    # Phase 5 asked for exactly this and the
+                                    # 2026-07-21 implementation dropped it)
+        self.last_good = None       # cursor after the last hit that PAINTED
+        self.pending_good = None    # ...promoted to last_good once it does
+        self.painted = False        # has this anchor ever produced rects?
         self.misses = 0             # consecutive locate() failures
+        self.rewinds = 0            # cumulative, for SUMMARY
+        self.chunk_rewinds = 0      # ...the cap is per CHUNK, see new_chunk()
+        self.rewind_stage = 0       # 0 = try last_good, 1 = try orig, 2 = out
+        self.stuck = False          # cursor unrecoverable; stop burning polls
         self.errors = 0             # consecutive COM failures on the range
         self.last_error = ""
+        self.route = None           # HOW_* provenance of the winning candidate
+        self.who = ""               # ...and who it belonged to, for SUMMARY
+        self.cand = -1
         heads = head_candidates(utt_text)
-        for i, (tp, el) in enumerate(candidate_patterns()):
+        for i, (tp, el, route, rid) in enumerate(candidate_patterns()):
             rng, how = None, None
             try:
                 sel = tp.GetSelection()
@@ -616,16 +688,153 @@ class Anchor:
                         break
                 except Exception:
                     pass
-            dlog(f"  cand[{i}] how={how} who={_ident(el)} "
+            who = _ident(el)
+            dlog(f"  cand[{i}] how={how} route={route} who={who} "
                  f"doc={_doc_head(tp)!r}")
             if rng is not None:
                 self.remaining = rng
+                self.orig = rng.Clone()
                 self.last_good = rng.Clone()    # rewind target, see locate()
                 self.misses = 0
                 self.ok = True
-                dlog(f"ANCHOR ok via={how} cand={i}")
+                self.route, self.who, self.cand = route, who, i
+                dlog(f"ANCHOR ok via={how} route={route} cand={i}")
                 return
         dlog(f"ANCHOR FAILED heads={heads}")
+
+    @property
+    def can_select(self):
+        """May the Select() geometry fallback run against this anchor?
+
+        Only on the focused element itself. Select() is a VS Code *editor*
+        workaround: that editor materializes geometry only near its
+        accessibility "page", and selecting a range moves the page onto it.
+        Nothing else behaves that way. On a window-level document or a live
+        browser page the same call instead moves the target app's REAL
+        selection, forcing a scroll and a re-render -- and Firefox rebuilds
+        its accessibility tree on re-render, killing every range into the old
+        one.
+
+        Measured 2026-07-25 (plan.md F1), 7 real reads: 10 Select() calls,
+        geometry produced ZERO times, and 8 of the 10 were followed within
+        1-3 polls by found=0 or ANCHOR DEAD. The clean case is utt 5 --
+        117 consecutive painting polls in Firefox, one Select(), and the very
+        next poll returned UIA_E_ELEMENTNOTAVAILABLE ('Object is not
+        connected to server'), then 9 failed re-anchors and a dark tail.
+        Gate on the ROUTE, never on cand[0]: the focused element is offered
+        first only when it has a TextPattern, so cand[0] is often already an
+        ancestor or a window document -- exactly the dangerous case."""
+        return self.route == HOW_FOCUS
+
+    def _degenerate(self, r):
+        """Have this range's endpoints collapsed onto each other?
+
+        FindText on a zero-length range can never match, so one such advance
+        ends the read: measured 2026-07-25, utt 6 logged rem='' on 639
+        consecutive polls and painted 3 tokens out of 259. Nothing used to
+        check for this -- the collapse was simply adopted as the new cursor."""
+        if r is None:
+            return True
+        try:
+            return r.CompareEndpoints(
+                UIA.TextPatternRangeEndpoint_Start, r,
+                UIA.TextPatternRangeEndpoint_End) == 0
+        except Exception:
+            return False        # can't tell: don't discard a usable cursor
+
+    def _rewind(self, why):
+        """Ladder: last_good -> orig -> stuck.
+
+        The 2026-07-21 version rewound only to `last_good`, and assigned
+        `last_good` AFTER the advance -- so when the advance was what killed
+        the cursor, the rewind target was equally dead. All 245 rewinds
+        observed on 2026-07-25 were futile for that reason. Two changes fix
+        it: `last_good` is now promoted only by confirm() (a hit that
+        actually painted), and `orig` is always available behind it."""
+        if self.stuck:
+            return False
+        self.rewinds += 1
+        self.chunk_rewinds += 1
+        if self.chunk_rewinds > REWIND_CAP:
+            self.stuck = True
+            dlog(f"CURSOR stuck after {self.chunk_rewinds - 1} rewinds in this "
+                 f"chunk ({why}) -- not tracking the spoken text; will retry "
+                 f"at the next chunk")
+            return False
+        tgt, name = None, ""
+        if self.rewind_stage == 0 and not self._degenerate(self.last_good):
+            tgt, name = self.last_good, "last_good"
+            self.rewind_stage = 1
+        elif self.rewind_stage <= 1 and not self._degenerate(self.orig):
+            tgt, name = self.orig, "orig"
+            self.rewind_stage = 2
+        if tgt is None:
+            self.stuck = True
+            dlog(f"CURSOR unrecoverable ({why}) -- last_good and orig are "
+                 f"both degenerate or exhausted")
+            return False
+        try:
+            self.remaining = tgt.Clone()
+        except Exception:
+            return False
+        self.misses = 0
+        dlog(f"CURSOR rewind #{self.rewinds} to {name} ({why})")
+        return True
+
+    def new_chunk(self):
+        """A chunk boundary is a natural place to forgive a lost cursor.
+
+        `stuck` exists so a hopeless cursor stops paying a FindText per token
+        for the rest of a read -- but making it permanent would turn "mostly
+        dark with occasional hits" into "guaranteed dark from here", which is
+        strictly worse for the user than the behaviour it replaced. The cap
+        is therefore per chunk (one every few seconds), not per read: waste
+        stays bounded, and a cursor that was only temporarily confused still
+        gets to self-heal. Permanently giving up on an anchor is P3's job,
+        and it will have the paint rate to decide it properly."""
+        if self.stuck:
+            dlog("CURSOR unstuck at chunk boundary -- retrying")
+        self.stuck = False
+        self.chunk_rewinds = 0
+        self.misses = 0
+        self.rewind_stage = 0
+
+    def confirm(self):
+        """The current token produced real on-screen rectangles, so the
+        cursor sitting after it is a position worth returning to.
+
+        Promotion happens HERE and nowhere else. A hit that matched but
+        painted nothing is precisely the wrong-document hit that drags the
+        cursor into an app's chrome -- enshrining it as the rewind target is
+        what made recovery impossible."""
+        self.painted = True
+        self.rewind_stage = 0
+        if self.pending_good is not None:
+            self.last_good = self.pending_good
+            self.pending_good = None
+
+    def resync(self, r):
+        """Rebuild the cursor from `orig` and a range that was just
+        Select()-ed. Select() moves the app's selection and can shift what
+        the old `remaining` refers to, so deriving it afresh from the one
+        range we still trust is safer than carrying the old one forward.
+
+        `locate()` has already advanced past `r` this poll, so today both
+        routes land on the same position and this is belt-and-braces. It
+        REPLACES `pending_good` rather than leaving it: if the two ever
+        disagree, the stale pre-Select() cursor must not be the one that
+        confirm() promotes a couple of lines later."""
+        if self.orig is None:
+            return
+        try:
+            nxt = self.orig.Clone()
+            nxt.MoveEndpointByRange(UIA.TextPatternRangeEndpoint_Start, r,
+                                    UIA.TextPatternRangeEndpoint_End)
+            if not self._degenerate(nxt):
+                self.remaining = nxt
+                self.pending_good = nxt.Clone()
+        except Exception:
+            pass
 
     @property
     def broken(self):
@@ -664,29 +873,33 @@ class Anchor:
         key = (chunk_text, idx)
         if key in self.token_ranges:
             return self.token_ranges[key]
+        if self.stuck:      # the cursor is provably lost; stop paying for
+            return None     # a FindText per token for the rest of the read
         r = self._find(token)
         if r is None:
             # A run of misses means the cursor is lost -- it was dragged
             # somewhere the text isn't, and since it only moves forward the
-            # read would stay dark to the end. Rewind to the last token we
-            # actually verified rather than accept that.
+            # read would stay dark to the end. Rewind rather than accept that.
             self.misses += 1
-            if self.misses >= MISS_RESET and self.last_good is not None:
-                dlog(f"CURSOR rewind after {self.misses} misses "
-                     f"(tok={token!r})")
-                try:
-                    self.remaining = self.last_good.Clone()
-                except Exception:
-                    pass
-                self.misses = 0
+            if self.misses >= MISS_RESET:
+                self._rewind(f"{self.misses} misses, tok={token!r}")
             return None                 # misses are NOT cached: a later poll
         self.misses = 0                 # may succeed once the app warms up
         try:
             nxt = self.remaining.Clone()
             nxt.MoveEndpointByRange(UIA.TextPatternRangeEndpoint_Start,
                                     r, UIA.TextPatternRangeEndpoint_End)
-            self.remaining = nxt
-            self.last_good = nxt.Clone()
+            if self._degenerate(nxt):
+                # Do NOT adopt a collapsed cursor -- that is the state utt 6
+                # never came back from (639 polls of rem=''). Keep the cursor
+                # we had, which can still match the next token, and rewind.
+                dlog(f"CURSOR collapse refused on tok={token!r}")
+                self._rewind(f"advance collapsed on {token!r}")
+            else:
+                self.remaining = nxt
+                # NOT last_good: this hit has matched, but nothing yet says it
+                # matched the right place. confirm() promotes it once it paints.
+                self.pending_good = nxt.Clone()
         except Exception:
             pass
         self.token_ranges[key] = r
@@ -717,8 +930,39 @@ GRACE = 2.0             # /now reports active:false whenever playback slips
                         # nothing is sounding -- only the state is kept.
 
 
+def _new_stats(utt):
+    return {"utt": utt, "tries": 0, "acq": "", "who": "?", "route": None,
+            "cand": -1, "seen": set(), "located": set(), "painted": set(),
+            "sel": 0, "dead": 0, "rewinds": 0, "stuck": 0, "done": False}
+
+
+def _summary(st, anchor, why):
+    """One line per read: which app, which route, how fast it anchored, and
+    how much of it actually painted.
+
+    The per-token lines stay for detail, but ranking a day of real use should
+    be `Select-String SUMMARY` -- answering "which reads worked, and why not"
+    for the 2026-07-25 diagnosis took a purpose-written parser, which is why
+    nobody had done it in the two days the problems were being noticed."""
+    if not st or st["done"]:
+        return
+    st["done"] = True
+    if anchor is not None:
+        st["rewinds"] += anchor.rewinds
+        st["stuck"] += 1 if anchor.stuck else 0
+    seen, loc, pai = len(st["seen"]), len(st["located"]), len(st["painted"])
+    pct = f"{100 * pai // seen}%" if seen else "n/a"
+    dlog(f"SUMMARY utt={st['utt']} {why} painted={pai}/{seen} ({pct}) "
+         f"located={loc} missed={seen - loc} route={st['route']} "
+         f"cand={st['cand']} tries={st['tries']} "
+         f"anchor={st['acq'] or 'NEVER'} sel={st['sel']} "
+         f"rewinds={st['rewinds']} stuck={st['stuck']} dead={st['dead']} "
+         f"who={st['who']}")
+
+
 def main(marker):
     anchor = None
+    stats = None
     utt_seen = None
     chunk_seen = None
     resolved = -1               # tokens of current chunk located so far
@@ -757,6 +1001,7 @@ def main(marker):
                     elif t - idle_since >= GRACE:
                         dlog(f"DROP utt={utt_seen} idle {t - idle_since:.2f}s "
                              f"-- read is over, anchor released")
+                        _summary(stats, anchor, "end")
                         wiped = (utt_seen, t)
                         anchor, utt_seen, idle_since = None, None, 0.0
                 time.sleep(POLL_IDLE)
@@ -772,6 +1017,9 @@ def main(marker):
                 idle_since = 0.0
 
             if d.get("utt") != utt_seen:
+                # a read that never DROPped (stopped, or a new /speak landed
+                # on top of it) still deserves its one line
+                _summary(stats, anchor, "superseded")
                 utt_seen = d.get("utt")
                 if wiped and wiped[0] == utt_seen and \
                         time.time() - wiped[1] <= RESUME_WINDOW:
@@ -783,6 +1031,7 @@ def main(marker):
                 wiped = None
                 chunk_seen = None
                 anchor = None
+                stats = _new_stats(utt_seen)
                 utt_t0 = time.time()
                 anchor_until = utt_t0 + ANCHOR_WINDOW
                 anchor_next = 0.0
@@ -797,6 +1046,8 @@ def main(marker):
                 if anchor_next <= t < anchor_until:
                     anchor_next = t + ANCHOR_RETRY
                     tries += 1
+                    if stats:
+                        stats["tries"] = tries
                     u = get(UTTER)
                     if not u:
                         dlog(f"ANCHOR try#{tries} +{t - utt_t0:.2f}s "
@@ -810,6 +1061,11 @@ def main(marker):
                         a = Anchor(u.get("text") or "")
                         if a.ok:
                             anchor = a
+                            if stats:
+                                stats.update(route=a.route, cand=a.cand,
+                                             who=a.who or "?",
+                                             acq=f"try#{tries}"
+                                                 f"/{time.time() - utt_t0:.2f}s")
                             dlog(f"ANCHOR acquired on try#{tries}, "
                                  f"{time.time() - utt_t0:.2f}s after utt start")
                 elif t >= anchor_until and not gaveup:
@@ -825,6 +1081,7 @@ def main(marker):
             if text != chunk_seen:
                 chunk_seen = text
                 resolved = -1
+                anchor.new_chunk()      # forgive a stuck cursor; see new_chunk
 
             idx = d.get("word", -1)
             words = d.get("words") or []
@@ -846,6 +1103,10 @@ def main(marker):
                 # usually expired by now.
                 dlog(f"ANCHOR DEAD utt={utt_seen} ({anchor.last_error}) "
                      f"-- re-anchoring mid-read")
+                if stats:       # fold the dying anchor's counters in before
+                    stats["dead"] += 1          # it is replaced, so SUMMARY
+                    stats["rewinds"] += anchor.rewinds      # stays complete
+                    stats["stuck"] += 1 if anchor.stuck else 0
                 anchor, resolved = None, -1
                 utt_t0 = time.time()
                 anchor_until = utt_t0 + ANCHOR_WINDOW
@@ -874,11 +1135,20 @@ def main(marker):
                         rem = f"<err {type(e).__name__}: {e}>"[:60]
             else:
                 rr = rects_of(rng)
-                if not rr and (chunk_seen, idx) not in anchor.select_tried:
+                if rr:
+                    # real geometry: this hit is verified, so the cursor
+                    # sitting after it becomes the rewind target (P2)
+                    anchor.confirm()
+                elif anchor.can_select and \
+                        (chunk_seen, idx) not in anchor.select_tried:
                     sel = 1
-                    # VS Code: geometry exists only near its accessibility
-                    # page; selecting the word moves the page onto it
+                    # VS Code EDITOR only (see Anchor.can_select): geometry
+                    # exists only near its accessibility page; selecting the
+                    # word moves the page onto it. Everywhere else this call
+                    # moves the app's real selection and kills the anchor.
                     anchor.select_tried.add((chunk_seen, idx))
+                    if stats:
+                        stats["sel"] += 1
                     try:
                         rng.Select()
                         rr = rects_of(rng)
@@ -891,9 +1161,19 @@ def main(marker):
                             UIA.TextPatternRangeEndpoint_End, caret,
                             UIA.TextPatternRangeEndpoint_Start)
                         caret.Select()
+                        anchor.resync(rng)      # the selection moved; derive
+                        if rr:                  # the cursor from orig, not
+                            anchor.confirm()    # from the disturbed remainder
                     except Exception:
                         pass
                 marker.draw(rr)
+            if stats is not None:
+                k = (chunk_seen, idx)
+                stats["seen"].add(k)
+                if rng is not None:
+                    stats["located"].add(k)
+                    if rr:
+                        stats["painted"].add(k)
             # found=0 (FindText could not locate the token in the remainder:
             # an alignment/anchor problem) is a COMPLETELY different failure
             # from found=1 rects=[] (located, but the app materializes no

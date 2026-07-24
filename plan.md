@@ -341,3 +341,432 @@ see AUDIT §8 for the one-line diagnostic to run next time it fails.
 Still justified for Firefox only (cold a11y engine). Note the constraint
 recorded in AUDIT §8: a failing attempt costs up to 238ms, so schedule the
 next attempt *after* the previous finishes rather than on a fixed timer.
+
+---
+
+# 2026-07-25 — Re-diagnosis from real daily use
+
+**Trigger:** user reports "issues with the word highlighting" after two days
+of daily use. **Nothing was changed.** This section is diagnosis + plan only.
+Method: structural parse of `highlighter.log` (`HH:MM:SS ` prefix + keyword,
+never substring — AUDIT §8's warning: the user reads this project's own prose
+aloud, so token lines contain the words `RESUME`, `GIVEUP`, `ANCHOR`), plus a
+full re-read of `highlighter.py`.
+
+## 0. Read this before the findings: the sample is 16 minutes, not two days
+
+**The two days of evidence the user is describing no longer exists.**
+`log_init()` rotates exactly *one* generation (`highlighter.log` →
+`.log.1`) at every start, and the highlighter has restarted several times
+since. What survives:
+
+| File | Span | Content |
+|---|---|---|
+| `highlighter.log` | 07-24 23:58 → 07-25 00:17 | **7 reads.** The entire usable sample. |
+| `highlighter.log.1` | 07-24 22:58 → 23:57 | 12,678 `FETCH fail` lines. Zero reads — this is the hour the server was down with the SAC/spaCy `ImportError` (AUDIT §7). |
+
+**And the 7 reads are a biased sample.** They were taken during a debugging
+session, so **4 of the 7 are VS Code integrated-terminal reads** — the one
+surface AUDIT §6 proves cannot work. The surfaces the highlighter actually
+exists for (Firefox on ordinary pages, `.md` in the VS Code editor, Gmail,
+Outlook) appear **once each at most**, and there is no `.md`-editor read at
+all. AUDIT §8 already burned a whole ranking by generalising from a sample
+that was missing the relevant surfaces (the "Phase 2 is unjustified" claim,
+corrected the same night). **Do not rank root causes by frequency from this
+sample.** Fixing the evidence pipeline is therefore P0 below, not an
+afterthought.
+
+## 1. The seven reads
+
+| utt | Surface (from `who=`/`doc=`/`rem=`) | Anchor | Painted / located tokens |
+|---|---|---|---|
+| 1 | **Unknown — zero candidates offered.** No `cand[]` line at all: `candidate_patterns()` yielded nothing | never anchored, 4 tries | — (read fully dark) |
+| 2 | VS Code **window** document; read was the integrated terminal (`cand[0]` = `xterm-helper-textarea`) | try#2, +0.60s | **0 / 87** |
+| 3 | same | try#1, +0.02s | **1 / 209** |
+| 4 | Firefox, a Cloudflare error page | try#2, +0.62s | **3 / 27 (11%)** |
+| 5 | Firefox, Cloudflare interstitial ("Just a moment…") | try#1, +0.03s, `cand=0` | **55 / 56 (98%)** then `ANCHOR DEAD`, 9 failed re-anchors, tail dark |
+| 6 | VS Code window doc; terminal read | try#1, +0.04s | **3 / 259 (1%)** |
+| 7 | same | try#1, +0.02s | **0 / 16** |
+
+Aggregate: **62 of 654 unique tokens painted (9%)**. One read (utt 5) was
+excellent until it died. Every other read was ≥89% dark.
+
+**"Painted" is a ceiling on success, not a measure of it.** The log records
+that a rect was drawn, never that it was drawn on the *right* word. AUDIT §8
+documents the counter-case explicitly — anchoring to the wrong document
+yields "a real but wrong position, a glitchy highlight rather than an absent
+one." utt 6's 3 painted tokens sat at y=1064 in a window-level VS Code
+document and may well have landed on chrome. Treat every "painted" figure
+here as an upper bound.
+
+### Mapping back to the user's original symptoms
+
+| Symptom (plan.md, user-reported) | Findings that produce it |
+|---|---|
+| **A** — the read never highlights at all | **F3** (wrong anchor held all read), **F8** (no TextPattern anywhere), **F2a** (cursor collapses two words in), and the clipboard/terminal classes in §4 |
+| **B** — it glitches | **F7** (marker hides on every missed poll), **F2b** (cursor wanders into chrome, marker jumps), **F1** (anchor dies mid-read) |
+| **C** — starts dead, works a line or two in | **F6** (anchored only on try#2, +0.60s) |
+
+Symptom **B** is *not* an audio-sync problem — the user confirmed 2026-07-25
+that the marker sits on the word being heard (§3a). B is F7/F2b/F1.
+
+**Where the user actually reads (answered 2026-07-25):** ordinary **Firefox**
+web pages **and Claude Code / terminal output**, roughly co-equally. That
+settles two things this sample could not. First, the Firefox half is exactly
+what P1–P5 fix, and utt 5 — 98% correct until `Select()` killed it — is a
+representative read, not an outlier. Second, **the terminal half is not a
+sampling artifact of a debugging session; it is half the daily use, and it
+is the half that is structurally unfixable in place.** D1 is therefore a
+first-class deliverable, not a someday item — see §6.
+
+## 2. Findings — OBSERVED in this sample
+
+### F1 — `Select()`, a VS Code-editor hack, fires on every surface and is followed by collapse 8 times out of 10 · **highest-value fix**
+
+`highlighter.py:877-895` calls `rng.Select()` + a caret collapse whenever a
+located range reports no rectangles. That was written for **one** case: the
+VS Code *editor*, which materialises geometry only near its accessibility
+page (AUDIT §8 round 4). It is currently invoked on **any** anchor — a
+window-level document, a live Firefox page — where it does not move an
+accessibility page, it moves *the target app's real selection*.
+
+Measured across the sample:
+
+- **10 `sel=1` polls. Geometry produced: 0.** The fallback has not worked
+  once in this sample — every `sel=1` line still logs `rects=[]`.
+- **8 of those 10 are followed within 1–3 polls by `found=0` or
+  `ANCHOR DEAD`.**
+- utt 5 is the clean case: 117 consecutive painting polls in Firefox → one
+  `sel=1` on `troubleshooting` → the *very next poll* is
+  `rem="<err COMError: (-2147220995, 'Object is not connected to server')"`
+  → `ANCHOR DEAD` → 9 failed re-anchors → rest of the read lost.
+  A programmatic `Select()` into a live page forces a selection change and a
+  scroll, and Firefox rebuilds its a11y tree on re-render (AUDIT §8) — which
+  is exactly the error that came back.
+
+**Honest caveat, state it in any writeup:** `sel=1` fires *only when a hit
+already had no rects*, so it also marks an already-suspect match. Correlation
+is not proof of causation here. But the fix is cheap and the downside is nil
+(the fallback produced geometry 0/10 times), and gating it is itself the
+experiment: if utt-5-style deaths stop, F1 was causal.
+
+### F2 — the cursor-rewind recovery added on 2026-07-21 cannot recover, by construction
+
+`locate()` assigns the rewind target **after** advancing the cursor
+(`highlighter.py:685-689`):
+
+```python
+nxt = self.remaining.Clone()
+nxt.MoveEndpointByRange(Start, r, End)
+self.remaining = nxt
+self.last_good = nxt.Clone()     # <-- the ALREADY-ADVANCED cursor
+```
+
+So when the advance itself is what destroyed the cursor, `last_good` is
+equally destroyed and every rewind restores the same dead position.
+Observed cost: **245 `CURSOR rewind` lines across the sample, all futile** —
+utt 6 rewound **112 times** while `rem=''` on all 639 subsequent polls; utt 3
+rewound 86 times, utt 2 39 times.
+
+This is a **regression against `plan.md`'s own Phase 5 text**, which said
+"reset `remaining` to *the anchor's original range*". The implementation
+substituted `last_good` and the original range is never retained — there is
+no recovery path left.
+
+Two distinct sub-cases, and AUDIT's own rule about not lumping failures
+applies:
+
+- **F2a — degenerate cursor (`rem=''`).** utt 6: after two `sel=1` polls the
+  range collapses to zero length. `FindText` on an empty range can never
+  match, so the read is dark forever. 639 polls, 259 tokens, 3 painted.
+  Nothing in the code ever checks whether `remaining` is empty.
+- **F2b — cursor runaway into chrome (`rem=` wandering).** utt 3's cursor
+  walks `' get started!'` → `' Command Succee'` → `' CodeRabbit to get'` →
+  the git status bar. utt 4 (Firefox) walks into the page footer
+  (`' by Cloudflare￼Privacy'`, `'Ray ID: a205…'`). `_word_bounded()` (added
+  2026-07-21) reduced this but did not close it — and note it **fails open**
+  (`except: return True`, line 569), so on a document where endpoint moves
+  misbehave every bogus hit is accepted.
+
+### F3 — a wrong anchor is held for the whole read; nothing ever notices it is painting nothing
+
+The first candidate whose head matches wins permanently. There is no check
+that it is *working*. utt 2, 3, 6, 7 each held a window-level VS Code
+document — where the text exists but is interleaved with tab labels, the
+status bar and terminal chrome, so token order ≠ reading order — for the
+entire read, at 0–1%. The anchor "succeeded" in the log every time.
+
+The highlighter has all the information needed to know better (it counts
+found/missed and has/hasn't rects per token) and uses none of it.
+
+### F4 — mid-read re-anchoring searches for the utterance HEAD, which by then may not exist
+
+After `ANCHOR DEAD`, `main()` rebuilds from `head_candidates(utterance)`.
+utt 5: the page had re-rendered from "Just a moment…" to "Checking your
+Browser…", so the head `'What to do next:'` was no longer in the document —
+9 × `ANCHOR FAILED`, the read stayed dark to the end. Mid-read, the right
+search string is the **current chunk** (`/now`'s `text`), which is where the
+voice actually is. Note `/now`'s text is *sanitized*, so it needs its own
+head logic rather than reusing `head_candidates()` unchanged. Re-anchoring
+on the head also resets the cursor to the utterance start — the backwards-
+jump mechanism from RC6.
+
+### F5 — duplicate candidates burn the anchor budget
+
+utt 5, every attempt: `cand[0]`, `cand[1]`, `cand[2]` are all
+`firefox.exe 'Just a moment...'` with byte-identical `doc=` heads — the
+focused element, an ancestor and the window document resolving to the same
+thing. Each gets a **full head ladder** (up to 7 `FindText` per candidate,
+measured at 238ms for the pathological case, AUDIT §8). With
+`ANCHOR_RETRY = 0.5s` a large share of the retry budget is spent re-searching
+the same document.
+
+### F6 — ~0.6s of every second read is dark at the start (D3/Phase 2, now with evidence)
+
+utt 2 and utt 4 both failed on try#1 and anchored on try#2 at **+0.60s /
++0.62s** — 2 of the 7 reads, and at 2.07x reading speed that is 2–3 words
+gone. This is symptom **C** ("starts dead, begins working a line in"),
+mechanically. Previously this was justified for Firefox only; utt 2 is VS
+Code, so the cold-first-attempt case is broader than assumed. AUDIT's
+constraint stands: schedule the next attempt *after* the previous finishes
+(a failed attempt costs up to 238ms), never on a fixed timer.
+
+### F7 — the marker hides on every single missed poll → visible flicker
+
+`main()` calls `marker.hide()` whenever a token is not located *or* reports
+no rects (lines 862-863, and `draw([])` → `hide()`). During a partly-working
+read the highlight therefore blinks out on every miss and returns on the next
+hit. This is a strong candidate for the user's "it glitches" (symptom B) on
+reads that are otherwise anchored correctly. A short hold (keep the last rect
+for ~2-3 polls before hiding) would cost nothing.
+
+### F8 — some reads have no TextPattern anywhere, and the user gets no signal
+
+utt 1 logged **no `cand[]` lines at all** — `candidate_patterns()` yielded
+zero candidates including the foreground-window fallback. Fully dark, no
+`GIVEUP` (the read ended before the 6s window), nothing to distinguish it
+from a crashed highlighter. This is distinct from F3 (anchored to the wrong
+document).
+
+### F9 — startup fetch storm
+
+97 failures in 27s at ~12/s while the server was still booting; 12,678 over
+the dead-server hour in `.log.1`. It is not a highlighting bug, but it burns
+CPU all day whenever the server is down, and it drowns the log. A backoff
+when `/now` is unreachable is a few lines.
+
+## 3a. Highlight-vs-audio sync — ANSWERED BY THE USER 2026-07-25: not an issue
+
+**Asked and answered: when the highlight works, the marker sits on the word
+being heard.** So the `t0`-at-dequeue lead (Phase 4 item 3) is not costing
+anything perceptible and **this whole class is out of scope** — do not spend
+time on output-latency offsets. Retained below only so a future session does
+not re-derive the mechanism and assume it is untested.
+
+The mechanism, for the record:
+
+Every finding above is log-derived, and `highlighter.log` records only
+*where* the marker was drawn — never whether it was drawn **at the moment
+that word was audible**. A user complaint of the form "the highlight runs
+ahead of the voice" would leave no trace anywhere in §2, and there is a
+known, written-down, **never-measured** mechanism for exactly that:
+
+- `/now` stamps `t0` when a chunk is **dequeued**, but `stream.write()`
+  returns before the audio is actually audible (output-stream latency), so
+  `t` systematically **leads** the sound. Already flagged as Phase 4 item 3
+  and never acted on ("if the lead is measurable, subtract a fixed offset").
+- `now()` also treats the read as over at `t > dur + 0.3` (`tts_server.py`
+  :531); that slack was never checked against the same latency.
+- On top of that: `POLL_ACTIVE = 0.08` plus the HTTP round trip adds its own
+  lag in the *opposite* direction.
+
+If it is ever reopened, **measure, do not estimate** (AUDIT §4): query the
+output latency from the live PortAudio stream, and screen-capture a read
+alongside its audio to compare the frame where the marker lands against the
+sample where that word starts. As of 2026-07-25 there is no reason to.
+
+## 3b. Two classes that no phase below can fix
+
+- **Ctrl+Alt+T clipboard reads.** Text read from the clipboard need not be
+  displayed on screen anywhere, so there is no range to anchor to — not an
+  anchoring bug, a definitional one. A D1 case. (Distinct from F8, where
+  focus simply exposed no TextPattern; don't merge them, and this sample
+  cannot say how often either happens.)
+- **Canvas-rendered text** (Google Docs, the terminal) — AUDIT §6, a wall.
+
+## 3. Code-verified but NOT observed in this sample — do not act on these yet
+
+- **RC3** short-first-line / run-boundary heads: the ladder now reaches two
+  words and no read in this sample failed for this reason.
+- **RC8** one-shot `Select()` per token — superseded by F1; the fallback
+  should be *narrowed*, not retried more.
+- **RC10** `chunk_seen` keyed by chunk *text* (identical repeated chunks
+  reuse stale `token_ranges`). Zero occurrences here.
+- **RC6** mid-read wipe: **the 2026-07-21 GRACE fix is holding.** 6 `IDLE` →
+  6 `DROP`, zero `RESUME`, zero `HELD`-then-lost. Do not touch `GRACE`.
+- **RC9** HTTP timeout: zero `FETCH fail` *during* a read. Still unjustified.
+- **RC5** crashes: zero `POLL ERROR`, zero `FATAL`, `highlighter.err` empty.
+  The Phase 1 guards are doing their job.
+- Chromium extension items — the user reads in Firefox; untested, unchanged.
+
+## 4. Structurally impossible — not in scope (AUDIT §6, do not reopen)
+
+The VS Code integrated terminal. 4 of the 7 reads. The window-level document
+does contain the terminal's text, which is why a few tokens land, but it
+interleaves it with tab labels, the status bar and the accessible-buffer
+hint, so reading order is not document order. **The fix for this surface is
+not better anchoring — it is detecting the failure and handing off to the
+caption box (D1).** If any plan item reads like "make the window document
+work", a rejected option has been reopened.
+
+## 5. Plan
+
+Ordered by (evidence × cheapness), not by severity. Each phase states its
+own verification; nothing proceeds on a hunch.
+
+### P0 — Stop destroying the evidence — **DEPLOYED 2026-07-25**
+
+`LOG_KEEP = 5` generations; one `SUMMARY` line per read at `DROP`. Item 3 (a
+day of normal use) is the user's step and is the gate before P3/P4/P5.
+See AUDIT §8 "DEPLOYED 2026-07-25".
+
+1. Keep **N generations** of `highlighter.log` (e.g. `.1` … `.5`), or
+   date-stamp them. One generation is why "two days of issues" is a
+   16-minute sample.
+2. Emit **one `SUMMARY` line per utterance** at `DROP`: app (`who=`), anchor
+   path (selection / findtext / which candidate), tries, tokens
+   located/painted/missed, rewinds, whether it ended `DEAD`. Then ranking is
+   `Select-String SUMMARY`, not a parser — and the per-token lines can stay
+   for detail.
+3. Ask the user to use the tool normally for a day **without a debugging
+   session skewing it**, so the sample contains the surfaces that matter.
+
+*Verify:* a day of use yields ≥20 SUMMARY lines covering ≥3 distinct apps.
+
+### P0b — Give candidates provenance and identity — **DEPLOYED 2026-07-25**
+
+`candidate_patterns()` currently yields bare `(tp, el)`. Three later phases
+each need more than that, and it would be silly to re-derive it three times:
+
+- **P1** must know *how* a candidate was reached (focused element vs
+  ancestor vs window document) to gate `Select()`.
+- **P5** needs candidates to be comparable, to dedup utt 5's three identical
+  `'Just a moment...'` entries.
+- **P3** needs the list to be labelled and re-enterable so a rejected anchor
+  can be skipped and the next one tried.
+
+Yield `(tp, el, how, ident)` — where `how` is the provenance and `ident` is
+something comparable (runtime id, or `doc=` head as a fallback). Do this
+before P1.
+
+### P1 — Stop the self-inflicted damage (F1) — **DEPLOYED 2026-07-25**
+
+Gated via `Anchor.can_select` (route must be `focus`) + `Anchor.resync()`.
+**Its two verification reads are still outstanding and need the user** — a
+Firefox article (expect `sel=0`, no `ANCHOR DEAD`) and a `.md` file in the VS
+Code editor (expect `route=focus`, `sel>0`, high `painted=`; if that one is
+dark, the gate is too tight).
+
+Gate the `Select()` fallback to the anchor that needs it: only when the
+anchor's provenance is **`GetFocusedElement()` itself** — the VS Code editor
+case it was written for — never on an ancestor, a window-level document or a
+browser page. **Gate on provenance, not on `cand[0]`:** the focused element
+is yielded first only if it *has* a TextPattern, so when it doesn't,
+`cand[0]` is already an ancestor or a window document — precisely the
+situation F1 says is dangerous. Re-derive `remaining` from the anchor after
+any `Select()` rather than trusting the pre-existing range.
+
+*Verify:* re-run a Firefox read of a long article. Expect zero
+`ANCHOR DEAD`, and the utt-5 pattern (painting → `sel=1` → death) absent.
+Expect a `.md` VS Code editor read to still paint (that is the case
+`Select()` legitimately serves — if it breaks, the gate is too tight).
+
+### P2 — Make cursor loss recoverable (F2) — **DEPLOYED 2026-07-25**
+
+All four items in (`orig`, `confirm()`-only promotion of `last_good`,
+`_degenerate()` refusal at advance time, ladder + `REWIND_CAP = 6`).
+Verified live against Notepad at 52/52 painted, 0 rewinds.
+
+1. Retain `self.orig` — the anchor's range as acquired — forever.
+2. Set `last_good` **before** the advance, not after (F2), and only from a
+   hit that actually produced rects, on a surface that has produced rects
+   before.
+3. Detect a degenerate `remaining` (empty `GetText`, or compared endpoints)
+   and reset immediately rather than after 8 misses.
+4. Rewind **ladder**: `last_good` → `orig` → give up on the anchor
+   (which feeds P3). Cap total rewinds per read — 112 is a bug indicator,
+   not a retry strategy.
+
+*Verify:* the utt 6 read reproduced; expect `rem=''` never to persist beyond
+one poll, and rewind count in single digits.
+
+### P3 — Make a useless anchor fall through instead of being held (F3)
+
+Score the anchor over its first N located tokens (e.g. 12): if essentially
+nothing is painting, **release it and try the next candidate**, and remember
+the rejected one for the rest of the utterance. Requires P2's `orig` and the
+candidate list to be re-enterable rather than re-derived from scratch.
+
+*Verify:* a terminal read must reach "no working anchor" within ~2s instead
+of holding a 0% anchor for 60s. That state is also D1's trigger.
+
+### P4 — Re-anchor mid-read on the current chunk, not the utterance head (F4)
+
+When rebuilding after `ANCHOR DEAD`, search `/now`'s current chunk text
+first (with its own sanitize-tolerant head ladder), falling back to the
+utterance head. Keeps the cursor near where the voice is and works on pages
+that have re-rendered.
+
+*Verify:* utt 5's Cloudflare case — the anchor dies, and the read recovers
+within ~1s instead of losing its tail.
+
+### P5 — Anchor speed and waste (F5, F6 / D3)
+
+1. Dedup candidates before searching them (compare the element, or its
+   `doc=` head + runtime id).
+2. Retry cadence: fire the next attempt as soon as the previous **finishes**
+   for the first ~2s, then back off. Not a fixed 0.5s timer.
+
+*Verify:* utt-2/4-style reads anchor at <0.2s instead of 0.60s. Watch that
+a failing attempt's 238ms cost does not overlap attempts.
+
+### P6 — Polish and fallback
+
+1. **Anti-flicker (F7):** hold the last painted rect for 2-3 polls before
+   hiding, instead of hiding on every miss.
+2. **Fetch backoff (F9):** back off `/now` polling when the server is
+   unreachable.
+3. **D1 caption box — promoted, see §6.** The user reads terminal/Claude
+   Code output about half the time (confirmed 2026-07-25), and that half can
+   never work in place. P3 supplies the trigger the D1 design note calls the
+   real open question ("the box must appear *only* when in-place isn't
+   working"). Do **not** start it before P3 exists — without the trigger it
+   silently becomes the bottom transcript the user rejected in 2026-07-17.
+   Re-read AUDIT §9 first.
+
+## 6. Recommendation
+
+Scope is now settled by the user's two answers (§3a, §1): **sync is fine —
+drop it entirely**, and the daily split is roughly half Firefox web pages,
+half Claude Code / terminal output. That splits the work cleanly in two, and
+both halves are worth doing.
+
+**Track 1 — the Firefox half, where in-place highlighting genuinely works.**
+Do `P0 → P0b → P1 → P2` as one batch. P0 makes every later claim measurable,
+P0b is the small shared change P1/P3/P5 all need, and P1/P2 fix the two
+mechanisms that turned otherwise-working reads dark. utt 5 is the read to
+keep in mind: 98% correct until `Select()` killed it — that is the typical
+Firefox read, and P1 alone may recover most of it. Then `P4 → P5`, and
+re-measure from a real day's SUMMARY lines before touching anything else.
+
+**Track 2 — the terminal half, which can never work in place.** `P3` (an
+anchor that notices it is painting nothing and gives up) then **D1**, the
+caption box. This is no longer speculative: it is about half of daily use,
+AUDIT §6 proves in-place is impossible there, and D1 is the only thing that
+helps. P3 is the hard prerequisite — it supplies the "in-place isn't
+working" trigger without which the box becomes the bottom transcript the
+user rejected in 2026-07-17.
+
+**Suggested order:** P0, P0b, P1, P2 first — they are small, evidence-backed,
+and immediately improve the Firefox half. Then P3, which serves both tracks
+(it fixes wrong-anchor reads *and* unlocks D1). Then D1 and the remainder.

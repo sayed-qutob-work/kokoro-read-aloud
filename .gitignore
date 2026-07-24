@@ -4,7 +4,7 @@ env/
 # runtime output
 server.log
 highlighter.log
-highlighter.log.1
+highlighter.log.*
 highlighter.err
 __pycache__/
 
