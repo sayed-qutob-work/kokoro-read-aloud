@@ -9,9 +9,33 @@ Set sh = CreateObject("Wscript.Shell")
 ' --- 1. TTS server (hidden console, output captured to log) ---
 sh.Run "cmd /c cd /d C:\kokoro && env\Scripts\python.exe tts_server.py > C:\kokoro\server.log 2>&1", 0, False
 
-' --- 2. Read-aloud hotkeys (AutoHotkey v2, default per-user install path) ---
-ahk = sh.ExpandEnvironmentStrings("%LOCALAPPDATA%") & "\Programs\AutoHotkey\v2\AutoHotkey64.exe"
-sh.Run """" & ahk & """ ""C:\kokoro\read_aloud.ahk""", 0, False
+' --- 2. Read-aloud hotkeys (AutoHotkey v2) ---
+'     The installer offers per-user OR machine-wide; this file used to assume
+'     per-user only, so a machine-wide install silently launched nothing --
+'     sh.Run on a missing .exe raises no error here, and the symptom is
+'     "the hotkeys just don't work" with no log anywhere. Hit 2026-08-05 on a
+'     fresh setup. Check both, and SAY SO if neither is there (MsgBox, not
+'     TrayTip -- Windows 11 suppresses TrayTip, see AUDIT.md 7).
+Set fso = CreateObject("Scripting.FileSystemObject")
+ahkUser = sh.ExpandEnvironmentStrings("%LOCALAPPDATA%") & "\Programs\AutoHotkey\v2\AutoHotkey64.exe"
+ahkMachine = sh.ExpandEnvironmentStrings("%ProgramFiles%") & "\AutoHotkey\v2\AutoHotkey64.exe"
+
+ahk = ""
+If fso.FileExists(ahkUser) Then
+    ahk = ahkUser
+ElseIf fso.FileExists(ahkMachine) Then
+    ahk = ahkMachine
+End If
+
+If ahk = "" Then
+    MsgBox "AutoHotkey v2 not found." & vbCrLf & vbCrLf & _
+           "Looked in:" & vbCrLf & ahkUser & vbCrLf & ahkMachine & vbCrLf & vbCrLf & _
+           "The TTS server will still start, but Ctrl+Alt+R will do nothing." & vbCrLf & _
+           "Install AutoHotkey v2 from https://www.autohotkey.com/", _
+           vbExclamation, "Kokoro read-aloud"
+Else
+    sh.Run """" & ahk & """ ""C:\kokoro\read_aloud.ahk""", 0, False
+End If
 
 ' --- 3. In-place word highlighter (tints the spoken word in the SOURCE app
 '        via UI Automation). The caption-strip overlay.py was retired from

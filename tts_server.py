@@ -331,8 +331,25 @@ class Player:
             try:
                 self.stream.abort()
                 self.stream.start()
+                return
             except Exception as e:
                 print("audio reset failed:", e, flush=True)
+            # abort()+start() on the existing handle failed -- it may be
+            # stale (e.g. the OS audio device changed under a long-lived
+            # stream). Reopen a fresh OutputStream rather than retrying
+            # the same handle.
+            try:
+                self.stream.close()
+            except Exception:
+                pass
+            try:
+                self.stream = sd.OutputStream(samplerate=24000, channels=1,
+                                              dtype="float32", blocksize=1024,
+                                              latency="low")
+                self.stream.start()
+                print("audio stream recreated ok", flush=True)
+            except Exception as e:
+                print("audio stream recreate failed:", e, flush=True)
 
     @staticmethod
     def _drain(q):

@@ -330,6 +330,19 @@ cmd equivalent of the kill: `taskkill /F /IM python.exe` (blunter — kills all 
   to stop PS parsing, or just use `Invoke-RestMethod`.
 - **`curl -L`** is mandatory for GitHub release URLs (they redirect to a CDN).
 - **`env\Scripts\python.exe -m pip`** — never bare `pip`. Guarantees the right interpreter.
+- **The venv must be Python 3.12 — `py -3.12 -m venv env`, never `python -m venv env`.**
+  `kokoro` declares `Requires-Python >=3.10,<3.13`. On a 3.13+ venv pip filters out
+  every 0.8.x/0.9.x wheel and reports `No matching distribution found for kokoro==0.9.4`,
+  listing only the ancient 0.7.x line as available. The *first* line of that error
+  (`Ignored the following versions that require a different python version`) is the
+  real message; the rest reads like a network failure and isn't one. Hit 2026-08-05:
+  the venv had been rebuilt from 3.14.6 (the only interpreter then installed, at
+  `%LocalAppData%\Python\pythoncore-3.14-64`) and every dependency install failed.
+  Fixed by `py install 3.12` (3.12.10) → delete `env` → `py -3.12 -m venv C:\kokoro\env`
+  → reinstall `requirements.txt`. Rebuild **in place** at `C:\kokoro\env` so the
+  hardcoded `env\Scripts\python.exe` paths in `start_tts.vbs` stay valid. Do not
+  "fix" this by unpinning to a 0.7.x `kokoro` — different model/voice API generation,
+  and every number in §4 was measured on the pinned set.
 - **`Get-Content -Raw | ConvertTo-Json` sends garbage to `/speak`.** `Get-Content`
   returns a String *decorated with note properties* (`PSPath`, `PSDrive`, `PSProvider`…),
   and `ConvertTo-Json` serializes all of them — so `@{text=$t} | ConvertTo-Json`
@@ -340,6 +353,38 @@ cmd equivalent of the kill: `taskkill /F /IM python.exe` (blunter — kills all 
 - **Windows 11 suppresses `TrayTip`.** All AHK errors now use `MsgBox`. Do not revert.
 - **AHK tray icon hides** behind the `^` arrow. Settings → Personalization → Taskbar →
   Other system tray icons → toggle AutoHotkey on.
+
+### Fresh-machine setup — MEASURED 2026-08-05, corrects two long-standing claims
+
+A clean clone + rebuild on this box (everything outside the repo was gone: no
+Python 3.12, no venv contents, no eSpeak, no AHK, no HF cache). Four findings,
+all verified end to end by a real `/speak`, not by reading code:
+
+- **eSpeak NG is NOT a required install any more.** This file and the README
+  both said it must be on PATH. Wrong with the pinned versions: `misaki[en]`
+  pulls in **`espeakng-loader`**, which ships `espeak-ng.dll` + `espeak-ng-data`
+  *inside the venv* (`env\Lib\site-packages\espeakng_loader\`). Proof, on a box
+  with no eSpeak anywhere and nothing on PATH: `misaki.espeak.EspeakFallback`
+  phonemized `zzyzx` → `zˈizˈɪzks` and `supercalifragilistic` →
+  `sˌupəɹkˌælɪfɹˌæʤɪlˈɪstɪk`, and a full `/speak` produced real audio for both
+  (`/now` word timings: `zzyzx` 0.743→1.173, i.e. 430ms of actual sound).
+  Out-of-dictionary words are the *only* path that reaches eSpeak, so this is
+  the decisive test. Don't reinstate the `.msi` prerequisite without re-measuring.
+- **`start_tts.vbs` assumed a per-user AutoHotkey install and silently launched
+  nothing on a machine-wide one.** The installer offers both; line 13 hardcoded
+  `%LOCALAPPDATA%\Programs\AutoHotkey\v2\`, and `sh.Run` on a missing .exe
+  raises nothing. Symptom: hotkeys dead, no error, no log, server perfectly
+  healthy — indistinguishable from an AHK bug. Now checks `%LOCALAPPDATA%` then
+  `%ProgramFiles%` and MsgBoxes if neither exists.
+- **`misaki` self-downloads `en_core_web_sm` (~13MB spaCy model)** the first
+  time it phonemizes — a network step nothing documented. It prints pip-style
+  progress from inside the server; that output in `server.log` is expected, not
+  a failure.
+- **First-run model fetch goes through `hf-xet`, not plain HTTP.** The blob sits
+  at 0 bytes as `….incomplete` for the whole transfer, so "cache is 0.0 MB"
+  mid-download means nothing. Progress lives in
+  `~\.cache\huggingface\xet\logs\xet_*.log`; look for
+  `File reconstruction completed successfully … total_bytes_scheduled:327212226`.
 
 ### Server-side gotchas encoded in the code — don't undo them
 
@@ -1162,6 +1207,53 @@ help):
    legitimately serves, and the one thing P1's gate could plausibly break.
    Expect `route=focus`, `sel>0`, and a high `painted=`. **If that read is
    dark, the gate is too tight and that is the first thing to look at.**
+
+---
+
+### DIAGNOSED & FIXED 2026-08-10: silent total audio failure — stale PortAudio/MME stream handle
+
+Symptom reported by user: Ctrl+Alt+R "does nothing" — no sound, no visible
+error. It was **not** a hotkey/server-not-running problem: `server.log`
+showed the AHK hotkey was reaching the server fine (`POST /speak` 200 on
+every press) and Kokoro was synthesizing normally. The actual failure was
+100% reproducible on every single request at the time:
+
+```
+audio reset failed: Error starting stream: Unanticipated host error
+[PaErrorCode -9999]: 'There is no driver installed on your system.' [MME error 6]
+...
+playback error: Stream is stopped [PaErrorCode -9983]
+```
+
+Root cause: `Player._reset_audio()` (`tts_server.py`) calls
+`stream.abort()` then `stream.start()` on the **same long-lived
+`sd.OutputStream` handle** on every `/speak`. After the server had been
+running a while (exact trigger unconfirmed — candidates: sleep/wake, a
+Windows audio-endpoint change, or just age; not worth chasing further since
+the fix is defensive regardless), that handle's `start()` began failing
+every time with MME error 6. Once `start()` fails the stream stays
+inactive, so every subsequent `stream.write()` in `_play_loop` throws
+`-9983` and no audio ever plays — silently; the exception was only ever
+printed to `server.log`, never surfaced to the user or AHK.
+
+Confirmed device 3 (`Headphones (Realtek(R) Audio)`, MME, `sd.default.device
+== [1, 3]`) opened fine in a **fresh** Python process at the same time the
+running server's handle was failing — the device/driver itself was never
+broken, only the server's already-open handle.
+
+**Fix deployed:** `_reset_audio()` now falls back to closing and
+**recreating** the `OutputStream` object (not just retrying `start()` on the
+same handle) when `abort()+start()` fails, so the server self-heals instead
+of going permanently silent until a manual restart. Killing and restarting
+the server (standard restart discipline, §7) also clears the immediate
+symptom on its own — the code fix is for when this recurs unattended (e.g.
+overnight) rather than something already proven to fire in production,
+since a fresh restart didn't reproduce the original failure to retest
+against.
+
+**If "hotkey does nothing, no sound" recurs:** check `server.log` first for
+`audio reset failed` / `playback error: Stream is stopped` before assuming
+the hotkey or server process itself is the problem — both were fine here.
 
 ---
 

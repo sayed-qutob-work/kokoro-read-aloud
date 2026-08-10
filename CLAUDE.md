@@ -83,7 +83,11 @@ geometry — viewport effect) are **different failures**; don't lump them.
 
 - Windows PowerShell 5.1: quote pip specs (`pip install "kokoro>=0.9.4"`),
   use `curl.exe` not `curl`, no `&&`.
-- eSpeak NG must be on PATH (phonemization).
+- eSpeak NG does **not** need a separate install — `espeakng-loader` (via
+  `misaki[en]`) ships the DLL inside the venv. Measured 2026-08-05, AUDIT §7.
+- The venv must be **Python 3.12** (`py -3.12 -m venv env`). `kokoro` is
+  `>=3.10,<3.13`; a 3.13+ venv fails every install with a misleading
+  "No matching distribution found". AUDIT §7.
 - AutoHotkey v2 is a per-user install; `assoc .ahk` reporting nothing is normal.
 - Windows 11 suppresses TrayTip — AHK errors use MsgBox; don't revert.
 - PortAudio is not thread-safe — all stream ops go through `audio_lock` in the
