@@ -1418,9 +1418,15 @@ it was written for. Two supporting details:
 
 Verified: 12/12 truth-table cases (VS Code via focus/ancestor/focus-sub →
 allowed; Firefox via any route, window routes, Notepad, unresolved app,
-post-probe → refused). **Live verification still needs the user** — read a
-`.md` file in the VS Code editor (expect `sel>0`, high `painted=`) and a
-Firefox article (expect `sel=0`, no scrolling).
+post-probe → refused).
+
+**CONFIRMED BY THE USER, 2026-08-11: "the jumping stopped."** That closes the
+loop the 2026-07-25 entry left open, and it settles the causation caveat
+recorded there — the P1 note said the `sel=1` correlation "is not proof of
+causation" and that gating would itself be the experiment. It was: gate on the
+app, and the symptom goes away. So the mechanism was real, and the 2026-07-25
+gate was simply keyed on the wrong property (route, which is a fact about
+where a TextPattern was *found*, not about which program owns it).
 
 #### Cause 3 — replugging headphones sent audio nowhere (fixed same day)
 
