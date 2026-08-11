@@ -88,7 +88,12 @@ geometry — viewport effect) are **different failures**; don't lump them.
 ## Key endpoints
 
 - `POST /speak {"text":...}`, `POST /stop`
-- `GET/POST /config` — live tuning (in-memory only; persist by editing the file)
+- `GET/POST /config` — live tuning; the tray persists it to `settings.json`,
+  which the server loads at startup (`voice`, `model_speed`, `playback_speed`,
+  `pause`, `first_chunk_audio`, `output_device`)
+- `GET/POST /devices` — output devices. **POST re-initializes PortAudio**,
+  which is the only way a device plugged in after startup becomes visible
+  (PortAudio enumerates once). This is the headphone-replug fix
 - `GET /now` — current chunk, word timings, sounding word index, `utt` counter
 - `GET /utterance` — original pre-sanitize text of the current utterance
 

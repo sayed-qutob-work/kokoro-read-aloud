@@ -36,6 +36,7 @@ it affects nothing else -- the tray is a control surface, not a dependency.
 import ctypes
 import json
 import os
+import queue
 import subprocess
 import sys
 import threading
@@ -75,12 +76,16 @@ MODEL_SPEED_CAP = 1.3
 # (measured 1.3x-1.9x RT on this machine depending on chunk size).
 SUSTAIN_MARGIN = 0.85
 
+# Shown for output_device = None, i.e. "whatever Windows is using right now".
+DEVICE_DEFAULT_LABEL = "Default (follow Windows)"
+
 DEFAULTS = {
     "voice": "af_heart",
     "model_speed": 1.15,
-    "playback_speed": 1.4,
+    "playback_speed": 1.8,
     "pause": 0.1,
     "first_chunk_audio": 2.0,
+    "output_device": None,      # None = follow the Windows default
 }
 
 
@@ -395,6 +400,7 @@ def make_icon(size=32):
 # Menu command ids
 ID_STATUS, ID_SETTINGS, ID_STOP = 1, 2, 3
 ID_RESTART_SRV, ID_RESTART_HL, ID_LOGS, ID_QUIT = 4, 5, 6, 7
+ID_RECONNECT, ID_DEVICE = 8, 9
 
 
 class Tray:
@@ -437,6 +443,13 @@ class Tray:
             a.open_settings()
         elif cid == ID_STOP:
             api("/stop", payload={})
+        elif cid == ID_RECONNECT:
+            # POST /devices re-initializes PortAudio and reopens the stream --
+            # the fix for "I replugged my headphones and sound went nowhere"
+            # without needing the settings panel at all.
+            threading.Thread(
+                target=api, args=("/devices",),
+                kwargs={"payload": {}, "timeout": 15.0}, daemon=True).start()
         elif cid == ID_RESTART_SRV:
             threading.Thread(target=restart_server, daemon=True).start()
         elif cid == ID_RESTART_HL:
@@ -451,14 +464,19 @@ class Tray:
         if cfg:
             status = (f"Server: running  -  {cfg.get('effective_speed', '?')}x, "
                       f"{cfg.get('voice', '?')}")
+            device = f"Output: {cfg.get('output_device_name') or '?'}"
         else:
             status = "Server: NOT RUNNING"
+            device = None
 
         m = user32.CreatePopupMenu()
         user32.AppendMenuW(m, MF_STRING | MF_GRAYED, ID_STATUS, status)
+        if device:
+            user32.AppendMenuW(m, MF_STRING | MF_GRAYED, ID_DEVICE, device)
         user32.AppendMenuW(m, MF_SEPARATOR, 0, None)
         user32.AppendMenuW(m, MF_STRING, ID_SETTINGS, "Settings...")
         user32.AppendMenuW(m, MF_STRING, ID_STOP, "Stop speaking")
+        user32.AppendMenuW(m, MF_STRING, ID_RECONNECT, "Reconnect audio device")
         user32.AppendMenuW(m, MF_SEPARATOR, 0, None)
         user32.AppendMenuW(m, MF_STRING, ID_RESTART_SRV, "Restart TTS server")
         user32.AppendMenuW(m, MF_STRING, ID_RESTART_HL, "Restart highlighter")
@@ -547,6 +565,30 @@ class App:
         self.tray = Tray(self)
         self._push_job = None     # debounce handle for slider drags
         self._rt = None           # last measured throughput, or None
+        self._device_map = {DEVICE_DEFAULT_LABEL: None}   # label -> spec
+        self._ui_q = queue.Queue()
+        self.root.after(60, self._pump_ui)
+
+    def ui(self, fn):
+        """Run `fn` on the tk thread, from any thread.
+
+        NOT root.after(): that calls into Tcl from the *calling* thread
+        (createcommand), which only works while the mainloop happens to be
+        spinning and raises "main thread is not in main loop" otherwise. Every
+        HTTP call here runs on a worker, so this is the only safe handoff."""
+        self._ui_q.put(fn)
+
+    def _pump_ui(self):
+        while True:
+            try:
+                fn = self._ui_q.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                fn()
+            except Exception:
+                log("ui callback failed\n" + traceback.format_exc())
+        self.root.after(60, self._pump_ui)
 
     # ---- lifecycle
     def start(self):
@@ -570,10 +612,10 @@ class App:
             except Exception:
                 pass
             os._exit(0)
-        self.root.after(0, go)
+        self.ui(go)
 
     def open_settings(self):
-        self.root.after(0, self._open_settings)
+        self.ui(self._open_settings)
 
     # ---- server round trips
     def push(self, cfg, save=True):
@@ -608,62 +650,94 @@ class App:
         frm = ttk.Frame(w, padding=14)
         frm.grid(sticky="nsew")
 
+        # Rows are handed out by a counter rather than hardcoded, so inserting
+        # a control doesn't mean renumbering every widget below it.
+        rows = iter(range(200))
+
         # --- speed
+        r = next(rows)
         ttk.Label(frm, text="Reading speed", font=("Segoe UI", 10, "bold")
-                  ).grid(row=0, column=0, sticky="w", **pad)
+                  ).grid(row=r, column=0, sticky="w", **pad)
         self.v_speed = tk.DoubleVar(
             value=round(self.cfg["model_speed"] * self.cfg["playback_speed"], 2))
         self.lbl_speed = ttk.Label(frm, text="")
-        self.lbl_speed.grid(row=0, column=2, sticky="e", **pad)
-        s = ttk.Scale(frm, from_=0.8, to=3.0, variable=self.v_speed,
-                      command=lambda _=None: self._speed_changed())
-        s.grid(row=1, column=0, columnspan=3, sticky="ew", **pad)
+        self.lbl_speed.grid(row=r, column=2, sticky="e", **pad)
+        ttk.Scale(frm, from_=0.8, to=3.0, variable=self.v_speed,
+                  command=lambda _=None: self._speed_changed()
+                  ).grid(row=next(rows), column=0, columnspan=3,
+                         sticky="ew", **pad)
 
         self.lbl_sustain = ttk.Label(frm, text="", foreground="#555")
-        self.lbl_sustain.grid(row=2, column=0, columnspan=3, sticky="w", **pad)
+        self.lbl_sustain.grid(row=next(rows), column=0, columnspan=3,
+                              sticky="w", **pad)
         self.lbl_warn = ttk.Label(frm, text="", foreground="#b00020",
                                   wraplength=430, justify="left")
-        self.lbl_warn.grid(row=3, column=0, columnspan=3, sticky="w", **pad)
+        self.lbl_warn.grid(row=next(rows), column=0, columnspan=3,
+                           sticky="w", **pad)
 
-        ttk.Separator(frm).grid(row=4, column=0, columnspan=3,
+        ttk.Separator(frm).grid(row=next(rows), column=0, columnspan=3,
                                 sticky="ew", pady=10)
 
         # --- voice
-        ttk.Label(frm, text="Voice").grid(row=5, column=0, sticky="w", **pad)
+        r = next(rows)
+        ttk.Label(frm, text="Voice").grid(row=r, column=0, sticky="w", **pad)
         self.v_voice = tk.StringVar(value=self.cfg["voice"])
         ttk.Combobox(frm, textvariable=self.v_voice, values=VOICES,
                      state="readonly", width=18
-                     ).grid(row=5, column=1, columnspan=2, sticky="e", **pad)
+                     ).grid(row=r, column=1, columnspan=2, sticky="e", **pad)
+
+        # --- output device
+        r = next(rows)
+        ttk.Label(frm, text="Play through").grid(row=r, column=0,
+                                                 sticky="w", **pad)
+        self.v_device = tk.StringVar(value=DEVICE_DEFAULT_LABEL)
+        self.cmb_device = ttk.Combobox(frm, textvariable=self.v_device,
+                                       values=[DEVICE_DEFAULT_LABEL],
+                                       state="readonly", width=34)
+        self.cmb_device.grid(row=r, column=1, sticky="e", **pad)
+        self.cmb_device.bind("<<ComboboxSelected>>",
+                             lambda _e: self._device_changed())
+        ttk.Button(frm, text="Rescan", width=7,
+                   command=lambda: self._load_devices(refresh=True)
+                   ).grid(row=r, column=2, sticky="e", **pad)
+        self.lbl_device = ttk.Label(frm, text="", foreground="#555",
+                                    wraplength=430, justify="left")
+        self.lbl_device.grid(row=next(rows), column=0, columnspan=3,
+                             sticky="w", **pad)
 
         # --- pause
-        ttk.Label(frm, text="Pause after sentences").grid(row=6, column=0,
+        r = next(rows)
+        ttk.Label(frm, text="Pause after sentences").grid(row=r, column=0,
                                                           sticky="w", **pad)
         self.v_pause = tk.DoubleVar(value=self.cfg["pause"])
         self.lbl_pause = ttk.Label(frm, text="")
-        self.lbl_pause.grid(row=6, column=2, sticky="e", **pad)
+        self.lbl_pause.grid(row=r, column=2, sticky="e", **pad)
         ttk.Scale(frm, from_=0.0, to=0.6, variable=self.v_pause,
                   command=lambda _=None: self._labels()
-                  ).grid(row=7, column=0, columnspan=3, sticky="ew", **pad)
+                  ).grid(row=next(rows), column=0, columnspan=3,
+                         sticky="ew", **pad)
 
         # --- start buffer
-        ttk.Label(frm, text="Buffer before speaking").grid(row=8, column=0,
+        r = next(rows)
+        ttk.Label(frm, text="Buffer before speaking").grid(row=r, column=0,
                                                            sticky="w", **pad)
         self.v_first = tk.DoubleVar(value=self.cfg["first_chunk_audio"])
         self.lbl_first = ttk.Label(frm, text="")
-        self.lbl_first.grid(row=8, column=2, sticky="e", **pad)
+        self.lbl_first.grid(row=r, column=2, sticky="e", **pad)
         ttk.Scale(frm, from_=0.8, to=4.0, variable=self.v_first,
                   command=lambda _=None: self._labels()
-                  ).grid(row=9, column=0, columnspan=3, sticky="ew", **pad)
+                  ).grid(row=next(rows), column=0, columnspan=3,
+                         sticky="ew", **pad)
         ttk.Label(frm, text="Larger = slower to start, less likely to stutter.",
-                  foreground="#555").grid(row=10, column=0, columnspan=3,
-                                          sticky="w", **pad)
+                  foreground="#555").grid(row=next(rows), column=0,
+                                          columnspan=3, sticky="w", **pad)
 
-        ttk.Separator(frm).grid(row=11, column=0, columnspan=3,
+        ttk.Separator(frm).grid(row=next(rows), column=0, columnspan=3,
                                 sticky="ew", pady=10)
 
         # --- advanced
         adv = ttk.LabelFrame(frm, text="Advanced", padding=10)
-        adv.grid(row=12, column=0, columnspan=3, sticky="ew", **pad)
+        adv.grid(row=next(rows), column=0, columnspan=3, sticky="ew", **pad)
         ttk.Label(adv, text="Voice speed vs. stretch").grid(row=0, column=0,
                                                             sticky="w")
         self.v_model = tk.DoubleVar(value=self.cfg["model_speed"])
@@ -681,7 +755,8 @@ class App:
 
         # --- buttons
         btns = ttk.Frame(frm)
-        btns.grid(row=13, column=0, columnspan=3, sticky="ew", pady=(14, 0))
+        btns.grid(row=next(rows), column=0, columnspan=3, sticky="ew",
+                  pady=(14, 0))
         ttk.Button(btns, text="Test", command=self._test).pack(side="left")
         ttk.Button(btns, text="Reset", command=self._reset).pack(side="left",
                                                                  padx=6)
@@ -690,10 +765,12 @@ class App:
                                                                padx=6)
 
         self.status = ttk.Label(frm, text="", foreground="#0a7")
-        self.status.grid(row=14, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        self.status.grid(row=next(rows), column=0, columnspan=3, sticky="w",
+                         pady=(8, 0))
 
         frm.columnconfigure(1, weight=1)
         self._labels()
+        self._load_devices()
         self._refresh_sustain()
         w.update_idletasks()
         w.geometry(f"+{w.winfo_screenwidth() // 2 - w.winfo_width() // 2}"
@@ -727,7 +804,8 @@ class App:
         cfg = {"voice": self.v_voice.get(), "model_speed": round(model, 3),
                "playback_speed": round(playback, 3),
                "pause": round(self.v_pause.get(), 3),
-               "first_chunk_audio": round(self.v_first.get(), 2)}
+               "first_chunk_audio": round(self.v_first.get(), 2),
+               "output_device": self._device_map.get(self.v_device.get())}
         self.cfg = cfg
         self._push_debounced(cfg)
         return cfg
@@ -747,6 +825,69 @@ class App:
                                      kwargs={"save": False},
                                      daemon=True).start())
 
+    def _load_devices(self, refresh=False):
+        """Populate the output-device list, off the UI thread.
+
+        `refresh` re-initializes PortAudio server-side. That is the only way a
+        device plugged in *after* the server started becomes visible, which is
+        the whole point of the Rescan button: PortAudio enumerates once."""
+        if refresh:
+            self.status.config(text="Rescanning audio devices...")
+
+        def work():
+            d = api("/devices" + ("?refresh=1" if refresh else ""),
+                    timeout=10.0 if refresh else 3.0)
+            self.ui(lambda: self._devices_ready(d, refresh))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _devices_ready(self, d, refreshed=False):
+        if self.win is None:
+            return
+        if not d:
+            self.lbl_device.config(
+                text="Server not running - cannot list output devices.")
+            return
+        labels = [DEVICE_DEFAULT_LABEL]
+        self._device_map = {DEVICE_DEFAULT_LABEL: None}
+        for dev in d.get("devices", []):
+            # the same physical output appears once per host API; they behave
+            # differently, so keep them all but label which is which
+            label = f"{dev['name']}  [{dev['hostapi']}]"
+            self._device_map[label] = dev["spec"]
+            labels.append(label)
+        self.cmb_device.config(values=labels)
+
+        cur = d.get("current")
+        sel = DEVICE_DEFAULT_LABEL
+        if cur:
+            for label, spec in self._device_map.items():
+                if spec == cur:
+                    sel = label
+                    break
+            else:
+                sel = f"{cur}  (not connected)"
+                self.cmb_device.config(values=labels + [sel])
+        self.v_device.set(sel)
+        self.lbl_device.config(
+            text=f"Currently playing through: {d.get('current_name') or '?'}")
+        if refreshed:
+            self.status.config(text="Audio devices rescanned.")
+
+    def _device_changed(self):
+        cfg = self._apply_live()
+        self.status.config(text="Switching output device...")
+
+        def work():
+            self.push(cfg, save=False)
+            d = api("/devices", timeout=8.0)
+
+            def done():
+                self._devices_ready(d)
+                self.status.config(text="Output device changed - "
+                                        "press Save to keep it.")
+            self.ui(done)
+        threading.Thread(target=work, daemon=True).start()
+
     def _refresh_sustain(self):
         """Poll the server's measured throughput, off the UI thread.
 
@@ -755,7 +896,7 @@ class App:
         once when the panel opens."""
         def work():
             rt, _dens, ok = self.measured()
-            self.root.after(0, lambda: self._sustain_ready(rt, ok))
+            self.ui(lambda: self._sustain_ready(rt, ok))
         threading.Thread(target=work, daemon=True).start()
         if self.win is not None:
             self.win.after(4000, self._refresh_sustain)
@@ -813,6 +954,7 @@ class App:
         self.v_pause.set(DEFAULTS["pause"])
         self.v_first.set(DEFAULTS["first_chunk_audio"])
         self.v_voice.set(DEFAULTS["voice"])
+        self.v_device.set(DEVICE_DEFAULT_LABEL)
         self._speed_changed()
         self.status.config(text="Reset to defaults (not saved yet).")
 

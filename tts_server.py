@@ -31,6 +31,11 @@ ONNX_VOICES = r"C:\kokoro\voices-v1.0.bin"
 
 KOKORO_VOICE = "af_heart"
 
+OUTPUT_DEVICE = None      # None = follow the Windows default output device.
+                          # Otherwise "<hostapi>|<device name>", e.g.
+                          # "MME|Headphones (Realtek(R) Audio)". Set from the
+                          # tray Settings panel; stored in settings.json.
+
 MODEL_SPEED = 1.15        # what Kokoro itself is asked for. KEEP <= 1.3.
 PLAYBACK_SPEED = 1.8      # WSOLA time-stretch after synthesis. Pitch-preserving.
                           # Real speed = MODEL_SPEED * PLAYBACK_SPEED
@@ -80,7 +85,7 @@ def load_user_settings():
     reverted the user's tuning to whatever a past session hardcoded. The tray
     panel is the UI for these; this is what makes them stick."""
     global KOKORO_VOICE, MODEL_SPEED, PLAYBACK_SPEED
-    global SENTENCE_PAUSE, FIRST_CHUNK_AUDIO
+    global SENTENCE_PAUSE, FIRST_CHUNK_AUDIO, OUTPUT_DEVICE
     try:
         with open(SETTINGS_FILE, encoding="utf-8") as f:
             d = json.load(f)
@@ -96,11 +101,67 @@ def load_user_settings():
         SENTENCE_PAUSE = max(0.0, float(d.get("pause", SENTENCE_PAUSE)))
         FIRST_CHUNK_AUDIO = max(0.3, float(d.get("first_chunk_audio",
                                                  FIRST_CHUNK_AUDIO)))
+        OUTPUT_DEVICE = d.get("output_device", OUTPUT_DEVICE) or None
         print(f"settings.json: voice={KOKORO_VOICE} "
               f"speed={MODEL_SPEED}x{PLAYBACK_SPEED} "
-              f"pause={SENTENCE_PAUSE} first={FIRST_CHUNK_AUDIO}", flush=True)
+              f"pause={SENTENCE_PAUSE} first={FIRST_CHUNK_AUDIO} "
+              f"out={OUTPUT_DEVICE or 'system default'}", flush=True)
     except Exception as e:
         print("settings.json has a bad value, using defaults:", e, flush=True)
+
+
+def list_output_devices():
+    """Every device that can play audio, with a stable spec string.
+
+    The same physical output shows up once per host API (MME, DirectSound,
+    WASAPI, WDM-KS), so the host API is part of the identity, not noise."""
+    try:
+        default_idx = sd.default.device[1]
+    except Exception:
+        default_idx = None
+    out = []
+    for i, d in enumerate(sd.query_devices()):
+        if d.get("max_output_channels", 0) <= 0:
+            continue
+        try:
+            api = sd.query_hostapis(d["hostapi"])["name"]
+        except Exception:
+            api = "?"
+        out.append({"index": i, "name": d["name"], "hostapi": api,
+                    "spec": f"{api}|{d['name']}",
+                    "channels": d["max_output_channels"],
+                    "is_default": i == default_idx})
+    return out
+
+
+def resolve_device(spec):
+    """Device INDEX for a stored spec, or None to follow the Windows default.
+
+    Specs are stored as "<hostapi>|<name>", never as an index. PortAudio
+    indices shift whenever a device appears or disappears -- which on a laptop
+    is every time headphones are plugged in, i.e. exactly the situation this
+    setting exists to survive. A spec that no longer resolves falls back to
+    the system default rather than failing to speak at all."""
+    if not spec or str(spec).strip().lower() in ("default", "none", ""):
+        return None
+    api, sep, name = str(spec).partition("|")
+    if not sep:
+        api, name = "", api
+    devs = list_output_devices()
+    for d in devs:
+        if d["hostapi"] == api and d["name"] == name:
+            return d["index"]
+    for d in devs:
+        if d["name"] == name:
+            return d["index"]
+    # MME truncates device names to 31 characters ("DELL U2422HE (HD Audio
+    # Driver f"), so an exact match can legitimately fail across host APIs.
+    for d in devs:
+        if d["name"][:31] == name[:31]:
+            return d["index"]
+    print(f"output device {spec!r} not found -- using system default",
+          flush=True)
+    return None
 
 
 def load_calibration():
@@ -391,16 +452,59 @@ class Player:
 
         self.lock = threading.Lock()
         self.cv = threading.Condition()
-        self.stream = sd.OutputStream(samplerate=24000, channels=1,
-                                      dtype="float32", blocksize=1024,
-                                      latency="low")
-        self.stream.start()
         # PortAudio is NOT thread-safe: abort() during write() can hang it.
+        # Built before the stream, because opening one now takes this lock.
         self.audio_lock = threading.Lock()
+        self.device_spec = OUTPUT_DEVICE
+        self.device_index = None
+        self.device_name = ""
+        self.stream = None
+        with self.audio_lock:
+            self._open_stream_locked()
         threading.Thread(target=self._synth_loop, daemon=True).start()
         threading.Thread(target=self._play_loop, daemon=True).start()
 
+    def _open_stream_locked(self):
+        """Open the output stream on the configured device.
+
+        Caller must hold audio_lock. _play_loop re-reads self.stream on every
+        block *inside* that lock, so swapping the object here is safe."""
+        idx = resolve_device(self.device_spec)
+        self.device_index = idx
+        try:
+            probe = idx if idx is not None else sd.default.device[1]
+            self.device_name = sd.query_devices(probe)["name"]
+        except Exception:
+            self.device_name = "?"
+        self.stream = sd.OutputStream(samplerate=24000, channels=1,
+                                      dtype="float32", blocksize=1024,
+                                      latency="low", device=idx)
+        self.stream.start()
+        print(f"audio out: {self.device_name!r}"
+              f"{' (system default)' if idx is None else ''}", flush=True)
+
+    def _hard_reinit_locked(self):
+        """Tear PortAudio down and bring it back, then reopen the stream.
+
+        PortAudio enumerates devices ONCE at initialization, so a headset
+        plugged in after the server started is invisible -- and a headset
+        unplugged and replugged can come back as a different index behind the
+        same name. Nothing short of re-initializing sees that. Caller holds
+        audio_lock."""
+        try:
+            sd._terminate()
+            sd._initialize()
+        except Exception as e:
+            print("portaudio reinit failed:", e, flush=True)
+        self._open_stream_locked()
+
     def _reset_audio(self):
+        """Called before every utterance. Escalates: cheap abort/start, then
+        a fresh stream, then a full PortAudio re-init.
+
+        The last rung is what recovers from a device replug: the old handle is
+        bound to a device index that may no longer mean the same thing, and
+        re-opening alone still reads a stale device list."""
         with self.audio_lock:
             try:
                 self.stream.abort()
@@ -408,22 +512,76 @@ class Player:
                 return
             except Exception as e:
                 print("audio reset failed:", e, flush=True)
-            # abort()+start() on the existing handle failed -- it may be
-            # stale (e.g. the OS audio device changed under a long-lived
-            # stream). Reopen a fresh OutputStream rather than retrying
-            # the same handle.
             try:
                 self.stream.close()
             except Exception:
                 pass
             try:
-                self.stream = sd.OutputStream(samplerate=24000, channels=1,
-                                              dtype="float32", blocksize=1024,
-                                              latency="low")
-                self.stream.start()
+                self._open_stream_locked()
                 print("audio stream recreated ok", flush=True)
+                return
             except Exception as e:
                 print("audio stream recreate failed:", e, flush=True)
+            try:
+                self._hard_reinit_locked()
+                print("audio recovered after portaudio reinit", flush=True)
+            except Exception as e:
+                print("portaudio reinit recovery failed:", e, flush=True)
+
+    def _ensure_default_device(self):
+        """When following the system default, notice that Windows has switched
+        output (headphones pulled, monitor speakers taking over) and move the
+        stream with it.
+
+        Honest limitation: this reads PortAudio's *cached* default, and that
+        cache is only rebuilt by a re-init, so it catches the case where the
+        default flips while the device list is otherwise unchanged and can
+        miss a genuine unplug. The tray's "Reconnect audio device" does the
+        unconditional re-init and remains the guaranteed path."""
+        if self.device_spec is not None:
+            return
+        try:
+            current = sd.query_devices(kind="output")["name"]
+        except Exception:
+            return
+        if current and current != self.device_name:
+            print(f"default output changed: {self.device_name!r} -> "
+                  f"{current!r} -- reopening", flush=True)
+            with self.audio_lock:
+                try:
+                    self.stream.close()
+                except Exception:
+                    pass
+                try:
+                    self._hard_reinit_locked()
+                except Exception as e:
+                    print("reopen on default change failed:", e, flush=True)
+
+    def set_device(self, spec):
+        """Switch output device (spec, or None to follow the Windows default).
+
+        Goes through the full re-init so a device plugged in *since* startup
+        can be selected -- otherwise it would not be in PortAudio's list to
+        resolve against."""
+        with self.lock:
+            self.gen += 1              # stop playback before the swap
+        self._drain(self.audio_q)
+        with self.cv:
+            self.pending.clear()
+            self.play_until = 0.0
+        with self.audio_lock:
+            try:
+                self.stream.close()
+            except Exception:
+                pass
+            self.device_spec = spec or None
+            self._hard_reinit_locked()
+        return self.device_name
+
+    def refresh_devices(self):
+        """Re-enumerate without changing the selection (settings panel opens
+        and the tray's Reconnect action)."""
+        return self.set_device(self.device_spec)
 
     @staticmethod
     def _drain(q):
@@ -441,6 +599,7 @@ class Player:
             self.t_speak = time.perf_counter()
             self.source = text          # original, pre-sanitize: /utterance
             self.source_gen = gen
+        self._ensure_default_device()
         self._reset_audio()
         self._drain(self.audio_q)
         with self.cv:
@@ -664,14 +823,34 @@ def config():
             SENTENCE_PAUSE = float(d["pause"])
         if "first_chunk_audio" in d:
             FIRST_CHUNK_AUDIO = float(d["first_chunk_audio"])
+        if "output_device" in d:
+            # reopens the stream (and re-enumerates), so only touch it when
+            # the value actually changed -- the tray pushes the whole config
+            # on every slider drag
+            want = d["output_device"] or None
+            if want != player.device_spec:
+                player.set_device(want)
     return jsonify(voice=player.engine.voice,
                    model_speed=player.engine.model_speed,
                    playback_speed=PLAYBACK_SPEED,
                    effective_speed=round(player.engine.model_speed * PLAYBACK_SPEED, 2),
                    pause=SENTENCE_PAUSE,
                    first_chunk_audio=FIRST_CHUNK_AUDIO,
+                   output_device=player.device_spec,
+                   output_device_name=player.device_name,
                    measured_density=round(player.density, 4),
                    measured_rt=round(player.rt, 2))
+
+
+@app.route("/devices", methods=["GET", "POST"])
+def devices():
+    """List output devices. POST (or ?refresh=1) re-initializes PortAudio
+    first, which is the only way a device plugged in since startup appears."""
+    if request.method == "POST" or request.args.get("refresh") == "1":
+        player.refresh_devices()
+    return jsonify(devices=list_output_devices(),
+                   current=player.device_spec,
+                   current_name=player.device_name)
 
 
 if __name__ == "__main__":

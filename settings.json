@@ -1,7 +1,7 @@
 {
   "voice": "af_heart",
   "model_speed": 1.15,
-  "playback_speed": 1.8,
+  "playback_speed": 1.737,
   "pause": 0.1,
   "first_chunk_audio": 2.0
 }

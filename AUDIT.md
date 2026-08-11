@@ -1422,6 +1422,52 @@ post-probe → refused). **Live verification still needs the user** — read a
 `.md` file in the VS Code editor (expect `sel>0`, high `painted=`) and a
 Firefox article (expect `sel=0`, no scrolling).
 
+#### Cause 3 — replugging headphones sent audio nowhere (fixed same day)
+
+User: "when I unplugged my headphones and plugged them again it won't put the
+output through them." Same root as the 2026-08-10 stale-handle entry, one
+level deeper. The server opens **one long-lived `sd.OutputStream` at startup**
+and keeps it for the process lifetime, and **PortAudio enumerates devices
+exactly once, at initialization**. So after a replug:
+
+- the stream is still bound to a device *index*, and indices shift whenever a
+  device appears or disappears — index 3 need not still be the headphones;
+- re-opening the stream does not help on its own, because the device list it
+  resolves against is the stale one cached at startup;
+- if the handle does not actually error, nothing triggers the existing
+  recovery path at all, so it fails **silently** — which is what the user saw.
+
+Fixed in three parts:
+
+- **`output_device` setting**, stored as **`"<hostapi>|<name>"`, never an
+  index** (`resolve_device()`), precisely because indices are unstable across
+  a replug. Falls back to the system default if the saved device is gone
+  rather than refusing to speak. `None` = follow the Windows default.
+  The same physical output appears once per host API (MME / DirectSound /
+  WASAPI / WDM-KS — 15 entries for 3 real outputs on this laptop), so the
+  host API is part of the identity, and the tray labels it.
+- **`_reset_audio()` now escalates**: `abort()+start()` → fresh stream →
+  **full `sd._terminate()` / `sd._initialize()`**. The last rung is the only
+  thing that re-reads the device list, and it runs before every utterance's
+  recovery path.
+- **`GET/POST /devices`** lists outputs; POST (or `?refresh=1`) re-initializes
+  PortAudio first, which is the only way a device plugged in *after* the
+  server started becomes visible. Surfaced as the panel's **Rescan** button
+  and a **Reconnect audio device** item in the tray menu, so recovery does not
+  require opening settings.
+
+**Verified live:** switched default → `MME|Speakers`, back to default, then a
+POST rescan (full PortAudio re-init), then a real read — correct
+`audio out:` line at each step, 0 errors, playback intact.
+
+**Also fixed while here (real fragility, found by the panel test):** the tray
+marshalled worker results onto the UI with `root.after()` *from the worker
+thread*. That calls into Tcl from the calling thread and only works while the
+mainloop happens to be spinning — it raised `RuntimeError: main thread is not
+in main loop` the moment it was exercised outside one. Replaced with a
+`queue.Queue` drained by a main-thread poller (`App.ui()` / `_pump_ui`). Every
+HTTP call in the tray runs on a worker, so this was on every result path.
+
 #### Also observed, not yet fixed
 
 - **15 reads on 08-10 logged `anchor=NEVER route=None cand=-1 who=?`** — zero
