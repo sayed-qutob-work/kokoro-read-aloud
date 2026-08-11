@@ -1,12 +1,27 @@
 # virtualenv - rebuilt from requirements.txt (see README)
 env/
 
-# runtime output
+# runtime output. These are written by the running processes and HELD OPEN by
+# them, so tracking them breaks any git command that rewrites the working tree:
+# `git stash` died mid-reset on 2026-08-11 with "unable to unlink old
+# 'server.err'", leaving the tree half-reverted. Keep every log/stderr capture
+# out of the index.
 server.log
+server.err
 highlighter.log
 highlighter.log.*
 highlighter.err
+highlighter.out
+tray.log
+tray.err
+tray.out
 __pycache__/
+
+# Measured on THIS machine (density / synthesis throughput), not a setting.
+# Committing it would seed another machine with numbers that are wrong for it --
+# and wrong in the expensive direction if they are too high (AUDIT 2026-08-11).
+# Delete it locally to force a re-learn.
+calibration.json
 
 # local scratch
 *.bak
