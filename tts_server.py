@@ -10,6 +10,8 @@ Endpoints:
     GET  /config
 """
 
+import json
+import os
 import re
 import time
 import queue
@@ -64,6 +66,69 @@ PREFETCH = 2
 #                       am_onyx am_adam
 # British English  'b'  bf_emma bf_isabella bf_alice bf_lily
 #                       bm_george bm_fable bm_lewis bm_daniel
+
+
+_ROOT = os.path.dirname(os.path.abspath(__file__))
+SETTINGS_FILE = os.path.join(_ROOT, "settings.json")
+CALIB_FILE = os.path.join(_ROOT, "calibration.json")
+
+
+def load_user_settings():
+    """Apply settings.json (written by tray.py) over the constants above.
+
+    /config alone is in-memory, so before this existed every restart silently
+    reverted the user's tuning to whatever a past session hardcoded. The tray
+    panel is the UI for these; this is what makes them stick."""
+    global KOKORO_VOICE, MODEL_SPEED, PLAYBACK_SPEED
+    global SENTENCE_PAUSE, FIRST_CHUNK_AUDIO
+    try:
+        with open(SETTINGS_FILE, encoding="utf-8") as f:
+            d = json.load(f)
+    except FileNotFoundError:
+        return
+    except Exception as e:
+        print("settings.json unreadable, using defaults:", e, flush=True)
+        return
+    try:
+        KOKORO_VOICE = str(d.get("voice", KOKORO_VOICE))
+        MODEL_SPEED = min(1.3, max(0.5, float(d.get("model_speed", MODEL_SPEED))))
+        PLAYBACK_SPEED = max(0.3, float(d.get("playback_speed", PLAYBACK_SPEED)))
+        SENTENCE_PAUSE = max(0.0, float(d.get("pause", SENTENCE_PAUSE)))
+        FIRST_CHUNK_AUDIO = max(0.3, float(d.get("first_chunk_audio",
+                                                 FIRST_CHUNK_AUDIO)))
+        print(f"settings.json: voice={KOKORO_VOICE} "
+              f"speed={MODEL_SPEED}x{PLAYBACK_SPEED} "
+              f"pause={SENTENCE_PAUSE} first={FIRST_CHUNK_AUDIO}", flush=True)
+    except Exception as e:
+        print("settings.json has a bad value, using defaults:", e, flush=True)
+
+
+def load_calibration():
+    """Last session's learned (density, rt), or (None, None).
+
+    These are MEASURED properties of this machine, not preferences, and they
+    take ~10 chunks of EMA to converge. Starting every boot from a hardcoded
+    guess is what made the first read of a session mis-plan: the old default
+    was 4.0x RT, measured on a 6-core desktop, while this laptop does ~1.7x.
+    An rt guessed too HIGH over-fills chunks and starves playback, so a stale
+    value is clamped rather than trusted outright."""
+    try:
+        with open(CALIB_FILE, encoding="utf-8") as f:
+            d = json.load(f)
+        return float(d["density"]), float(d["rt"])
+    except Exception:
+        return None, None
+
+
+def save_calibration(density, rt):
+    try:
+        tmp = CALIB_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"density": round(density, 5), "rt": round(rt, 3),
+                       "saved": time.strftime("%Y-%m-%d %H:%M:%S")}, f)
+        os.replace(tmp, CALIB_FILE)
+    except Exception:
+        pass
 
 
 _CLAUSE = re.compile(r"[,;:]\s")
@@ -309,8 +374,17 @@ class Player:
 
         # --- the two numbers that replace CHUNK_RAMP, both learned live ---
         self.play_until = 0.0                # wallclock when banked audio ends
-        self.density = 0.075                 # sec of audio per character
-        self.rt = 4.0                        # synthesis throughput, x realtime
+        # Both are learned live, but seeded from the last session's measured
+        # values: the EMA needs ~10 chunks to converge, and until it does the
+        # chunk planner is working from a guess. The old hardcoded 4.0 was the
+        # OLD desktop's throughput (6-core, measured 4.03x RT) and is ~2.3x
+        # optimistic on this laptop. Over-estimating rt over-fills chunks and
+        # starves playback, so a missing/absurd value falls back LOW, which
+        # only costs a slightly choppier ramp.
+        dens, rt = load_calibration()
+        self.density = dens if dens else 0.075
+        self.rt = min(rt, 8.0) if rt else 2.0
+        self._calib_n = 0
         self.now = None                      # chunk being played, for /now
         self.source = ""                     # original text of the utterance
         self.source_gen = 0
@@ -405,8 +479,12 @@ class Player:
         sliced here: a chunk boundary inside a clause costs audible prosody,
         an overshoot only costs START/bank time. An underfilled chunk (below
         half target) also takes the next atom whole - a tiny chunk banks so
-        little audio that the following one can't be synthesized in time
-        (the 2.24x constraint, §4 of the audit).
+        little audio that the following one can't be synthesized in time.
+        The audit calls this "the 2.24x constraint", but 2.24 was never a
+        property of this algorithm: it is rt / PLAYBACK_SPEED on the ORIGINAL
+        desktop (4.03 / 1.8). The real constraint is that ratio on whatever
+        machine is running, and it must stay above 1.0 or no packing strategy
+        helps - see the 2026-08-11 entry in AUDIT §8.
         Returns (gen, buf, target, final) - final marks the utterance end."""
         with self.cv:
             while not self.pending:
@@ -452,6 +530,13 @@ class Player:
             w = wlen(buf)
             self.density = 0.7 * self.density + 0.3 * (d / max(w, 1))
             self.rt = 0.7 * self.rt + 0.3 * (d_raw / max(dt, 1e-6))
+            # persist so the NEXT boot starts calibrated. Early chunks are
+            # written too: a session that only ever does short reads would
+            # otherwise never reach the periodic save, and boot from the
+            # conservative seed forever.
+            self._calib_n += 1
+            if self._calib_n <= 3 or self._calib_n % 20 == 0:
+                save_calibration(self.density, self.rt)
             if VERBOSE:
                 print(f"synth {len(buf):3d}ch {w:3d}w -> {d:5.1f}s audio in "
                       f"{dt*1000:6.0f}ms ({d_raw/max(dt,1e-6):5.1f}x RT) "
@@ -590,6 +675,8 @@ def config():
 
 
 if __name__ == "__main__":
+    # before the engine: it reads KOKORO_VOICE and MODEL_SPEED at construction
+    load_user_settings()
     engine = KokoroOnnxEngine() if ENGINE == "onnx" else KokoroEngine()
     # the first synth after model load runs 2-3x slower than steady state
     # (measured: 2.4-3.1x RT vs 4.0x warm). Pay that cost now, not on the

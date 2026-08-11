@@ -3,5 +3,16 @@ kokoro==0.9.4
 flask==3.1.3
 sounddevice==0.5.5
 numpy==2.5.1
-torch==2.13.0
+# torch: install the CUDA build if the machine has an NVIDIA GPU. This is not
+# a nice-to-have -- on the current laptop the CPU build synthesizes at 1.77x
+# realtime while playback consumes 1.8x, i.e. BELOW break-even, and every long
+# read stalls for seconds. The CUDA build measured 25.03x RT for 348MB of VRAM
+# (AUDIT.md, 2026-08-11). Same version either way, so nothing else changes.
+#
+#   env\Scripts\python.exe -m pip install --index-url https://download.pytorch.org/whl/cu126 "torch==2.13.0+cu126"
+#
+# On a machine with no NVIDIA GPU, drop the +cu126 and lower the reading speed
+# from the tray Settings panel until it stops warning about the limit.
+--extra-index-url https://download.pytorch.org/whl/cu126
+torch==2.13.0+cu126
 comtypes==1.4.16   # UI Automation, used by highlighter.py

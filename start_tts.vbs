@@ -51,3 +51,11 @@ End If
 '        at all, so an import or COM-init failure (which happens before any
 '        logging exists) used to leave no trace whatsoever. ---
 sh.Run "cmd /c cd /d C:\kokoro && set ""KOKORO_HL_DEBUG=C:\kokoro\highlighter.log"" && env\Scripts\python.exe highlighter.py > C:\kokoro\highlighter.err 2>&1", 0, False
+
+' --- 4. Tray icon + settings panel (tray.py). Right-click it for Settings,
+'        Stop speaking, restarts and Quit. The settings panel writes
+'        settings.json, which the server now loads at startup -- /config on
+'        its own is in-memory, so tuning used to vanish on every restart.
+'        Killing the tray affects nothing else; it is a control surface, not
+'        a dependency. Same hidden-cmd + stderr-capture pattern as above. ---
+sh.Run "cmd /c cd /d C:\kokoro && env\Scripts\python.exe tray.py > C:\kokoro\tray.err 2>&1", 0, False

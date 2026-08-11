@@ -17,7 +17,12 @@ audio-budgeted first chunk + speech-weighted chars + boot warmup; boundary stall
 killed via silence trimming + CUT_PAUSE; markdown/TUI sanitizing; terminal reading via
 clipboard path (window-aware Ctrl+Alt+R, new Ctrl+Alt+T); VS Code `copyOnSelection`
 enabled.
-**Machine:** Windows 11, Intel i5-12400F (6 P-cores), RTX 4060 Ti 8GB, 16GB DDR4.
+**Machine (ORIGINAL, through 2026-08-08):** Windows 11, Intel i5-12400F
+(6 P-cores), RTX 4060 Ti 8GB, 16GB DDR4.
+**Machine (CURRENT, since ~2026-08-09):** Windows 11, Intel **i7-11370H
+(4 cores / 8 threads)**, **GTX 1650 4GB** + Intel Iris Xe, 16GB.
+**Every number in §4 was fitted on the ORIGINAL machine and most of them do
+not transfer** — see the 2026-08-11 entry in §8 before trusting any of them.
 **Root:** `C:\kokoro\`
 
 ---
@@ -129,6 +134,18 @@ Changes via `/config` are in-memory only — write them into the file to persist
 
 All fitted from this machine's own logs. **Every estimate made without measuring during
 this session was wrong, and always optimistic.** Trust only these.
+
+> ⚠️ **SCOPE, added 2026-08-11: this table is a property of the ORIGINAL
+> desktop, not of the project.** The laptop this now runs on synthesizes at
+> **~1.7x realtime, not 4.03x**, and that single difference invalidates the
+> throughput row, the gap-constraint row, the synthesis-cost fit, the START
+> figures and the thread count. The rule "measure, don't estimate" was always
+> the point; what this section got wrong was implying the *results* were
+> portable. **Numbers below marked (ORIGINAL) have been superseded — the
+> current machine's values are in the 2026-08-11 §8 entry.** Anything
+> describing Kokoro's *behaviour* rather than this hardware's *speed*
+> (silence padding, markdown inertness, cut lengthening, per-word timestamps)
+> is model-level and does still transfer.
 
 | Fact | Value | Evidence |
 |---|---|---|
@@ -269,7 +286,15 @@ ramp gapped *every* time.
 | **Trimming AHK `Sleep`/`KeyWait`** | Pointless | AHK contributes ~0 to START. Measured. |
 | **In-place highlighting in a terminal, via the terminal's OWN TextPattern** | **Impossible — proven 2026-07-18, still true** | xterm.js (VS Code's integrated terminal) paints text to a canvas and exposes it to accessibility through a hidden off-screen DOM mirror. Probed live: terminal text reports rects at `x=-11571` and `x=-14907`, height `58557`, for a window occupying `x=-1928..8`. UIA gives the text but no usable geometry and nothing bridges the two. Reading terminal text still works (that is `copyOnSelection`, unrelated). **Narrowed 2026-07-21** — the *ancestor* path is a different story, see §8. |
 
-### GPU — the one open option, **untested**
+### GPU — **TESTED AND ADOPTED 2026-08-11 on the current laptop.** See the
+### 2026-08-11 entry in §8 for the measurements. Result: **25.03x RT** (from
+### 1.77x on this laptop's CPU), **348MB VRAM** — not the 1–2GB estimated
+### below. The rest of this section is the ORIGINAL desktop's reasoning and
+### is kept because that verdict was correct *for that machine*; both of its
+### quantitative claims (VRAM cost, and the CPU-bound 104ms floor, actually
+### 35ms on GPU) turned out to be over-estimates.
+
+### GPU on the ORIGINAL desktop — the one open option, **untested there**
 
 Kokoro auto-detects CUDA. Installing a CUDA torch (`--index-url .../cu124`, ~2.5GB)
 into the venv would **silently** enable it.
@@ -1254,6 +1279,157 @@ against.
 **If "hotkey does nothing, no sound" recurs:** check `server.log` first for
 `audio reset failed` / `playback error: Stream is stopped` before assuming
 the hotkey or server process itself is the problem — both were fine here.
+
+---
+
+### DIAGNOSED & PARTLY FIXED 2026-08-11: the machine changed, and the audio pipeline has been running below break-even ever since
+
+User report: "the tool is getting worse not better since I changed to this
+laptop — reading .md docs it keeps jumping and scrolling from one section to
+another, the highlighting is glitching, the rhythm/speed is getting worse,
+and sometimes it stops for 1–1.5 seconds for no reason." Three symptoms, two
+independent causes, both measured.
+
+#### Cause 1 — synthesis is slower than playback. The stalls are arithmetic, not a bug.
+
+| | ORIGINAL desktop | THIS laptop |
+|---|---|---|
+| CPU | i5-12400F, 6 P-cores | i7-11370H, **4 cores** |
+| `torch.get_num_threads()` | 6 | **4** |
+| torch build | CPU | **CPU** (`2.13.0+cpu`) on a box with an unused GTX 1650 |
+| Synthesis throughput | **4.03x** RT | **1.44–1.77x** RT (`/config measured_rt`, live) |
+| `PLAYBACK_SPEED` | 1.8 | 1.8 |
+| Headroom (`rt ÷ playback`) | **2.24x** | **0.98x** |
+
+The pipeline is a race: playback drains `PLAYBACK_SPEED` seconds of audio per
+wallclock second, synthesis produces `rt`. **Sustaining a read requires
+`rt > PLAYBACK_SPEED`.** At 1.77 vs 1.8 this machine produces less than it
+consumes, so every read falls progressively behind until the buffer empties —
+and no chunking strategy can fix a deficit, only postpone it. Evidence in
+`server.log` at the time of the report: **24 `GAP` lines**, including 5655ms,
+2545ms, 1882ms, 1060ms, 1027ms; `START first sound 2884ms`.
+
+It also self-amplifies. Starvation drives `_target_chars()` to its
+`MIN_CHUNK_CHARS` floor (`want 25w` repeatedly in the log), and small chunks
+synthesize *worse* than large ones because the ~104ms fixed cost stops being
+amortized — measured the same evening: **12ch → 1.3x RT, 187ch → 1.8x RT.**
+So the response to falling behind made it fall behind faster.
+
+**§4's "2.24x gap constraint" was never a law of the chunking design — it was
+this ratio on the old machine** (4.03 ÷ 1.8 = 2.24). It was recorded as a
+property of the algorithm and inherited as one. On this machine the
+equivalent number is 0.98, and the code comment in `_take()` still cites 2.24.
+
+**`Player.__init__` also hardcoded `self.rt = 4.0`** — the old desktop's
+throughput as the opening assumption of every boot, ~2.3x optimistic here,
+which is why the first read after each restart mis-planned worst.
+
+Fixes deployed:
+
+- **Stopgap, applied live:** `playback_speed` 1.8 → 1.4 (effective 2.07x →
+  1.61x). No restart, no file edit — `/config` only.
+- **`settings.json`** — the server now loads it at startup (`load_user_settings()`,
+  called before the engine is built since the engine reads voice/model_speed at
+  construction). `/config` was in-memory only, so **every restart silently
+  reverted the user's tuning**; that is why hand-tuning never stuck.
+- **`calibration.json`** — `density` and `rt` are persisted every 20 chunks and
+  reloaded at boot, so a session starts calibrated instead of guessing. Absent
+  or absurd values fall back **low** (2.0, clamped ≤8.0): over-estimating `rt`
+  over-fills chunks and starves playback, under-estimating only costs a
+  slightly choppier ramp. Wrong-direction asymmetry, chosen deliberately.
+- **`tray.py`** — user-requested tray icon (right-click: Settings, Stop
+  speaking, restarts, folder, Quit) with a settings panel over `/config`.
+  It shows the machine's measured throughput and the resulting **sustainable
+  speed ceiling**, and warns when the chosen speed crosses it. The point is
+  not a preferences dialog: the correct reading speed is now a per-machine
+  physical limit, so the UI has to show the limit, not just the knob.
+
+#### RESOLVED same day — GPU, measured. §6's "untested" row is now tested.
+
+`torch 2.13.0+cu126` installed into the venv (same version, so no API drift
+for `kokoro`). The GPU was idle at 0/4096MiB. **Measured, not estimated:**
+
+| Fact | ORIGINAL desktop (CPU) | This laptop, CPU | This laptop, **GTX 1650** |
+|---|---|---|---|
+| Throughput | 4.03x RT | 1.44–1.77x RT | **25.03x RT** |
+| Synthesis cost fit | `104 + 247.8 × audio_s` | — | **`35 + 37.0 × audio_s`** |
+| Headroom vs `PLAYBACK_SPEED` 1.8 | 2.24x | **0.98x** | **13.9x** |
+
+- `sm_75` (the 1650's compute capability) **is** in this build's arch list
+  (`sm_50…sm_90`) — worth checking on any future card, since PyTorch drops
+  old architectures over time.
+- **VRAM: 333MB allocated, 348MB reserved.** §6 estimated "~1–2GB held
+  permanently" and declined partly on that basis. The estimate was ~4x too
+  pessimistic — Kokoro is an 82M-parameter model. On a 4GB laptop card this
+  is a non-issue, which is the opposite of the conclusion the estimate
+  supported. Another entry for §4's "every unmeasured estimate was wrong".
+- Model load ~29s cold (HF cache check) then fast; warmup synth 1408ms.
+
+**Live verification, real reads through the full pipeline:**
+
+- `PLAYBACK_SPEED` restored to **1.8** (effective 2.07x — the user's original).
+- **0 GAP lines** (was 24, including a 5655ms stall).
+- **START 385ms**, then 292–369ms on later reads (was **2884ms**).
+- Per-chunk throughput 9.0 → 17.6 → 24.4 → 25.1 → 24.1x RT.
+- Chunks now request `want 240w` — the `CHUNK_CHARS` **ceiling** — where
+  before they sat pinned at the `MIN_CHUNK_CHARS` floor of 25. Fewer chunk
+  boundaries is also fewer prosody cuts, so this should sound better, not
+  merely smoother.
+
+**§6's GPU row is superseded for this machine.** Its reasoning still holds
+for the original desktop (2.24x headroom, an 8GB card shared with games and
+local LLMs). Here the CPU was *below break-even* and the GPU is otherwise
+idle — the "new information" §9 requires before reopening a settled call.
+The 104ms→35ms fixed cost also shows the old "phonemization is CPU-bound and
+GPU can't touch it" floor was itself an over-estimate.
+
+#### Cause 2 — the `Select()` gate was wrong in both directions. This is the scrolling.
+
+The 2026-07-25 P1 fix gated the `Select()` geometry fallback on
+`route == HOW_FOCUS`. `SUMMARY` lines since show that test is not the one
+anyone wanted:
+
+- **Too loose.** `route=focus` only means "the focused element happened to
+  expose a TextPattern", which is routine in **Firefox**. Real read, 08-11:
+  `painted=5/14 route=focus sel=4 who=firefox.exe` — four `Select()` calls
+  into a live page, each moving the app's **real selection and scrolling it**.
+  That is the user's "jumping from one section to another", and it is the
+  exact harm the `can_select` docstring already predicted, waved through by
+  the test written to prevent it. Cursor runaway (`rewinds=3`, and up to 11 on
+  other reads) means some of those scrolls land on the *wrong* section.
+- **Too tight.** The VS Code **editor** is frequently reached via `ancestor`,
+  not `focus`. Those reads (08-10) logged `painted=0/13`, `0/12`, `0/6`, `0/4`
+  with tokens **located but never painted** — the gate blocked the one case
+  `Select()` exists for. §8's 2026-07-25 entry called this outstanding
+  verification item exactly right: *"If that read is dark, the gate is too
+  tight and that is the first thing to look at."*
+
+Now gated on the **owning application** (`SELECT_APPS`, VS Code family) and
+never from a window-level route. Naming the app is not per-app tuning drift:
+`Select()` *is* an app-specific workaround, so the honest gate names the app
+it was written for. Two supporting details:
+
+- `Anchor.app` is resolved via `_app_of()`, a **separate one-property call**,
+  not `_ident()` — `_ident()` is DEBUG-only, so gating behaviour on it would
+  have made the highlighter behave differently with logging off.
+- **One probe per anchor.** If a `Select()` yields no geometry, `select_dead`
+  disables it for that read. Worst case is now a single scroll instead of one
+  per token, and it is self-calibrating rather than a guess about the surface.
+
+Verified: 12/12 truth-table cases (VS Code via focus/ancestor/focus-sub →
+allowed; Firefox via any route, window routes, Notepad, unresolved app,
+post-probe → refused). **Live verification still needs the user** — read a
+`.md` file in the VS Code editor (expect `sel>0`, high `painted=`) and a
+Firefox article (expect `sel=0`, no scrolling).
+
+#### Also observed, not yet fixed
+
+- **15 reads on 08-10 logged `anchor=NEVER route=None cand=-1 who=?`** — zero
+  candidates offered at all (F8). Distinct from anchoring to the wrong
+  document; undiagnosed.
+- **Startup fetch storm:** 131 `FETCH fail` in 36.8s while the highlighter
+  waited for a server that was still booting (F9). Harmless, noisy, cheap to
+  fix with a backoff.
 
 ---
 

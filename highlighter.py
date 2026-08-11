@@ -412,6 +412,19 @@ def _ident(el):
             f"[{prop('CurrentClassName')}]")
 
 
+def _app_of(el):
+    """Image name of the element's owning process, lowercased.
+
+    Deliberately NOT _ident(): that one is DEBUG-only (several cross-process
+    property reads per candidate per attempt), so anything gating real behavior
+    on it would silently change behavior when logging is off. This reads one
+    property, and only for the candidate that actually won the anchor."""
+    try:
+        return _proc_name(el.CurrentProcessId).lower()
+    except Exception:
+        return ""
+
+
 def _tp_of(el):
     try:
         if not el:
@@ -444,6 +457,17 @@ HOW_FOCUS_SUB = "focus-sub"  # first TextPattern under the focused element
 HOW_WINDOW = "window"        # the foreground window element itself
 HOW_WINDOW_DOC = "window-doc"    # a Document under it (one per browser tab)
 HOW_WINDOW_SUB = "window-sub"    # last resort: any TextPattern under it
+
+# Where the Select() geometry fallback may run. Naming the app is not per-app
+# tuning for its own sake -- Select() *is* an app-specific workaround (the VS
+# Code editor materializes geometry only near its accessibility page), so the
+# honest gate names the app it was written for. Measured across every surviving
+# log generation: Select() has produced geometry only inside VS Code, and never
+# once in a browser (0/10 on 2026-07-25, 0/4 on 2026-08-11).
+SELECT_APPS = {"code.exe", "code - insiders.exe", "vscodium.exe"}
+# ...and never from a window-level route: that is the terminal/chrome document
+# (AUDIT §6), where the call moves whatever really holds the selection.
+SELECT_ROUTES = (HOW_FOCUS, HOW_ANCESTOR, HOW_FOCUS_SUB)
 
 
 def candidate_patterns():
@@ -654,6 +678,12 @@ class Anchor:
         self.last_error = ""
         self.route = None           # HOW_* provenance of the winning candidate
         self.who = ""               # ...and who it belonged to, for SUMMARY
+        self.app = ""               # ...and its image name, which unlike `who`
+                                    # is resolved even with DEBUG off, because
+                                    # can_select branches on it
+        self.select_dead = False    # a Select() probe produced no geometry, so
+                                    # this surface does not respond to it --
+                                    # stop paying the scroll for nothing
         self.cand = -1
         heads = head_candidates(utt_text)
         for i, (tp, el, route, rid) in enumerate(candidate_patterns()):
@@ -698,6 +728,7 @@ class Anchor:
                 self.misses = 0
                 self.ok = True
                 self.route, self.who, self.cand = route, who, i
+                self.app = _app_of(el)
                 dlog(f"ANCHOR ok via={how} route={route} cand={i}")
                 return
         dlog(f"ANCHOR FAILED heads={heads}")
@@ -723,8 +754,34 @@ class Anchor:
         connected to server'), then 9 failed re-anchors and a dark tail.
         Gate on the ROUTE, never on cand[0]: the focused element is offered
         first only when it has a TextPattern, so cand[0] is often already an
-        ancestor or a window document -- exactly the dangerous case."""
-        return self.route == HOW_FOCUS
+        ancestor or a window document -- exactly the dangerous case.
+
+        CORRECTED 2026-08-11 -- the route gate above was wrong in BOTH
+        directions, and the SUMMARY lines say so:
+
+        - Too loose. `route == focus` only means "the focused element happened
+          to expose a TextPattern", which is routinely true in Firefox. Real
+          reads: `route=focus sel=4 who=firefox.exe`, i.e. four Select() calls
+          into a live page, each moving the real selection and scrolling it.
+          That is the user-reported "it keeps jumping from one section to
+          another" -- the exact harm this docstring already predicted, let
+          through by the test meant to prevent it.
+        - Too tight. The VS Code *editor* is frequently reached by `ancestor`,
+          not `focus`. Those reads (08-10) logged painted=0/13, 0/12, 0/6,
+          0/4 with tokens located but never painted: the gate blocked the one
+          case Select() exists for. AUDIT §8 predicted this too ("if that read
+          is dark, the gate is too tight").
+
+        So gate on the APP, which is what the workaround was ever about, and
+        exclude window-level routes. Then require Select() to prove itself:
+        one probe per anchor, and if it yields no geometry the surface does
+        not respond to it and we stop -- bounding the worst case to a single
+        scroll instead of one per token."""
+        if self.select_dead:
+            return False
+        if self.route not in SELECT_ROUTES:
+            return False
+        return self.app in SELECT_APPS
 
     def _degenerate(self, r):
         """Have this range's endpoints collapsed onto each other?
@@ -1164,6 +1221,15 @@ def main(marker):
                         anchor.resync(rng)      # the selection moved; derive
                         if rr:                  # the cursor from orig, not
                             anchor.confirm()    # from the disturbed remainder
+                        else:
+                            # The probe bought nothing. This surface does not
+                            # materialize geometry on selection, so every
+                            # further Select() would be a pure scroll of the
+                            # user's document -- one per anchor is the cap.
+                            anchor.select_dead = True
+                            dlog(f"SELECT dead app={anchor.app!r} "
+                                 f"route={anchor.route}: probe produced no "
+                                 f"geometry, fallback off for this read")
                     except Exception:
                         pass
                 marker.draw(rr)

@@ -9,12 +9,22 @@ Speechify-style in-place word highlighting.
 **`AUDIT.md` is the source of truth.** Read it before proposing or changing
 anything. In particular:
 
-- **§4 Measured facts** — every number there was measured on this machine.
-  Do not re-guess them. Every unmeasured estimate made in past sessions was
-  wrong, always optimistically.
+- **§4 Measured facts** — measured numbers, but **measured on the ORIGINAL
+  desktop (i5-12400F), which is no longer the machine.** The hardware changed
+  ~2026-08-09 to an i7-11370H laptop + GTX 1650, and the throughput,
+  synthesis-cost, START and thread-count rows do NOT transfer — see the
+  2026-08-11 entry in §8 for the current values. Rows about *Kokoro's
+  behaviour* (silence padding, markdown inertness, cut lengthening, per-word
+  timestamps) are model-level and still hold. Every unmeasured estimate made
+  in past sessions was wrong, always optimistically.
 - **§6 Rejected options** — do not re-propose Piper, kokoro-onnx,
   MODEL_SPEED > 1.3, torch thread tuning, or in-place terminal highlighting
-  (proven impossible).
+  (proven impossible). **GPU is no longer on that list** — it was adopted
+  2026-08-11 and measured at 25.03x RT vs 1.77x on this laptop's CPU.
+- **Speed is bounded by hardware, not taste.** Playback drains
+  `PLAYBACK_SPEED` audio-seconds per second; synthesis produces `rt`
+  (`GET /config → measured_rt`). Reads stall unless `rt > PLAYBACK_SPEED`.
+  If the user reports stalling, check that ratio before anything else.
 - **Measure, don't estimate.** If a claim isn't in §4, instrument and measure
   it before acting on it.
 
@@ -25,12 +35,15 @@ for the highlighting system.
 
 | Path | What |
 |---|---|
-| `tts_server.py` | Flask server on 127.0.0.1:5111; model resident; all tuning in its config block |
+| `tts_server.py` | Flask server on 127.0.0.1:5111; model resident; config block holds the DEFAULTS, `settings.json` overrides them at boot |
 | `read_aloud.ahk` | Hotkeys (AutoHotkey **v2**); window-aware clipboard/copy logic |
 | `highlighter.py` | In-place word highlighter (UIA TextPattern + layered window) |
+| `tray.py` | Tray icon + settings panel over `/config` (right-click: Settings, Stop, restarts, Quit) |
+| `settings.json` | User's tuned voice/speed/pause. **Written by the tray, loaded by the server at startup** |
+| `calibration.json` | Measured `density`/`rt` for THIS machine, so a boot starts calibrated. Delete it to re-learn |
 | `extension/` | Chromium in-page highlighter (load unpacked); Firefox works via UIA instead |
 | `overlay.py` | Retired caption strip (kept, not autostarted) |
-| `start_tts.vbs` | Autostart: server + AHK + highlighter, hidden; server output → `server.log` |
+| `start_tts.vbs` | Autostart: server + AHK + highlighter + tray, hidden; server output → `server.log` |
 | `server.log` | **Read this first on any failure.** Truncated at each server start |
 | `highlighter.log` | Highlighter diagnostics (on by default). Rotated to `.log.1` at each start |
 | `highlighter.err` | Highlighter stderr; an import/COM-init crash lands here. Empty = healthy |
