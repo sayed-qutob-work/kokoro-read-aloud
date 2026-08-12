@@ -592,6 +592,15 @@ def window_candidates(hwnd):
 
 
 FIND_RETRIES = 4        # mid-word hits to skip past before giving up on a token
+LOOKAHEAD = 400         # chars past the cursor a token may still be claimed at,
+                        # in offset mode. FindText has no such bound and that is
+                        # how a cursor ends up in another section: one token that
+                        # is not where the voice is matches 3000 chars away and
+                        # the cursor never comes back (AUDIT §8 "Bug A"). Tokens
+                        # arrive in reading order over the SAME text the anchor
+                        # spans, so the honest gap is a few chars -- wide enough
+                        # here to cross a stripped heading, list marker or table
+                        # row, narrow enough that a far-away homograph loses.
 MISS_RESET = 8          # consecutive misses before rewinding the search cursor
 DEAD_ERRORS = 3         # consecutive COM failures before the anchor is junk
 REWIND_CAP = 6          # rewinds per read before the cursor is declared stuck.
@@ -651,6 +660,134 @@ def _word_bounded(r, token):
     return not (before.isalnum() or after.isalnum())
 
 
+MODE_FIND = "findtext"      # locate tokens with UIA FindText
+MODE_OFFSET = "offset"      # ...or by character offset into the range's own text
+MODE_PROOF = 3              # painted tokens that count as "this mechanism
+                            # works here"; below it, a rewind re-measures once
+
+
+def _holds(r, token):
+    """Does this range actually contain `token`?
+
+    MEASURED 2026-08-12, and it is why .md reads were wrong: on Chromium-
+    based providers UIA FindText returns a range of the right LENGTH at the
+    WRONG POSITION. Sampling 20 words taken from the provider's own GetText
+    and asking FindText to find each one again:
+
+        Obsidian  cm-content (the element .md reads anchor to)   1/20
+        Obsidian  window document                                0/20
+        VS Code   window / preview documents                   0-1/20
+        Firefox   page documents (4 of them)                20/20 each
+
+    So the hit is not merely the wrong occurrence of the word -- the range
+    does not contain the word at all. Every caller downstream trusted it:
+    rects were real, so the marker painted a real but arbitrary word and the
+    cursor advanced to a position unrelated to the text being read. That is
+    the "highlighting glitches / jumps around" report, and it also explains
+    why `painted=` looked like 40-60% on reads that were visibly wrong --
+    the log only ever recorded that a rect was drawn, never that it was
+    drawn on the right word (plan.md §1 flagged exactly this caveat).
+
+    One extra GetText per hit is the price of never painting a wrong word."""
+    if not token:
+        return True
+    try:
+        got = (r.GetText(len(token) + 4) or "")[:len(token)]
+    except Exception:
+        return False        # a range that cannot be read cannot be trusted
+    return got.lower() == token.lower()
+
+
+def _range_at(base, off, length):
+    """The sub-range [off, off+length) of `base`, by character movement.
+
+    The alternative to FindText, and on the providers where FindText lies
+    this is exact: character offsets agree with GetText offsets there
+    (measured 20/20 on Obsidian's editor, whole range and sub-range alike).
+    The reverse holds on Firefox -- character movement disagrees with
+    GetText there while FindText is perfect -- so neither primitive is
+    portable and the mode is chosen per anchor by trying it (Anchor._find)."""
+    try:
+        r = base.Clone()
+        if r.MoveEndpointByUnit(UIA.TextPatternRangeEndpoint_Start,
+                                UIA.TextUnit_Character, off) != off:
+            return None
+        r.MoveEndpointByRange(UIA.TextPatternRangeEndpoint_End, r,
+                              UIA.TextPatternRangeEndpoint_Start)
+        if r.MoveEndpointByUnit(UIA.TextPatternRangeEndpoint_End,
+                                UIA.TextUnit_Character, length) != length:
+            return None
+        return r
+    except Exception:
+        return None
+
+
+def _verified_range(base, off, token, drift=0):
+    """Build `token`'s range at text offset `off`, tolerating the small
+    drift between Python string offsets and UIA character units.
+
+    Markdown editors are full of zero-width characters and embedded objects,
+    and those are where the two offset spaces disagree. Measured over a whole
+    Obsidian document: 303 words exact, 27 off by **+2**, nothing else inside
+    +-2. So try the drift that worked last, then a tight window. Every
+    candidate still has to pass _holds(), so a correction can only add hits,
+    never a wrong one -- and the window stays tight on purpose, because a
+    wide one just finds the same word somewhere else entirely.
+
+    Returns (range or None, drift to remember)."""
+    tried = set()
+    for d in (drift, 0, 2, -2, 1, -1):
+        if d in tried or off + d < 0:
+            continue
+        tried.add(d)
+        r = _range_at(base, off + d, len(token))
+        if r is not None and _holds(r, token):
+            return r, d
+    return None, drift
+
+
+def _head_range(doc, head):
+    """Locate the utterance head by offset, for providers whose FindText
+    cannot be trusted to say where it found something.
+
+    Anchoring used a bare FindText, so on Chromium the anchor itself could
+    be established at the wrong place -- and then every token afterwards is
+    measured from a wrong base. Observed live 2026-08-12 on a head-anchored
+    Obsidian read: both primitives scored 1/5 on the resulting range."""
+    try:
+        text = doc.GetText(-1) or ""
+    except Exception:
+        return None
+    off = text.lower().find(head.lower())
+    if off < 0:
+        return None
+    return _verified_range(doc, off, head)[0]
+
+
+def _search_word(text, token, lo, hi):
+    """Offset of `token` in text[lo:hi] as a whole word, or -1.
+
+    Same boundary rule as _word_bounded -- non-alphanumeric neighbours --
+    so it keeps the markdown tolerance the anchor depends on: the spoken
+    token is `bold` and the document holds `**bold**`, `2.10` sits after a
+    stripped `##`, `claims.md` inside backticks. Done in Python on text we
+    already have, which makes the boundary check exact instead of four
+    round-trips per token."""
+    if not token:
+        return -1
+    hay, needle = text.lower(), token.lower()
+    i = lo
+    while True:
+        j = hay.find(needle, i, hi)
+        if j < 0:
+            return -1
+        before = text[j - 1] if j > 0 else ""
+        after = text[j + len(token)] if j + len(token) < len(text) else ""
+        if not (before.isalnum() or after.isalnum()):
+            return j
+        i = j + 1
+
+
 class Anchor:
     """The utterance's text range in the source document, plus a cursor:
     tokens are located with FindText inside the not-yet-spoken remainder,
@@ -669,6 +806,7 @@ class Anchor:
         self.last_good = None       # cursor after the last hit that PAINTED
         self.pending_good = None    # ...promoted to last_good once it does
         self.painted = False        # has this anchor ever produced rects?
+        self.paints = 0             # ...how many times, for MODE_PROOF
         self.misses = 0             # consecutive locate() failures
         self.rewinds = 0            # cumulative, for SUMMARY
         self.chunk_rewinds = 0      # ...the cap is per CHUNK, see new_chunk()
@@ -685,6 +823,16 @@ class Anchor:
                                     # this surface does not respond to it --
                                     # stop paying the scroll for nothing
         self.cand = -1
+        self.mode = None            # MODE_FIND / MODE_OFFSET, measured once on
+                                    # first use by _pick_mode() -- neither
+                                    # primitive works everywhere, see _holds()
+        self.base = None            # range offsets in `text` are measured from
+        self.text = None            # ...its text, cached (refetched on failure)
+        self.pos = 0                # offset-mode cursor: index into self.text
+        self.drift = 0              # ...UIA character units minus Python ones
+        self.pos_good = 0           # ...its confirm()ed rewind target
+        self.pending_pos = 0        # ...promoted to pos_good by confirm()
+        self.remode_tried = False   # the one re-measurement _rewind() allows
         heads = head_candidates(utt_text)
         for i, (tp, el, route, rid) in enumerate(candidate_patterns()):
             rng, how = None, None
@@ -709,12 +857,18 @@ class Anchor:
                     # `not found`, not `found is None`: a fruitless FindText
                     # can hand back a NULL COM pointer, which is not None but
                     # raises on every use (seen live 2026-07-21)
+                    via = "findtext"
+                    if found and not _holds(found, h):
+                        found = None    # right length, wrong place: the whole
+                        via = "offset"  # read would be measured from there
+                    if not found:
+                        found = _head_range(doc, h)
                     if found:
                         # only the head matched; the utterance continues
                         found.MoveEndpointByRange(
                             UIA.TextPatternRangeEndpoint_End, doc,
                             UIA.TextPatternRangeEndpoint_End)
-                        rng, how = found, f"findtext[{h[:24]!r}]"
+                        rng, how = found, f"{via}[{h[:24]!r}]"
                         break
                 except Exception:
                     pass
@@ -725,6 +879,7 @@ class Anchor:
                 self.remaining = rng
                 self.orig = rng.Clone()
                 self.last_good = rng.Clone()    # rewind target, see locate()
+                self.base = rng.Clone()         # offset mode measures from here
                 self.misses = 0
                 self.ok = True
                 self.route, self.who, self.cand = route, who, i
@@ -818,6 +973,61 @@ class Anchor:
                  f"chunk ({why}) -- not tracking the spoken text; will retry "
                  f"at the next chunk")
             return False
+        if self.paints < MODE_PROOF and not self.remode_tried:
+            # Next to nothing has painted with the primitive picked for this
+            # anchor. The pick is a measurement taken on a document that can
+            # be mid-render, so before rewinding a cursor that may simply be
+            # built on the wrong mechanism, measure once more. Bounded to a
+            # single retry per anchor -- if the second look agrees, the ladder
+            # below runs as usual on the next miss.
+            #
+            # MODE_PROOF, not "has it ever painted": one lucky rect is not
+            # evidence a mechanism works (measured -- a VS Code read located
+            # 1 token of 80 and that single paint was enough to suppress the
+            # retry). A mode that is genuinely working clears this in the
+            # first second of a read.
+            self.remode_tried = True
+            self.text = None
+            try:
+                m = self._pick_mode()
+            except Exception:
+                m = self.mode
+            if m != self.mode:
+                dlog(f"MODE switch {self.mode} -> {m} ({why}, nothing painted "
+                     f"yet)")
+                self.mode = m
+            # pos_good belongs to the cursor the old mode was keeping; it
+            # means nothing in the new one, and a stale value ahead of the
+            # cursor would only ever be a rewind FORWARD.
+            self.pos, self.drift, self.pos_good = 0, 0, 0
+            try:
+                if self.orig is not None:
+                    self.remaining = self.orig.Clone()
+            except Exception:
+                pass
+            self.misses = 0
+            return True
+        if self.mode == MODE_OFFSET:
+            # Same ladder, integers instead of ranges: back to the last
+            # position that painted, then to the anchor's start. Also drop
+            # the text snapshot -- in a virtualized editor (CodeMirror,
+            # Monaco) a run of misses is often the exposed text having moved
+            # under us, and a stale snapshot cannot be searched out of.
+            self.text = None
+            if self.rewind_stage == 0 and self.pos_good < self.pos:
+                self.pos, name = self.pos_good, "pos_good"
+                self.rewind_stage = 1
+            elif self.rewind_stage <= 1 and self.pos > 0:
+                self.pos, name = 0, "anchor start"
+                self.rewind_stage = 2
+            else:
+                self.stuck = True
+                dlog(f"CURSOR unrecoverable ({why}) -- offset cursor already "
+                     f"at the anchor start")
+                return False
+            self.misses = 0
+            dlog(f"CURSOR rewind #{self.rewinds} to {name} ({why})")
+            return True
         tgt, name = None, ""
         if self.rewind_stage == 0 and not self._degenerate(self.last_good):
             tgt, name = self.last_good, "last_good"
@@ -865,7 +1075,9 @@ class Anchor:
         cursor into an app's chrome -- enshrining it as the rewind target is
         what made recovery impossible."""
         self.painted = True
+        self.paints += 1
         self.rewind_stage = 0
+        self.pos_good = self.pending_pos
         if self.pending_good is not None:
             self.last_good = self.pending_good
             self.pending_good = None
@@ -881,6 +1093,28 @@ class Anchor:
         REPLACES `pending_good` rather than leaving it: if the two ever
         disagree, the stale pre-Select() cursor must not be the one that
         confirm() promotes a couple of lines later."""
+        if self.mode == MODE_OFFSET:
+            # Select() moves VS Code's accessibility page, and the page IS
+            # what the text snapshot was taken from -- so the snapshot and
+            # every offset measured against it can shift underneath us.
+            # Refetch, then re-find the word just selected near where the
+            # cursor already was, so the integer cursor survives the move.
+            try:
+                tok = (r.GetText(64) or "").strip()
+            except Exception:
+                tok = ""
+            was = self.pos
+            self.text = None
+            text = self._base_text()
+            if tok and text:
+                lo = max(0, was - LOOKAHEAD)
+                off = _search_word(text, tok, lo,
+                                   min(len(text), was + LOOKAHEAD))
+                if off >= 0:
+                    self.pos = self.pending_pos = off + len(tok)
+                    return
+            self.pos = self.pending_pos = min(was, len(text))
+            return
         if self.orig is None:
             return
         try:
@@ -903,7 +1137,7 @@ class Anchor:
         only re-anchoring can."""
         return self.errors >= DEAD_ERRORS
 
-    def _find(self, token):
+    def _find_text(self, token):
         """FindText within the remainder, skipping hits that land inside a
         longer word. Bounded: a token that only ever matches mid-word is
         given up on for this poll rather than scanned to the end."""
@@ -914,17 +1148,123 @@ class Anchor:
                 self.errors = 0     # the range answered: it is alive
                 if not r:           # None *or* a NULL COM pointer
                     return None
+                if not _holds(r, token):
+                    # The provider handed back a range that does not contain
+                    # what was searched for. Treat it as a miss: painting it
+                    # marks the wrong word and advancing past it scatters the
+                    # cursor, which is precisely the damage this fix exists to
+                    # stop. _pick_mode() keeps whole surfaces off this path;
+                    # this guard catches the individual hit.
+                    return None
                 if _word_bounded(r, token):
                     return r
-                nxt = scan.Clone()      # resume past the bogus hit
+                nxt = scan.Clone()      # resume past the bogus hit -- this one
                 nxt.MoveEndpointByRange(UIA.TextPatternRangeEndpoint_Start,
                                         r, UIA.TextPatternRangeEndpoint_End)
-                scan = nxt
+                scan = nxt              # is real, just inside a longer word
             except Exception as e:
                 self.errors += 1
                 self.last_error = f"{type(e).__name__}: {e}"
                 return None
         return None
+
+    def _base_text(self):
+        if self.text is None and self.base is not None:
+            try:
+                self.text = self.base.GetText(-1) or ""
+            except Exception as e:
+                # Leave the snapshot UNSET, not empty: caching "" would make
+                # every later token miss without ever retrying, and it would
+                # also stop `errors` accumulating -- which is what promotes a
+                # dead element to `broken` and triggers the mid-read
+                # re-anchor. A genuinely dead range now reaches DEAD_ERRORS.
+                self.errors += 1
+                self.last_error = f"{type(e).__name__}: {e}"
+                return ""
+        return self.text or ""
+
+    def _find_offset(self, token):
+        """Locate the token by searching the anchor's own text, then build
+        the range by character movement.
+
+        Bounded by LOOKAHEAD, which is the substantive difference from
+        FindText: a token that is not near the cursor is given up on rather
+        than claimed hundreds of characters away. Cursor runaway -- one bad
+        hit dragging the read into another section permanently -- is not
+        recoverable after the fact, so it is prevented here instead."""
+        text = self._base_text()
+        if not text:
+            return None
+        off = _search_word(text, token, self.pos,
+                           min(len(text), self.pos + LOOKAHEAD + len(token)))
+        if off < 0:
+            return None
+        r, self.drift = _verified_range(self.base, off, token, self.drift)
+        if r is None:
+            self.text = None    # our snapshot disagrees with the live range:
+            return None         # drop it, the next poll refetches
+        self.errors = 0
+        self.pending_pos = off + len(token)
+        return r
+
+    def _pick_mode(self):
+        """Ask the surface which primitive tells the truth, before trusting
+        either with a read.
+
+        Sampling matters more than it looks. FindText's displacement on a
+        Chromium provider GROWS with distance into the document -- measured
+        deltas of 64, 69, 88, 96 characters at increasing depth -- so it is
+        very often correct for the FIRST word and wrong for everything after.
+        Deciding on the opening token therefore picks FindText on exactly the
+        surfaces it fails on (observed: Obsidian's editor locked to findtext
+        and then located 17 of 80 tokens; sampled at depth it picks offset
+        and locates 77). Take words from across the whole range instead.
+
+        The two cursors are separate -- `remaining` for FindText, an integer
+        for offsets -- so the mode cannot be mixed per token without one of
+        them going stale. It is chosen once, here."""
+        text = self._base_text()
+        words = [(m.start(), m.group(0))
+                 for m in re.finditer(r"[A-Za-z]{5,}", text)]
+        if len(text) < 200 or len(words) < 5:
+            return MODE_FIND        # too small to measure; the status quo
+        # 8, not 3 or 4: these documents mutate while they are probed (a
+        # CodeMirror/Monaco viewport re-renders under the walk), so a small
+        # sample is noisy -- measured 0/5 vs 1/5 on a surface that scored
+        # 0/30 vs 8/30 moments later. Still ~50 COM calls, paid once per
+        # anchor, against a head ladder that can cost 238ms.
+        picks = [words[int(len(words) * (i + .5) / 8)] for i in range(8)]
+        find_ok = off_ok = 0
+        for off, w in picks:
+            try:
+                r = self.base.FindText(w, False, True)
+            except Exception:
+                r = None
+            if r and _holds(r, w):
+                find_ok += 1
+            r2 = _range_at(self.base, off, len(w))
+            if r2 is not None and _holds(r2, w):
+                off_ok += 1
+        mode = MODE_FIND if find_ok >= off_ok else MODE_OFFSET
+        dlog(f"MODE {mode} (findtext {find_ok}/{len(picks)}, "
+             f"offset {off_ok}/{len(picks)} on sampled words)")
+        return mode
+
+    def _find(self, token):
+        """Locate a token with whichever primitive this surface honours.
+
+        Neither is portable: FindText is exact on Firefox and returns ranges
+        that do not contain the search string on Chromium; character offsets
+        are exact on Chromium and disagree with GetText on Firefox (all
+        measured, see _holds). Asking the surface beats naming the app."""
+        if self.mode is None:
+            try:
+                self.mode = self._pick_mode()
+            except Exception:
+                self.mode = MODE_FIND
+        if self.mode == MODE_OFFSET:
+            return self._find_offset(token)
+        return self._find_text(token)
 
     def locate(self, chunk_text, idx, token):
         key = (chunk_text, idx)
@@ -942,6 +1282,12 @@ class Anchor:
                 self._rewind(f"{self.misses} misses, tok={token!r}")
             return None                 # misses are NOT cached: a later poll
         self.misses = 0                 # may succeed once the app warms up
+        if self.mode == MODE_OFFSET:
+            # The cursor is an integer here, so there is no collapsed-range
+            # case to defend against and no COM call to advance it.
+            self.pos = self.pending_pos
+            self.token_ranges[key] = r
+            return r
         try:
             nxt = self.remaining.Clone()
             nxt.MoveEndpointByRange(UIA.TextPatternRangeEndpoint_Start,
@@ -990,7 +1336,8 @@ GRACE = 2.0             # /now reports active:false whenever playback slips
 def _new_stats(utt):
     return {"utt": utt, "tries": 0, "acq": "", "who": "?", "route": None,
             "cand": -1, "seen": set(), "located": set(), "painted": set(),
-            "sel": 0, "dead": 0, "rewinds": 0, "stuck": 0, "done": False}
+            "sel": 0, "dead": 0, "rewinds": 0, "stuck": 0, "mode": None,
+            "done": False}
 
 
 def _summary(st, anchor, why):
@@ -1007,12 +1354,13 @@ def _summary(st, anchor, why):
     if anchor is not None:
         st["rewinds"] += anchor.rewinds
         st["stuck"] += 1 if anchor.stuck else 0
+        st["mode"] = anchor.mode or st["mode"]
     seen, loc, pai = len(st["seen"]), len(st["located"]), len(st["painted"])
     pct = f"{100 * pai // seen}%" if seen else "n/a"
     dlog(f"SUMMARY utt={st['utt']} {why} painted={pai}/{seen} ({pct}) "
          f"located={loc} missed={seen - loc} route={st['route']} "
          f"cand={st['cand']} tries={st['tries']} "
-         f"anchor={st['acq'] or 'NEVER'} sel={st['sel']} "
+         f"anchor={st['acq'] or 'NEVER'} mode={st['mode']} sel={st['sel']} "
          f"rewinds={st['rewinds']} stuck={st['stuck']} dead={st['dead']} "
          f"who={st['who']}")
 
@@ -1186,8 +1534,12 @@ def main(marker):
                 # the spoken word = a bad FindText hit dragged it forward.
                 if DEBUG:
                     try:
-                        rem = (anchor.remaining.GetText(30)
-                               or "").replace("\n", " ")
+                        if anchor.mode == MODE_OFFSET:
+                            rem = (anchor.text or "")[anchor.pos:
+                                                      anchor.pos + 30]
+                        else:
+                            rem = anchor.remaining.GetText(30) or ""
+                        rem = rem.replace("\n", " ")
                     except Exception as e:
                         rem = f"<err {type(e).__name__}: {e}>"[:60]
             else:
@@ -1247,7 +1599,7 @@ def main(marker):
             # sel=1 marks the poll where the Select() fallback ran.
             dlog(f"chunk={chunk_seen[:20]!r} idx={idx} "
                  f"tok={words[idx][0]!r} found={0 if rng is None else 1} "
-                 f"sel={sel} rects={rr}"
+                 f"m={anchor.mode} sel={sel} rects={rr}"
                  f"{f' rem={rem!r}' if rng is None else ''}")
             time.sleep(POLL_ACTIVE)
         except Exception:

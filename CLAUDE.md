@@ -80,10 +80,19 @@ guess** — every guessed highlighter diagnosis in past sessions was wrong
 (slow anchor = symptom C), `FETCH fail` (RC9), `POLL ERROR`/`FATAL`. A
 crash before logging exists shows up in `highlighter.err`.
 
-On per-token lines, `found=0` (FindText couldn't locate the token —
+On per-token lines, `found=0` (couldn't locate the token —
 anchoring/alignment) and `found=1 rects=[]` (located, but the app exposes no
 geometry — viewport effect) are **different failures**; don't lump them.
 `cand[] … who=` names the app that supplied each candidate TextPattern.
+
+**`painted=` in `SUMMARY` is not a correctness measure** — it records that a
+rect was drawn, never that it was drawn on the right word. A read can log
+`painted=62%` while highlighting arbitrary words (AUDIT §8, 2026-08-12).
+Judge by `mode=`, `WRONG`-free tracking and `rewinds=`. `MODE …` is logged
+once per anchor and says which locating primitive this surface honours:
+`findtext` (Gecko/Win32) or `offset` (Chromium — Obsidian, VS Code, where
+UIA `FindText` returns ranges at the wrong position). `.md` reads happen in
+**Obsidian and VS Code**, both Chromium, so they should log `mode=offset`.
 
 ## Key endpoints
 

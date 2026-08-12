@@ -1485,6 +1485,162 @@ HTTP call in the tray runs on a worker, so this was on every result path.
 
 ---
 
+### DIAGNOSED & FIXED 2026-08-12: `.md` highlighting was landing on the wrong words — UIA `FindText` lies on Chromium providers
+
+User report: "there is an issue with the highlighting within .md files."
+**The whole locating mechanism was broken on the apps `.md` is read in, and
+the log had been reporting it as partial success for weeks.**
+
+#### Where `.md` is actually read (this had changed and nothing recorded it)
+
+`SUMMARY` lines say **Obsidian** (`who=Obsidian.exe [cm-content
+cm-lineWrapping]`, i.e. CodeMirror 6) plus VS Code. Both are
+**Electron/Chromium**. Firefox — the surface every earlier round was tuned
+against — is Gecko, and it is the one that still works. §8's earlier entries
+assume the `.md` case is "VS Code editor"; Obsidian is now the common one.
+
+#### The measurement
+
+`FindText` is asked for a word taken from the provider's **own `GetText`**,
+and the returned range is read back to see whether it contains that word:
+
+| Surface | range holds the searched word |
+|---|---|
+| Obsidian `cm-content` (what `.md` reads anchor to) | **1 / 20** |
+| Obsidian window document | **0 / 20** |
+| VS Code window / preview documents | **0–1 / 20** |
+| Firefox page documents (4 of them) | **20 / 20 each** |
+
+Not the wrong *occurrence* of the word — a range that does not contain the
+word **at all**. It comes back the right LENGTH at the wrong OFFSET, and the
+error grows with depth into the document (measured deltas +64, +69, +88, +96
+characters at increasing offsets in one Obsidian doc; VS Code ±350–700).
+
+Consequences, both of them user-visible:
+
+- The marker painted a **real rectangle on an arbitrary word** — the
+  "glitching / jumping" report.
+- The cursor advanced to a position unrelated to the text being read, so
+  everything after it missed. This is the true source of the `rem=` cursor
+  runaway chased since 2026-07-21 as "Bug A", of the 245 futile rewinds
+  behind P2, and of `found=0` on tokens plainly sitting two characters ahead
+  of the cursor (`tok='give' rem=', give it the exact same start'`).
+
+**`painted=` was never a correctness measure and this is the case that
+proves it.** Obsidian reads logging `painted=57%`, `62%`, `95%` were painting
+wrong words; `plan.md` §1 flagged exactly this caveat ("painted is a ceiling
+on success, not a measure of it") and it was never load-bearing until now.
+**Do not rank highlighter health by `painted=` again.**
+
+#### The fix (deployed)
+
+1. **`_holds(r, token)` — every hit is read back before it is trusted.** One
+   extra `GetText` per hit; a range that does not contain the token is a
+   miss, never a paint and never a cursor advance. This alone stops
+   wrong-word highlighting everywhere, including surfaces nobody has probed.
+2. **`_range_at()` + `_search_word()` — an offset-based alternative.** The
+   token is found in the anchor's own text in Python (exact word boundaries,
+   markdown-tolerant), and the range is built by character movement.
+   Measured: character offsets agree with `GetText` on Chromium **20/20**,
+   and disagree on Firefox — the mirror image of `FindText`. **Neither
+   primitive is portable, so neither is hardcoded.**
+3. **`_pick_mode()` — the surface is asked, not named.** Eight words sampled
+   across the anchor's text, both primitives tried, majority wins (ties keep
+   `findtext`, the status quo).
+   **Sampling at depth is load-bearing:** the displacement is ~0 at the start
+   of a document, so deciding on the *first* token picks `FindText` on
+   exactly the surfaces it fails on (observed: Obsidian locked to findtext
+   and located 17/80; sampled at depth it picks offset and locates 77/80).
+   Eight rather than four or five because **these documents mutate while
+   they are probed** — a CodeMirror/Monaco viewport re-renders under the
+   walk, and one surface measured 0/5 vs 1/5 and then 0/30 vs 8/30 moments
+   later. For the same reason the decision is not final: the first rewind on
+   an anchor with fewer than `MODE_PROOF = 3` painted tokens re-measures
+   once (`MODE switch …`). Three, not "has it ever painted" — one lucky rect
+   is not evidence, and it was measured suppressing the retry on a read that
+   located 1 token of 80.
+3b. **The anchor head is verified too.** Anchoring used a bare `FindText`,
+   so on Chromium the anchor itself could be established at the wrong place
+   and every token then measured from a wrong base — observed live on a
+   head-anchored Obsidian read where both primitives then scored 1/5. The
+   head now falls back to `_head_range()`, the same offset technique, and
+   the log records which was used (`ANCHOR ok via=offset[…]`).
+4. **`LOOKAHEAD = 400` bounds the search in offset mode.** `FindText` scans
+   to the end of the range, which is *how* one bad hit lands in another
+   section permanently. Tokens arrive in reading order over the text the
+   anchor spans, so the honest gap is a few characters — wide enough here to
+   cross a stripped heading/list marker/table row, too narrow for a far-away
+   homograph. Cursor runaway is now prevented rather than recovered from.
+5. **Verified drift correction.** Python offsets and UIA character units
+   drift slightly around zero-width chars and embedded objects, which
+   markdown editors are full of (measured over a whole Obsidian document:
+   303 words exact, 27 off by **+2**, nothing else within ±2). The last
+   working drift is tried first, then a tight window — and every candidate
+   still has to pass `_holds`, so a correction can add hits but never a
+   wrong one. Kept tight deliberately: widen it and it starts finding the
+   same word somewhere else.
+6. Offset mode gets its own rewind ladder (`pos_good` → anchor start →
+   stuck, integers instead of ranges, dropping the text snapshot on the way
+   because a run of misses in a virtualized editor usually means the exposed
+   text moved), and `resync()` re-derives the integer cursor after a
+   `Select()` moves VS Code's accessibility page.
+
+New log vocabulary: **`MODE <mode> (findtext k/5, offset k/5 …)`** once per
+anchor, `m=` on every token line, and `mode=` in `SUMMARY`.
+
+#### Measured after the fix — same live documents, same walk
+
+| Surface | before | after |
+|---|---|---|
+| Obsidian `cm-content`, viewport-resident selection | wrong-word paints | **157/162 correct, 157 painted, 0 wrong, 0 rewinds** |
+| Obsidian `cm-content`, 80-token walk | 17/80 located | **77/80 located, 0 wrong** |
+| VS Code window document | 1/80 located | **75/80 located, 75 painted, 0 wrong** |
+| Firefox (regression check) | 80/80 | **80/80 correct, 0 wrong, `mode=findtext`** |
+
+Firefox picks `findtext` and is untouched — that was the thing most at risk.
+Also unit-tested: `_search_word` boundaries/markdown tolerance/bounded scan
+(13 cases), and the offset rewind ladder + the one-shot re-probe including
+the cap and `new_chunk()` forgiveness (25 cases).
+
+**The VS Code *window-level* document stays dark (1/80, both primitives ~0
+on it) and that is the right outcome, not an unfixed bug.** §6 and the
+2026-07-21 entry already establish that anchor as structurally wrong —
+it interleaves tab labels, the status bar and terminal chrome with content,
+so token order is not reading order. What changed is that it now *misses*
+instead of painting confident, wrong rectangles.
+
+#### Two honest caveats
+
+- **Not yet verified through a real hotkey read.** Anchoring goes through
+  `GetFocusedElement()` and a background process cannot take the foreground
+  (same obstacle as the 2026-07-25 entry), so every measurement above drives
+  `Anchor` directly against the live document instead of through `/speak`.
+  **The user's check: read a `.md` passage in Obsidian and one in the VS
+  Code editor, then `Select-String SUMMARY` — expect `mode=offset` and
+  `WRONG`-free tracking.** If a `.md` read logs `mode=findtext`, `_pick_mode`
+  sampled a document too small or too uniform to tell the two apart.
+- **`mode=` legitimately varies between reads on the same app, and that is
+  the design, not instability.** The probe measures *the range this anchor
+  actually holds*, and the displacement grows with range length: a normal
+  selection-shaped anchor in Obsidian is short enough that `FindText` is
+  still exact there (observed live — `MODE findtext (findtext 5/5, offset
+  4/5)`, read finished `painted=19/19`), while a whole-document or
+  head-to-end anchor in the same app is not (`findtext 0/30, offset 8/30`).
+  Repeated harness runs over a document the user was **actively editing**
+  swung between `mode=offset located=78/80` and `mode=findtext located=38/80`
+  — the document mutates under the probe. What did **not** vary, across
+  every run on every app: **`WRONG=0`**. That is the guarantee `_holds`
+  buys, and it is the one to check first if this is ever revisited.
+- **The paint rate is bounded by the viewport, not by this code.** A
+  virtualized editor reports rectangles only for rendered lines — mapped on
+  the live Obsidian document: 52% of words had geometry, in one contiguous
+  span of 1726 characters (the viewport) plus small islands. Text scrolled
+  out of view has no rectangle to paint, which is correct behaviour, not a
+  miss. Judge reads by whether the marker is on the **right** word, and by
+  `WRONG`/`rewinds`, not by `painted=`.
+
+---
+
 ## 9. Accepted trade-offs (settled — reopen only with new information)
 
 - **Bottom caption strip — NARROWLY REOPENED 2026-07-22.** "No bottom
