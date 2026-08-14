@@ -1,18 +1,18 @@
-# Versions pinned from the last known-good setup (2026-07-17, Python 3.12).
-kokoro==0.9.4
-flask==3.1.3
-sounddevice==0.5.5
-numpy==2.5.1
-# torch: install the CUDA build if the machine has an NVIDIA GPU. This is not
-# a nice-to-have -- on the current laptop the CPU build synthesizes at 1.77x
-# realtime while playback consumes 1.8x, i.e. BELOW break-even, and every long
-# read stalls for seconds. The CUDA build measured 25.03x RT for 348MB of VRAM
-# (AUDIT.md, 2026-08-11). Same version either way, so nothing else changes.
+# Default install -- CPU build of PyTorch.
 #
-#   env\Scripts\python.exe -m pip install --index-url https://download.pytorch.org/whl/cu126 "torch==2.13.0+cu126"
+#   env\Scripts\python.exe -m pip install -r requirements.txt
 #
-# On a machine with no NVIDIA GPU, drop the +cu126 and lower the reading speed
-# from the tray Settings panel until it stops warning about the limit.
---extra-index-url https://download.pytorch.org/whl/cu126
-torch==2.13.0+cu126
-comtypes==1.4.16   # UI Automation, used by highlighter.py
+# If the machine has an NVIDIA GPU, install requirements-cuda.txt INSTEAD.
+# This is not a nice-to-have. On the reference laptop the CPU build synthesizes
+# at 1.77x realtime while playback at the shipped speed drains 1.8x -- i.e.
+# BELOW break-even, so long reads stall for seconds. The CUDA build measured
+# 25.03x RT for 348MB of VRAM (AUDIT.md, 2026-08-11).
+#
+# Nothing else changes between the two: there is no device-selection code in
+# tts_server.py, so kokoro takes the device from whichever torch build is
+# installed.
+#
+# On CPU, lower the reading speed in the tray's Settings panel until the
+# "sustainable speed" warning clears -- see README, "CPU or GPU".
+-r requirements-base.txt
+torch==2.13.0

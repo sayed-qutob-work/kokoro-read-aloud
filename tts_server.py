@@ -22,12 +22,17 @@ import numpy as np
 import sounddevice as sd
 from flask import Flask, request, jsonify
 
-# ======================= TUNE THESE =======================
-ENGINE = "torch"          # "torch" = kokoro (PyTorch)  -> measured 4.03x RT
-                          # "onnx"  = kokoro-onnx       -> measured 3.89x RT (slower)
+_ROOT = os.path.dirname(os.path.abspath(__file__))
 
-ONNX_MODEL  = r"C:\kokoro\kokoro-v1.0.onnx"
-ONNX_VOICES = r"C:\kokoro\voices-v1.0.bin"
+# ======================= TUNE THESE =======================
+ENGINE = "torch"          # "torch" = kokoro (PyTorch)  -> 4.03x RT
+                          # "onnx"  = kokoro-onnx       -> 3.89x RT (slower)
+                          # Both measured on the ORIGINAL desktop and NOT
+                          # transferable -- see docs/AUDIT.md 4. What holds is
+                          # the ordering: onnx was never faster.
+
+ONNX_MODEL  = os.path.join(_ROOT, "kokoro-v1.0.onnx")
+ONNX_VOICES = os.path.join(_ROOT, "voices-v1.0.bin")
 
 KOKORO_VOICE = "af_heart"
 
@@ -73,7 +78,6 @@ PREFETCH = 2
 #                       bm_george bm_fable bm_lewis bm_daniel
 
 
-_ROOT = os.path.dirname(os.path.abspath(__file__))
 SETTINGS_FILE = os.path.join(_ROOT, "settings.json")
 CALIB_FILE = os.path.join(_ROOT, "calibration.json")
 

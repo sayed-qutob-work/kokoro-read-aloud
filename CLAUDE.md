@@ -6,7 +6,7 @@ Speechify-style in-place word highlighting.
 
 ## Read first, always
 
-**`AUDIT.md` is the source of truth.** Read it before proposing or changing
+**`docs/AUDIT.md` is the source of truth.** Read it before proposing or changing
 anything. In particular:
 
 - **§4 Measured facts** — measured numbers, but **measured on the ORIGINAL
@@ -28,8 +28,10 @@ anything. In particular:
 - **Measure, don't estimate.** If a claim isn't in §4, instrument and measure
   it before acting on it.
 
-`plan.md` (2026-07-21) is the current work item: diagnosis + phased fix plan
-for the highlighting system.
+`docs/plan.md` (2026-07-21) is the highlighter work item: diagnosis + phased
+fix plan. `docs/RELEASE_PLAN.md` (2026-08-14) is the current work item: the
+phased plan for the Windows beta, the caption strip, and the Linux (Fedora)
+port. Phase 1 (release hygiene) shipped as `v0.1.0-beta`.
 
 ## Files
 
@@ -39,7 +41,9 @@ for the highlighting system.
 | `read_aloud.ahk` | Hotkeys (AutoHotkey **v2**); window-aware clipboard/copy logic |
 | `highlighter.py` | In-place word highlighter (UIA TextPattern + layered window) |
 | `tray.py` | Tray icon + settings panel over `/config` (right-click: Settings, Stop, restarts, Quit) |
-| `settings.json` | User's tuned voice/speed/pause. **Written by the tray, loaded by the server at startup** |
+| `settings.json` | User's tuned voice/speed/pause. **Written by the tray, loaded by the server at startup.** Untracked since v0.1.0-beta — it is per-user, not a default. `settings.example.json` documents the shape |
+| `requirements.txt` | CPU install. `requirements-cuda.txt` is the NVIDIA one; both pull shared pins from `requirements-base.txt`. **Install one or the other, not both** |
+| `docs/` | `AUDIT.md`, `plan.md`, `RELEASE_PLAN.md` — moved out of the root in v0.1.0-beta |
 | `calibration.json` | Measured `density`/`rt` for THIS machine, so a boot starts calibrated. Delete it to re-learn |
 | `extension/` | Chromium in-page highlighter (load unpacked); Firefox works via UIA instead |
 | `overlay.py` | Retired caption strip (kept, not autostarted) |
@@ -124,5 +128,9 @@ UIA `FindText` returns ranges at the wrong position). `.md` reads happen in
 
 - User-facing behavior decisions (start latency vs flow, overlay vs in-place)
   are settled in AUDIT §9 — reopen only with new information.
-- After any deployed change, update `AUDIT.md` so the next session inherits
-  the truth.
+- After any deployed change, update `docs/AUDIT.md` so the next session
+  inherits the truth.
+- Paths are derived from each script's own location (`start_tts.vbs` uses
+  `WScript.ScriptFullName`, the Python files use `__file__`). Nothing hardcodes
+  `C:\kokoro` any more — don't reintroduce it, the repo has to work from any
+  folder now that it is published.

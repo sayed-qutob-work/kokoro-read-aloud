@@ -1,11 +1,19 @@
 # Local Read-Aloud (Kokoro TTS)
 
-Select text anywhere on Windows → **Ctrl+Alt+R** reads it aloud in a natural voice →
-**Ctrl+Alt+S** stops. Fully local (model runs on CPU), no network calls at runtime,
-no clipboard polling. Starts speaking ~0.5s after the hotkey.
+Select text anywhere on Windows → **Ctrl+Alt+R** reads it aloud in a natural
+voice → **Ctrl+Alt+S** stops. Fully local, no network calls at runtime, no
+clipboard polling. While it reads, the word being spoken lights up **in the
+original text, where it already is** — no caption strip, no copy of the text.
 
-```
-[keyboard or Logitech G Hub mouse macro]
+> **Beta**
+>
+> This is `v0.1.0-beta`. The audio path is solid and in daily use. The
+> **highlighter is the rough part** and has known faults — see
+> [Known issues](#known-issues) before filing anything. Windows only for now;
+> a Linux port is planned ([docs/RELEASE_PLAN.md](docs/RELEASE_PLAN.md)).
+
+```text
+[keyboard or a spare mouse button]
         │  Ctrl+Alt+R
         ▼
   read_aloud.ahk        AutoHotkey v2: grabs the selected text (window-aware,
@@ -16,15 +24,19 @@ no clipboard polling. Starts speaking ~0.5s after the hotkey.
         ├──────────────► [speakers]
         │
         │  GET /now, /utterance
-        ▼
-  highlighter.py        Tints the word being spoken, in place, in the source
-                        app itself — via UI Automation + a click-through
-                        layered window. Read-only; never touches audio.
+        ├────────────► highlighter.py   Tints the spoken word, in place, in the
+        │                               source app — UI Automation + a
+        │                               click-through layered window. Read-only;
+        │                               never touches audio.
+        │  GET/POST /config
+        └────────────► tray.py          Tray icon + Settings panel. Writes
+                                        settings.json, which the server loads
+                                        at startup.
 ```
 
 For the full engineering history — measured performance facts, rejected
-alternatives, and every non-obvious design decision — read **AUDIT.md** before
-changing anything.
+alternatives, and every non-obvious design decision — see
+[docs/](docs/README.md).
 
 ## Hotkeys
 
@@ -36,22 +48,24 @@ changing anything.
 
 ## Word highlighting
 
-While a passage is read, the word being spoken lights up **in the original
-text, where it already is** — no caption strip, no copy of the text. This runs
-as a separate process (`highlighter.py`), reads the source app through UI
-Automation, and paints a click-through translucent marker on top. It cannot
-affect playback: kill it and audio continues unchanged.
+Reading works **everywhere text can be selected.** The visual marker is a
+separate concern and depends on what the app exposes to accessibility APIs. It
+runs as its own process and cannot affect playback: kill it and audio continues
+unchanged.
 
-| Where | Highlighting | Notes |
+| Where | Marker | Notes |
 |---|---|---|
-| Firefox | ✅ | Also Chrome/Edge and other UIA-exposing browsers |
-| Notepad, text editors | ✅ | |
-| VS Code editor (`.md`, code) | ✅ | Requires the setting below |
-| **Terminals** | ❌ **Not possible** | See below — reading still works |
-| PDFs in a browser viewer, Google Docs | ❌ | Canvas-rendered; no text geometry exists |
+| Firefox | ✅ | Best-supported surface; Gecko exposes real text geometry |
+| Chrome / Edge | ✅ | Load `extension/` unpacked — in Chromium the extension is the reliable path, not UI Automation |
+| Notepad and Win32 editors | ✅ | |
+| VS Code editor | ⚠️ | Needs a setting, below |
+| Obsidian (`.md`) | ⚠️ | Works since 2026-08-12; Chromium needs a different locating primitive than Gecko |
+| Outlook / Hotmail on the web | ⚠️ | Intermittent, open issue (`docs/plan.md` → D2) |
+| **Terminals** | ❌ | **Not possible.** Reading works; the marker cannot. See below |
+| PDFs in a browser viewer, Google Docs | ❌ | Canvas-rendered; no text geometry exists to point at |
 
 **VS Code** needs `"editor.accessibilitySupport": "on"` in your user settings,
-otherwise VS Code exposes no editor text at all and there is nothing to locate.
+otherwise it exposes no editor text at all and there is nothing to locate.
 
 Optionally, to stop VS Code faintly tinting other copies of the current word
 while reading markdown (its `occurrencesHighlight` feature reacting to the
@@ -68,11 +82,49 @@ cursor the highlighter has to move), scope it off for markdown only:
 VS Code's integrated terminal (xterm.js) draws text to a canvas and exposes it
 to accessibility through a hidden buffer parked far off-screen, so the position
 it reports has no relation to where the pixels are. *Reading* terminal text
-works fine (that's step 5 below); only the visual marker is unavailable.
+works fine (see step 5 of the setup); only the visual marker is unavailable.
+This is not fixable in place and will not be fixed — the planned answer is an
+optional caption strip ([docs/RELEASE_PLAN.md](docs/RELEASE_PLAN.md)).
 
-Troubleshooting: launch it with `KOKORO_HL_DEBUG=C:\path\to\log.txt` set and it
-records which document it anchored to and the rectangle for every word. Check
-that before theorising — see AUDIT.md §8 "Round 4".
+## Known issues
+
+`v0.1.0-beta`, all in the highlighter — audio is unaffected by every one of
+these:
+
+- Multi-line selections highlight less reliably than single-line ones.
+- Reading the *same* passage repeatedly can make the marker clash with itself
+  or stop updating.
+- Outlook / Hotmail on the web works sometimes and fails often; undiagnosed.
+- The marker can occasionally land on the wrong word rather than simply not
+  appearing.
+
+Before reporting a highlighting problem, please check the table above — the
+terminal, PDF-viewer and Google-Docs cases are structurally impossible, not
+bugs, and `docs/AUDIT.md` §6 has the evidence.
+
+## CPU or GPU
+
+This matters more than it sounds. Playback drains audio at `playback_speed`
+audio-seconds per second, while synthesis produces audio at some multiple of
+realtime. **If synthesis is slower than playback, long reads stall** — and CPU
+synthesis is right at that line.
+
+| | Measured throughput | Against a default drain of 1.8 |
+|---|---|---|
+| GTX 1650 (CUDA build) | **25.0x realtime** | Vast headroom |
+| Same laptop, CPU build | **1.77x realtime** | **Below break-even — stalls** |
+
+Both measured 2026-08-11 on the same machine (`docs/AUDIT.md` §8). Your own
+figure is always available live as `measured_rt` from `GET /config`; it is
+learned from real reads, so it starts low after a restart and climbs.
+
+So: install `requirements-cuda.txt` if you have an NVIDIA GPU. If you're on
+CPU, expect to lower the reading speed in the tray's Settings panel until its
+sustainable-speed warning clears. The tray reads the machine's actual measured
+throughput and tells you the ceiling — trust it over any number in this file.
+
+There is no device-selection code anywhere in the server; Kokoro takes the
+device from whichever torch build is installed.
 
 ## Setting up on a fresh Windows machine
 
@@ -81,26 +133,30 @@ that before theorising — see AUDIT.md §8 "Round 4".
      (check "Add to PATH"), or `py install 3.12` if you have the Python Install
      Manager. **3.13 and newer will not work**: `kokoro` declares
      `Requires-Python >=3.10,<3.13`, so pip silently filters out every usable
-     release. See [Troubleshooting](#troubleshooting) below for what that
-     failure looks like. A newer Python being already
-     installed is fine — you just must not build the venv from it.
+     release. See [Troubleshooting](#troubleshooting) for what that failure
+     looks like. A newer Python being already installed is fine — you just must
+     not build the venv from it.
    - [AutoHotkey v2](https://www.autohotkey.com/) — per-user or machine-wide,
      `start_tts.vbs` finds either. Without it the hotkeys are silently dead;
      nothing else in the system provides them.
-   - **eSpeak NG is _not_ a separate install** (verified 2026-08-05). The
+   - **eSpeak NG is *not* a separate install** (verified 2026-08-05). The
      `espeakng-loader` package pulled in by `misaki[en]` ships `espeak-ng.dll`
-     and its data inside the venv, and phonemization — including out-of-dictionary
-     words, the only thing that reaches eSpeak — works with nothing on PATH.
-     Earlier versions of this README required the `.msi`; it is no longer needed
-     with the pinned versions in `requirements.txt`.
+     and its data inside the venv, and phonemization — including
+     out-of-dictionary words, the only thing that reaches eSpeak — works with
+     nothing on PATH.
 
-2. **Clone and install** (PowerShell):
+2. **Clone and install** (PowerShell). Any folder works; the scripts locate
+   themselves:
 
    ```powershell
-   git clone https://github.com/sayed-qutob-work/kokoro-read-aloud.git C:\kokoro
-   cd C:\kokoro
+   git clone https://github.com/sayed-qutob-work/kokoro-read-aloud.git
+   cd kokoro-read-aloud
    py -3.12 -m venv env
    env\Scripts\python.exe -V          # must print Python 3.12.x — stop here if it doesn't
+
+   # NVIDIA GPU (strongly preferred — see "CPU or GPU"):
+   env\Scripts\python.exe -m pip install -r requirements-cuda.txt
+   # No NVIDIA GPU:
    env\Scripts\python.exe -m pip install -r requirements.txt
    ```
 
@@ -124,9 +180,10 @@ that before theorising — see AUDIT.md §8 "Round 4".
    Wait for `[kokoro] ready on http://127.0.0.1:5111`, then select some text and
    press Ctrl+Alt+R (start `read_aloud.ahk` by double-clicking it first).
 
-4. **Autostart**: Win+R → `shell:startup` → put a shortcut to
-   `C:\kokoro\start_tts.vbs` there. It launches both processes hidden and logs the
-   server to `server.log` (read that first whenever something misbehaves).
+4. **Autostart**: Win+R → `shell:startup` → put a shortcut to `start_tts.vbs`
+   there. It launches all four processes hidden — server, hotkeys, highlighter,
+   tray — and logs the server to `server.log` (read that first whenever
+   something misbehaves).
 
 5. **Terminal reading** (optional): in VS Code settings, set
    `"terminal.integrated.copyOnSelection": true`. In Windows Terminal, set
@@ -134,28 +191,42 @@ that before theorising — see AUDIT.md §8 "Round 4".
    simulating Ctrl+C is not an option (it means "interrupt" there). Terminal
    text is read aloud but not visually highlighted — see above for why.
 
-6. **Mouse button** (optional): a Logitech G Hub macro bound to a spare button —
-   on press: left-click down; on release: left-click up, then Ctrl+Alt+R. Then
-   drag-selecting with that button reads the selection when released.
+6. **Mouse button** (optional): a macro on a spare button — on press: left-click
+   down; on release: left-click up, then Ctrl+Alt+R. Drag-selecting with that
+   button then reads the selection when you let go. (Tested with Logitech G Hub.)
 
-## Tuning
+## Settings
 
-All knobs live in the config block at the top of `tts_server.py` (restart to apply),
-and the important ones can be changed live without a restart:
+Right-click the tray icon → **Settings**. That panel is the intended interface:
+it writes `settings.json`, which the server loads at startup, and it shows the
+sustainable-speed ceiling measured on your machine.
+
+`settings.json` is not tracked by git — it's yours.
+[settings.example.json](settings.example.json) documents the shape and the
+shipped defaults:
+
+| Key | What |
+|---|---|
+| `voice` | e.g. `af_heart`, `am_michael`, `bf_emma` (full list in `tts_server.py`) |
+| `playback_speed` | Pitch-preserving speed-up after synthesis. **This is the one that stalls reads if set above what your machine can synthesize** |
+| `model_speed` | What Kokoro itself is asked for. Keep ≤ 1.3 — above that it degrades |
+| `pause` | Silence after a sentence |
+| `first_chunk_audio` | Seconds of audio in the opening chunk; lower = faster start, choppier opening |
+| `output_device` | `null` follows the Windows default |
+
+The same values can be changed live, without a restart, over HTTP:
 
 ```powershell
 Invoke-RestMethod -Uri http://127.0.0.1:5111/config -Method Post -ContentType "application/json" -Body '{"playback_speed":2.0}'
 Invoke-RestMethod -Uri http://127.0.0.1:5111/config    # current values + measured stats
 ```
 
-- `playback_speed` — pitch-preserving speed-up applied after synthesis (default 1.8;
-  effective rate = this × `model_speed`)
-- `first_chunk_audio` — seconds of audio in the opening chunk; lower = faster start,
-  choppier opening (default 2.0 ≈ 0.5s to first sound)
-- `voice` — e.g. `af_heart`, `am_michael`, `bf_emma` (full list in `tts_server.py`)
+Live `/config` changes are in-memory only; the tray is what makes them survive a
+restart.
 
 **Important:** editing `tts_server.py` does nothing to a running server. Kill it,
-verify port 5111 is free, then start it again — the procedure is in AUDIT.md §7.
+verify port 5111 is free, then start it again — the procedure is in
+`docs/AUDIT.md` §7.
 
 ## Troubleshooting
 
@@ -175,32 +246,43 @@ versions` line is the real message — pip filtered out every 0.8.x/0.9.x wheel 
 It is not a network, proxy, or index problem, and no amount of retrying,
 `--upgrade`, or a different mirror will change it.
 
-Confirm, then rebuild the venv on 3.12:
+Confirm, then rebuild the venv on 3.12 (from the repo folder):
 
 ```powershell
-C:\kokoro\env\Scripts\python.exe -V     # the culprit, if this isn't 3.12.x
+env\Scripts\python.exe -V               # the culprit, if this isn't 3.12.x
 py -0p                                  # what's actually installed
 
 py install 3.12                         # or the python.org 3.12 installer
-Remove-Item -Recurse -Force C:\kokoro\env
-py -3.12 -m venv C:\kokoro\env
-C:\kokoro\env\Scripts\python.exe -V     # must print Python 3.12.x
-C:\kokoro\env\Scripts\python.exe -m pip install --upgrade pip
-C:\kokoro\env\Scripts\python.exe -m pip install -r C:\kokoro\requirements.txt
+Remove-Item -Recurse -Force env
+py -3.12 -m venv env
+env\Scripts\python.exe -V               # must print Python 3.12.x
+env\Scripts\python.exe -m pip install --upgrade pip
+env\Scripts\python.exe -m pip install -r requirements.txt
 ```
-
-Rebuilding in place at `C:\kokoro\env` keeps the hardcoded
-`env\Scripts\python.exe` paths in `start_tts.vbs` and the docs valid.
 
 Do **not** "fix" this by relaxing the pin to a 0.7.x `kokoro` that installs on
 3.13+ — that is a different model/voice API generation, and every measured
-number in AUDIT.md was taken on the pinned versions in `requirements.txt`.
+number in `docs/AUDIT.md` was taken on the pinned versions in
+`requirements-base.txt`.
+
+### Reads stall or stutter partway through
+
+Synthesis can't keep up with playback. Open the tray Settings panel and lower
+the reading speed until the warning clears, or install the CUDA build — see
+[CPU or GPU](#cpu-or-gpu).
+
+### Highlighting is wrong or missing
+
+Check the table in [Word highlighting](#word-highlighting) first; several cases
+are impossible rather than broken. The highlighter writes `highlighter.log` with
+the document it anchored to and the rectangle for every word — that log, not
+guesswork, is how these get diagnosed (`docs/AUDIT.md` §8, "Round 4").
+`highlighter.err` is empty when healthy.
 
 ### Anything else
 
 `server.log` first — it is truncated at each server start, so what's in it is
-current. Highlighter problems: `highlighter.log` (and `highlighter.err`, which
-is empty when healthy). AUDIT.md §7 and §8 cover the rest.
+current. `docs/AUDIT.md` §7 and §8 cover the rest.
 
 ## Credits & licensing
 
@@ -210,7 +292,8 @@ The code in this repository is MIT-licensed (see `LICENSE`). It builds on:
   [kokoro](https://github.com/hexgrad/kokoro) library by hexgrad — Apache 2.0.
   Neither is redistributed here; the library installs from PyPI and the model
   downloads from Hugging Face on first run.
-- [eSpeak NG](https://github.com/espeak-ng/espeak-ng) (GPL-3.0) — installed
-  separately by the user, used by Kokoro for phonemization.
+- [eSpeak NG](https://github.com/espeak-ng/espeak-ng) (GPL-3.0), used by Kokoro
+  for phonemization. Not redistributed here either: pip pulls it in as a bundled
+  binary inside `espeakng-loader`, a dependency of `misaki[en]`.
 - Flask, NumPy, PyTorch, sounddevice — installed from PyPI under their own
   permissive licenses.

@@ -17,6 +17,13 @@ tray.err
 tray.out
 __pycache__/
 
+# The user's own tuning, written by the tray's Settings panel. Tracking it
+# shipped one machine's voice/speed/output-device as everybody else's defaults,
+# and made every tray edit show up as a dirty tree that conflicts on pull.
+# settings.example.json documents the shape; the server falls back to the
+# constants in tts_server.py when this file is absent.
+settings.json
+
 # Measured on THIS machine (density / synthesis throughput), not a setting.
 # Committing it would seed another machine with numbers that are wrong for it --
 # and wrong in the expensive direction if they are too high (AUDIT 2026-08-11).

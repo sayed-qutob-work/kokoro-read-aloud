@@ -1,0 +1,16 @@
+# Shared pins for both installs. Do not install this file directly -- use
+# requirements.txt (CPU) or requirements-cuda.txt (NVIDIA GPU), each of which
+# pulls this in and adds the matching torch wheel.
+#
+# Versions pinned from the last known-good setup (2026-07-17, Python 3.12).
+# The venv MUST be Python 3.12: kokoro declares Requires-Python >=3.10,<3.13,
+# and a 3.13+ venv fails every install with a misleading "No matching
+# distribution found" -- see README, Troubleshooting.
+kokoro==0.9.4
+flask==3.1.3
+sounddevice==0.5.5
+numpy==2.5.1
+
+# Windows only: UI Automation, used by highlighter.py for in-place word
+# highlighting. There is no Linux equivalent -- see docs/RELEASE_PLAN.md.
+comtypes==1.4.16 ; sys_platform == "win32"
