@@ -1,4 +1,4 @@
-# Highlighting fix plan
+asd# Highlighting fix plan
 
 **Date:** 2026-07-21. **Scope:** the in-place word highlighter (`highlighter.py` +
 the `/now` / `/utterance` server side). The browser extension (`extension/`) is
