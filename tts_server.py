@@ -807,30 +807,54 @@ def stop():
 _SENTENCE_END = re.compile(r"(?<=[.!?…])[\"')\]]*\s+")
 
 
-def _word_char_end(text, words, idx):
-    """Char offset in `text` just past the word at `idx`.
+def _word_char_span(text, words, idx):
+    """(start, end) char offsets of word `idx` inside `text`.
 
     `words` carries only the spoken tokens; punctuation and spacing live
     in `text`, so the tokens are walked forward through it the same way
     the caption strip used to map them."""
-    if idx < 0:
-        return 0
     p = 0
     for i, (w, _a, _b) in enumerate(words):
         j = text.find(w, p)
-        if j >= 0:
-            p = j + len(w)
+        if j < 0:
+            if i == idx:
+                return p, p
+            continue
         if i == idx:
-            return p
-    return len(text)
+            return j, j + len(w)
+        p = j + len(w)
+    return len(text), len(text)
 
 
-def _sentence_context(seq, pos, within=None):
+def _word_char_end(text, words, idx):
+    """Char offset in `text` just past the word at `idx`."""
+    if idx < 0:
+        return 0
+    return _word_char_span(text, words, idx)[1]
+
+
+def _reading_offset(text, words, idx, t):
+    """Where the voice is INSIDE the chunk, interpolated between word
+    timings so it advances smoothly rather than a word at a time.
+
+    The continuously-scrolling teleprompter is driven from this: stepping
+    per word (or per sentence) is what made the motion look like jumps."""
+    if idx < 0 or idx >= len(words):
+        return 0.0
+    a, b = _word_char_span(text, words, idx)
+    _w, t0, t1 = words[idx]
+    f = 0.0 if t1 <= t0 else min(1.0, max(0.0, (t - t0) / (t1 - t0)))
+    return a + (b - a) * f
+
+
+def _sentence_context(seq, pos, within=None, reading=None):
     """Describe where the voice is, for the caption strip. Returns a dict:
 
         prev/sentence/next  the sentence being spoken and one either side
         full                every chunk synthesized so far, joined
         span                [start, end] of `sentence` inside `full`
+        cursor              where the voice is inside `full`, interpolated
+                            between word timings (drives continuous scroll)
 
     The three sentences drive the fixed-rows layout; `full` + `span` drive
     the teleprompter, which scrolls the whole passage past a fixed line and
@@ -864,14 +888,15 @@ def _sentence_context(seq, pos, within=None):
     makes the upcoming text available at all."""
     if not (0 <= pos < len(seq)):
         return {"prev": "", "sentence": "", "next": "", "full": "",
-                "span": [0, 0]}
+                "span": [0, 0], "cursor": 0}
     texts = [c["text"] for c in seq]
     full = " ".join(texts)
+    chunk_head = (len(" ".join(texts[:pos])) + 1) if pos else 0
     if within is None:
         played_end = len(" ".join(texts[:pos + 1]))
     else:
-        head = len(" ".join(texts[:pos]))            # start of this chunk
-        played_end = (head + 1 if pos else 0) + within
+        played_end = chunk_head + within
+    cursor = chunk_head + (reading if reading is not None else 0.0)
 
     # sentence boundaries as offsets into `full`
     bounds = [0] + [m.end() for m in _SENTENCE_END.finditer(full)] + [len(full)]
@@ -890,7 +915,8 @@ def _sentence_context(seq, pos, within=None):
     # locate the sentence inside the passage it renders
     return {"prev": prev_text.strip(), "sentence": sentence.strip(),
             "next": full[end:nend].strip(), "full": full,
-            "span": [start, start + len(sentence.rstrip())]}
+            "span": [start, start + len(sentence.rstrip())],
+            "cursor": round(cursor, 2)}
 
 
 @app.get("/now")
@@ -917,10 +943,11 @@ def now():
     # holding several sentences still highlights the right one. Only
     # trustworthy while chunk_seq[pos] is the chunk /now is describing -
     # the two are written by different threads.
-    within = (_word_char_end(s["text"], s["words"], idx)
-              if 0 <= pos < len(seq) and seq[pos]["text"] == s["text"]
-              else None)
-    ctx = _sentence_context(seq, pos, within)
+    aligned = 0 <= pos < len(seq) and seq[pos]["text"] == s["text"]
+    within = _word_char_end(s["text"], s["words"], idx) if aligned else None
+    reading = (_reading_offset(s["text"], s["words"], idx, t)
+               if aligned else None)
+    ctx = _sentence_context(seq, pos, within, reading)
     ends_sentence = seq[pos]["ends_sentence"] if 0 <= pos < len(seq) else False
     return jsonify(active=True, text=s["text"], words=s["words"],
                    word=idx, t=round(t, 3), utt=s["gen"],

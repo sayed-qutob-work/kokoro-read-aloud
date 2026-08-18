@@ -1976,6 +1976,79 @@ animatable at all.
 Tagging moved to the whole passage rather than the visible window (tags
 are cheap and only re-applied when the sentence changes, not per poll).
 
+**Then: "the next sentence shifts slightly to the left".** Correct, and
+the cause is worth remembering. The `underline` theme's `now` tag
+applies a **bold** font, but the teleprompter pre-wraps the passage with
+the REGULAR font and then scrolls those fixed lines. Measured: the same
+sentence is **714px regular, 728px bold**. So as a sentence stopped
+being current it lost bold, got 14px narrower, and dragged whatever
+followed it on that same wrapped line leftwards.
+
+**Rule for this layout: the highlight may only use metric-neutral
+attributes.** Foreground, background and underline are safe; font weight,
+family and size are not. `now_font` is therefore the base font in
+teleprompter mode and stays bold in rows (where the sentence owns its
+own line, so nothing shares it). The terminal theme's inserted `▌` caret
+was dropped there for the same reason — it shifted the line it sat on,
+and a caret is redundant when the reading row is already fixed.
+
+Verified by tracking one character's x pixel through `text.bbox()` across
+five sentence advances: **677px every time.**
+
+#### Continuous scrolling — the teleprompter now creeps, and is the default
+
+Even easing between line positions still meant the text held still and
+then moved; a real prompter never stops. The scroll is now driven by the
+READING POSITION rather than by sentence changes:
+
+- `/now` gained **`cursor`** — the voice's character offset in `full`,
+  interpolated *between* word timings (`_reading_offset`), so it advances
+  smoothly instead of a word at a time. Measured over a real read:
+  ~30 chars/s, **0 stalled samples** across 100 polls.
+- The strip converts that to a FRACTIONAL wrapped-line position
+  (`_line_pos`), so crossing a line creeps the view by that same
+  fraction. `_tick_scroll` runs at ~60fps and eases toward the last
+  polled target, which is what covers the 80ms gaps between polls — the
+  poll rate is not the frame rate.
+- A gap over 6 lines is treated as a new utterance or a seek and placed
+  directly, so a fresh read does not scroll backwards through the old one.
+
+`caption_smooth` (on/off) was replaced by **`caption_scroll`:
+`continuous` | `line` | `off`** — one setting instead of two interacting
+ones. `off` still exists because scrolling motion is a real vestibular
+trigger, not just a preference.
+
+**Defaults changed at the user's request: `caption_layout` is now
+`teleprompter` and `caption_scroll` is `continuous`.** `rows` remains
+for anyone who wants a static strip.
+
+#### "It works but it is really rigid" — chase replaced by a velocity model
+
+Two causes, both real:
+
+1. The ticker eased toward the LAST POLLED target, which goes stale for
+   80ms. Exponential easing into a static point decelerates to a near
+   stop, so the motion stalled and restarted ~12x a second.
+2. The underlying reading rate is genuinely uneven — word durations vary,
+   and the cursor moved **5.8-15.7 chars per sample** over one measured
+   read. Chasing it directly reproduces that jitter.
+
+Now the strip estimates the reading **pace** (`_set_reading_point`,
+EMA at `VEL_SMOOTH=0.88`), EXTRAPOLATES the reading point at that pace on
+every frame, and follows the extrapolation. Frames between polls keep
+advancing instead of waiting, and the heavy smoothing absorbs the word-
+level unevenness. Simulated against the measured rate profile:
+per-frame jerk (stdev/mean) **0.31 -> 0.19**.
+
+**The remaining floor is pixel quantization, and it is a floor.** At
+reading pace the view moves ~7.6 px/s, while `yview_scroll` takes whole
+pixels — so the screen genuinely steps 1px about 8 times a second, and Tk
+cannot render text at fractional offsets. What the fix actually buys is
+that those steps are now EVENLY spaced: measured gap between 1px steps
+**121ms +/-20ms -> 125ms +/-11ms** (evenness 0.17 -> 0.09). Even cadence
+reads as creep; uneven cadence reads as rigid. Do not expect to remove
+the stepping itself without a different toolkit.
+
 #### Still open (next Linux-porting session)
 
 - Caption strip itself: the §1 spike only proves the *rendering

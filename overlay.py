@@ -30,6 +30,7 @@ import json
 import os
 import re
 import subprocess
+import time
 import tkinter as tk
 import tkinter.font as tkfont
 from urllib.request import urlopen
@@ -243,9 +244,28 @@ DEFAULT_STYLE = "underline"
 
 
 LAYOUTS = ("rows", "teleprompter")
-DEFAULT_LAYOUT = "rows"
+DEFAULT_LAYOUT = "teleprompter"
 POSITIONS = ("bottom", "center", "top")
 DEFAULT_POSITION = "bottom"
+
+# How the teleprompter moves. "continuous" is what a real prompter does:
+# the text creeps at reading pace instead of holding still and then
+# jumping a line. "line" glides a line at a time; "off" snaps, for anyone
+# who does not want motion at all.
+SCROLLS = ("continuous", "line", "off")
+DEFAULT_SCROLL = "continuous"
+
+# Continuous scrolling is a velocity model, not a chase. The reading rate
+# reported by the server is genuinely uneven (word durations vary, so the
+# cursor moved 5.8-15.7 chars per sample over one measured read), and the
+# poll only lands every POLL_MS. Chasing that directly reproduced both the
+# jitter and a decelerate-then-stall pulse 12x a second. So: estimate the
+# pace, smooth it hard, and predict between polls.
+VEL_SMOOTH = 0.88         # weight kept from the previous pace estimate
+VEL_MAX = 20.0            # lines/s; above this it is a seek, not reading
+FOLLOW_GAIN = 0.08        # per-frame correction toward the predicted point
+PREDICT_CAP = 0.6         # seconds of extrapolation if polls stop arriving
+JUMP_LINES = 6            # further than this = new utterance, place directly
 
 
 def _raw_setting(key):
@@ -275,8 +295,9 @@ class Overlay:
                         or _raw_setting("caption_monitor") or "primary")
         # motion can be unwelcome (vestibular sensitivity, or just taste),
         # and it is the kind of thing that must be switchable off
-        self.smooth = _setting("KOKORO_CAPTION_SMOOTH", "caption_smooth",
-                               ("on", "off"), "on") == "on"
+        self.scroll = _setting("KOKORO_CAPTION_SCROLL", "caption_scroll",
+                               SCROLLS, DEFAULT_SCROLL)
+        self.smooth = self.scroll != "off"
         self.height = TELE_HEIGHT if self.layout == "teleprompter" else ROWS_HEIGHT
         self.root = tk.Tk()
         self.root.withdraw()
@@ -296,11 +317,15 @@ class Overlay:
         self._fade_job = None
         self._scroll_job = None
         self._scroll_pos = 0.0
+        self._scroll_target = 0.0
+        self._vel = 0.0            # reading pace, wrapped lines per second
+        self._target_time = None
         self._line_h = None
         self._tele_full = None
         self._tele_lines, self._tele_offsets = [], []
         self._reset_sentence_state()
         self.root.after(IDLE_MS, self.poll)
+        self.root.after(FADE_STEP_MS, self._tick_scroll)
 
     def _build_ui(self):
         th = self.theme
@@ -327,11 +352,18 @@ class Overlay:
                            pady=(14, 0))
         self._build_indicator(indicator_row)
 
-        text_font = _pick_font(th["fonts"], th["font_size"])
-        now_font = _pick_font(th["fonts"], th["font_size"],
-                              weight="bold" if th["now_bold"] else "normal")
         pad = 18 if th["rail"] else 20
         tele = self.layout == "teleprompter"
+        text_font = _pick_font(th["fonts"], th["font_size"])
+        # The teleprompter pre-wraps the passage with `text_font` and then
+        # scrolls those fixed lines, so the highlight MUST NOT change font
+        # metrics: bold is ~14px wider over a line, and a sentence losing
+        # bold as the read moves on dragged the following sentence -- which
+        # usually shares that wrapped line -- visibly to the left. Colour,
+        # underline and background are all metric-neutral; weight is not.
+        now_font = text_font if tele else _pick_font(
+            th["fonts"], th["font_size"],
+            weight="bold" if th["now_bold"] else "normal")
         self.font = text_font
         # usable text width, for the one-line clamp and the wrapper
         self.text_px = WIDTH - 2 - (4 if th["rail"] else 0) - 2 * pad
@@ -425,7 +457,9 @@ class Overlay:
     def _reset_sentence_state(self):
         self.last_render = None   # last /now fields painted
         self._tele_full = None    # forget the wrapped passage
-        self._scroll_pos = 0.0
+        self._scroll_pos = self._scroll_target = 0.0
+        self._vel = 0.0
+        self._target_time = None
 
     def _drag_start(self, e):
         self._dx = e.x_root - self.root.winfo_x()
@@ -486,33 +520,81 @@ class Overlay:
                 self.font.metrics("linespace")
         return self._line_h
 
+    def _place_scroll(self, pos):
+        """Put content line `pos` (fractional) at the top of the widget."""
+        self._scroll_pos = pos
+        h = self._tele_line_h()
+        self.text.yview_moveto(0.0)
+        self.text.yview_scroll(int(round(max(0.0, pos) * h)), "pixels")
+
+    def _line_pos(self, cursor):
+        """Char offset in the passage -> fractional wrapped-line position.
+
+        The fraction is what makes the motion continuous: as the voice
+        crosses a line the view creeps that same fraction downward, so the
+        text is always moving rather than holding still between lines."""
+        lines, offsets = self._tele_lines, self._tele_offsets
+        if not lines:
+            return 0.0
+        n = max((k for k, o in enumerate(offsets) if o <= cursor), default=0)
+        width = len(lines[n]) or 1
+        return n + min(1.0, max(0.0, (cursor - offsets[n]) / width))
+
+    def _set_reading_point(self, line):
+        """A fresh reading position from the server: update the pace
+        estimate, which is what the frames in between are drawn from."""
+        now = time.monotonic()
+        if self._target_time is not None:
+            dt = now - self._target_time
+            if 0.02 < dt < 1.0:
+                v = (line - self._scroll_target) / dt
+                if v < 0 or v > VEL_MAX:
+                    self._vel = 0.0          # jumped: no useful pace here
+                else:
+                    self._vel = VEL_SMOOTH * self._vel + (1 - VEL_SMOOTH) * v
+        self._scroll_target = line
+        self._target_time = now
+
+    def _tick_scroll(self):
+        """Move the view every frame, for `continuous`.
+
+        Not a chase toward the last poll: that target goes stale between
+        polls, so the motion decelerated into it and stalled ~12x a second,
+        which is what read as rigid. Instead the reading point is
+        EXTRAPOLATED at the smoothed pace, so it keeps advancing on frames
+        where no poll has landed, and the view follows that. The heavy
+        velocity smoothing is what absorbs the unevenness of the underlying
+        word timings."""
+        if (self.visible and self.layout == "teleprompter"
+                and self.scroll == "continuous" and self._target_time):
+            ahead = min(PREDICT_CAP, max(0.0, time.monotonic() - self._target_time))
+            predicted = self._scroll_target + self._vel * ahead
+            gap = predicted - self._scroll_pos
+            if abs(gap) > JUMP_LINES:
+                self._vel = 0.0
+                self._place_scroll(predicted)
+            elif abs(gap) > 0.0005:
+                self._place_scroll(self._scroll_pos + gap * FOLLOW_GAIN)
+        self.root.after(FADE_STEP_MS, self._tick_scroll)
+
     def _scroll_to(self, line):
-        """Glide the reading position to `line`. Whole-line jumps are what
-        the eye reads as the text 'moving'; easing it out over SCROLL_MS
-        keeps that motion continuous instead of a snap per sentence."""
+        """Glide the reading position to `line`, a line at a time."""
         if self._scroll_job:
             self.root.after_cancel(self._scroll_job)
             self._scroll_job = None
         start, target = self._scroll_pos, float(line)
-        h = self._tele_line_h()
-
-        def place(pos):
-            self._scroll_pos = pos
-            self.text.yview_moveto(0.0)
-            self.text.yview_scroll(int(round(max(0.0, pos) * h)), "pixels")
-
         if not self.smooth or abs(target - start) < 0.02:
-            place(target)
+            self._place_scroll(target)
             return
         steps = max(1, SCROLL_MS // FADE_STEP_MS)
 
         def step(n=1):
             p = 1 - (1 - n / steps) ** 3          # ease-out cubic
-            place(start + (target - start) * p)
+            self._place_scroll(start + (target - start) * p)
             if n < steps:
                 self._scroll_job = self.root.after(FADE_STEP_MS, step, n + 1)
             else:
-                place(target)
+                self._place_scroll(target)
                 self._scroll_job = None
 
         step()
@@ -533,7 +615,9 @@ class Overlay:
         first = max((n for n, o in enumerate(offsets) if o <= start), default=0)
         last = max((n for n, o in enumerate(offsets) if o < max(end, start + 1)),
                    default=first)
-        caret_on = bool(self.theme.get("caret"))
+        # no caret marker here: the reading row is fixed, so it would only
+        # ever sit in the same place, and drawing it meant inserting a
+        # character that shifted the line it was on
 
         t = self.text
         t.configure(state="normal")
@@ -552,11 +636,11 @@ class Overlay:
             a, b = max(start, off), min(end, off + len(txt))
             if a < b:
                 t.tag_add("now", f"{row}.{a - off}", f"{row}.{b - off}")
-        if caret_on and first < len(lines):
-            row = first + TELE_ANCHOR + 1
-            t.tag_add("caret", f"{row}.0", f"{row}.end")
         t.configure(state="disabled")
-        self._scroll_to(first)
+        # continuous mode is driven by the cursor in _tick_scroll instead,
+        # so that the view keeps moving *within* a sentence too
+        if self.scroll != "continuous":
+            self._scroll_to(first)
 
     def _render_rows(self, prev_text, now_text, next_text):
         """Paint the three regions as three fixed ROWS, not one flowed
@@ -604,6 +688,12 @@ class Overlay:
             if now != self.last_render:
                 self.last_render = now
                 self.render(d)
+            # every poll, not just on a repaint: the reading position moves
+            # continuously through a sentence, which is the whole point
+            if self.layout == "teleprompter" and self._tele_lines:
+                cur = d.get("cursor")
+                if cur is not None:
+                    self._set_reading_point(self._line_pos(cur))
             if not self.visible:
                 self.root.deiconify()
                 self.visible = True
