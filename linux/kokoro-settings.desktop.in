@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Kokoro Settings
+GenericName=Read-aloud settings
+Comment=Voice, speed, output device and caption strip for Kokoro read-aloud
+Exec=@ROOT@/env/bin/python @ROOT@/tray.py --settings
+Path=@ROOT@
+Icon=@ROOT@/linux/kokoro.svg
+Terminal=false
+Categories=Utility;Accessibility;
+Keywords=tts;speech;read;aloud;kokoro;captions;
+StartupNotify=true

@@ -45,7 +45,7 @@ WIDTH = 900
 ROWS_HEIGHT = 220
 TELE_HEIGHT = 258
 TELE_ROWS, TELE_ANCHOR = 7, 2
-MARGIN_BOTTOM = 90        # gap between the strip and the screen edge
+MARGIN_EDGE = 90          # gap between the strip and the screen edge
 
 MAX_ALPHA = 0.94
 FADE_MS = 160          # show/hide fade duration
@@ -74,54 +74,85 @@ def _run(cmd):
     return subprocess.run(cmd, capture_output=True, text=True, timeout=3).stdout
 
 
-def _monitor_from_xrandr():
+def _monitors_from_xrandr():
+    out = []
     for line in _run(["xrandr", "--query"]).splitlines():
-        if " connected primary " in line:
-            m = re.search(r"(\d+)x(\d+)\+(\d+)\+(\d+)", line)
-            if m:
-                w, h, x, y = (int(g) for g in m.groups())
-                return x, y, w, h
-    return None
+        if " connected" not in line:
+            continue
+        m = re.search(r"(\d+)x(\d+)\+(\d+)\+(\d+)", line)
+        if m:
+            w, h, x, y = (int(g) for g in m.groups())
+            out.append({"name": line.split()[0], "x": x, "y": y,
+                        "w": w, "h": h, "primary": " primary " in line})
+    return out
 
 
-def _monitor_from_mutter():
+def _monitors_from_mutter():
     """GNOME/Wayland, where xrandr is often not installed at all."""
     out = _run(["gdbus", "call", "--session",
                 "--dest", "org.gnome.Mutter.DisplayConfig",
                 "--object-path", "/org/gnome/Mutter/DisplayConfig",
                 "--method", "org.gnome.Mutter.DisplayConfig.GetCurrentState"])
+    if not out:
+        return []
+    mons = []
     # logical monitor: (x, y, scale, transform, primary, [(connector,...)], {})
-    log = re.search(r"\((\d+), (\d+), ([\d.]+), uint32 \d+, true, \[\('([^']+)'",
-                    out or "")
-    if not log:
-        return None
-    x, y, scale, connector = (int(log.group(1)), int(log.group(2)),
-                              float(log.group(3)), log.group(4))
-    # the logical monitor carries no size; its connector's CURRENT mode does
-    blk = out[out.index(f"(('{connector}',"):]
-    for m in re.finditer(r"\('[^']+', (\d+), (\d+), [\d.]+, [\d.]+, "
-                         r"\[[^\]]*\], \{([^}]*)\}\)", blk):
-        if "'is-current': <true>" in m.group(3):
-            return x, y, round(int(m.group(1)) / scale), round(int(m.group(2)) / scale)
-    return None
-
-
-def _primary_monitor(root):
-    """(x, y, w, h) of the PRIMARY monitor.
-
-    Tk only ever reports the union of every monitor - 3840x1080 across
-    two screens - so centring on winfo_screenwidth() lands the strip on
-    the seam between them. Both probes are best-effort; the union is the
-    fallback and is correct on a single-monitor desktop (and on Windows,
-    where Tk reports the primary monitor anyway)."""
-    for probe in (_monitor_from_xrandr, _monitor_from_mutter):
+    # gdbus prints the type tag only on the FIRST tuple ("uint32 0" then bare
+    # "0"), so that prefix has to be optional or only one monitor is ever found
+    for lm in re.finditer(r"\((\d+), (\d+), ([\d.]+), (?:uint32 )?\d+, "
+                          r"(true|false), \[\('([^']+)'", out):
+        x, y, scale = int(lm.group(1)), int(lm.group(2)), float(lm.group(3))
+        primary, connector = lm.group(4) == "true", lm.group(5)
+        # the logical monitor carries no size; its connector's CURRENT mode does
         try:
-            got = probe()
+            blk = out[out.index(f"(('{connector}',"):]
+        except ValueError:
+            continue
+        for m in re.finditer(r"\('[^']+', (\d+), (\d+), [\d.]+, [\d.]+, "
+                             r"\[[^\]]*\], \{([^}]*)\}\)", blk):
+            if "'is-current': <true>" in m.group(3):
+                mons.append({"name": connector, "x": x, "y": y,
+                             "w": round(int(m.group(1)) / scale),
+                             "h": round(int(m.group(2)) / scale),
+                             "primary": primary})
+                break
+    return mons
+
+
+def list_monitors(root=None):
+    """Every monitor as {name, x, y, w, h, primary}.
+
+    Tk only ever reports the union of them all - measured 3840x1080
+    across two screens - so anything positional has to come from here.
+    Both probes are best-effort; the union is the fallback and is right
+    on a single-monitor desktop (and on Windows, where Tk reports the
+    primary monitor anyway). Also used by the tray to populate the
+    monitor dropdown, which is why it takes no Tk objects when `root`
+    is not given."""
+    for probe in (_monitors_from_xrandr, _monitors_from_mutter):
+        try:
+            got = [m for m in probe() if m["w"] > 0 and m["h"] > 0]
         except Exception:
-            got = None
-        if got and got[2] > 0 and got[3] > 0:
+            got = []
+        if got:
+            if not any(m["primary"] for m in got):
+                got[0]["primary"] = True
             return got
-    return 0, 0, root.winfo_screenwidth(), root.winfo_screenheight()
+    if root is not None:
+        return [{"name": "Screen", "x": 0, "y": 0,
+                 "w": root.winfo_screenwidth(), "h": root.winfo_screenheight(),
+                 "primary": True}]
+    return []
+
+
+def pick_monitor(monitors, want):
+    """`want` is a connector name, or "primary"/anything unknown."""
+    if not monitors:
+        return None
+    for m in monitors:
+        if m["name"] == want:
+            return m
+    return next((m for m in monitors if m["primary"]), monitors[0])
 
 
 def _wrap(text, font, px):
@@ -212,16 +243,20 @@ DEFAULT_STYLE = "underline"
 
 LAYOUTS = ("rows", "teleprompter")
 DEFAULT_LAYOUT = "rows"
+POSITIONS = ("bottom", "center", "top")
+DEFAULT_POSITION = "bottom"
+
+
+def _raw_setting(key):
+    try:
+        with open(SETTINGS_FILE, encoding="utf-8") as f:
+            return json.load(f).get(key)
+    except (FileNotFoundError, ValueError):
+        return None
 
 
 def _setting(env, key, allowed, default):
-    val = os.environ.get(env)
-    if not val:
-        try:
-            with open(SETTINGS_FILE, encoding="utf-8") as f:
-                val = json.load(f).get(key)
-        except (FileNotFoundError, ValueError):
-            val = None
+    val = os.environ.get(env) or _raw_setting(key)
     return val if val in allowed else default
 
 
@@ -231,6 +266,12 @@ class Overlay:
                                      THEMES, DEFAULT_STYLE)]
         self.layout = _setting("KOKORO_CAPTION_LAYOUT", "caption_layout",
                                LAYOUTS, DEFAULT_LAYOUT)
+        self.position = _setting("KOKORO_CAPTION_POSITION", "caption_position",
+                                 POSITIONS, DEFAULT_POSITION)
+        # any connector name ("HDMI-1"); "primary" and unknown names both
+        # fall back to the primary monitor
+        self.monitor = (os.environ.get("KOKORO_CAPTION_MONITOR")
+                        or _raw_setting("caption_monitor") or "primary")
         self.height = TELE_HEIGHT if self.layout == "teleprompter" else ROWS_HEIGHT
         self.root = tk.Tk()
         self.root.withdraw()
@@ -239,10 +280,7 @@ class Overlay:
         self.root.attributes("-alpha", 0.0)   # fades in on first show
         self._build_ui()
 
-        mx, my, mw, mh = _primary_monitor(self.root)
-        self.root.geometry(f"{WIDTH}x{self.height}"
-                           f"+{mx + (mw - WIDTH) // 2}"
-                           f"+{my + mh - self.height - MARGIN_BOTTOM}")
+        self.root.geometry(self._geometry())
         for w in self._draggable:
             w.bind("<Button-1>", self._drag_start)
             w.bind("<B1-Motion>", self._drag_move)
@@ -337,6 +375,21 @@ class Overlay:
                                        else 12))
         lbl.pack(side="left", padx=(6, 0))
 
+    def _geometry(self):
+        """Where the strip opens: horizontally centred on the chosen
+        monitor, and vertically per `caption_position`."""
+        mon = pick_monitor(list_monitors(self.root), self.monitor)
+        if mon is None:
+            return f"{WIDTH}x{self.height}+100+100"
+        x = mon["x"] + (mon["w"] - WIDTH) // 2
+        if self.position == "top":
+            y = mon["y"] + MARGIN_EDGE
+        elif self.position == "center":
+            y = mon["y"] + (mon["h"] - self.height) // 2
+        else:
+            y = mon["y"] + mon["h"] - self.height - MARGIN_EDGE
+        return f"{WIDTH}x{self.height}+{x}+{y}"
+
     def _fade_to(self, target, on_done=None):
         if self._fade_job:
             self.root.after_cancel(self._fade_job)
@@ -367,40 +420,80 @@ class Overlay:
     def _drag_move(self, e):
         self.root.geometry(f"+{e.x_root - self._dx}+{e.y_root - self._dy}")
 
-    def render(self, prev_text, now_text, next_text):
+    def render(self, d):
+        """`d` is a /now payload. The two layouts read different fields:
+        rows wants the three sentences, teleprompter wants the whole
+        passage plus where the sentence sits inside it."""
         if self.layout == "teleprompter":
-            self._render_teleprompter(prev_text, now_text, next_text)
+            self._render_teleprompter(d.get("full", ""),
+                                      d.get("span") or [0, 0])
         else:
-            self._render_rows(prev_text, now_text, next_text)
+            self._render_rows(d.get("prev", ""),
+                              d.get("sentence", d.get("text", "")),
+                              d.get("next", ""))
 
-    def _render_teleprompter(self, prev_text, now_text, next_text):
-        """Running text with the current sentence pinned to a fixed row.
+    def _render_teleprompter(self, full, span):
+        """The whole passage, scrolling upward past a fixed reading line.
 
-        Everything is pre-wrapped so the rows can be counted: the spoken
-        history is trimmed (or padded) to exactly TELE_ANCHOR lines, which
-        puts the sentence on the same row every time while the text
-        appears to scroll up through it."""
+        The first draft of this only had one sentence of context either
+        side, which made it look almost identical to the rows layout. A
+        teleprompter's defining behaviour is that the TEXT MOVES: the
+        entire passage is wrapped once, and the window onto it is chosen
+        so the current sentence always begins on row TELE_ANCHOR. As the
+        read advances that window slides down the text, so on screen the
+        text scrolls up, line by line, through a stationary reading line."""
         px, font = self.text_px, self.font
-        now_lines = _wrap(now_text, font, px) or [""]
-        if self.theme.get("caret") and now_text:
-            now_lines[0] = "▌ " + now_lines[0]
+        start, end = span
+        # wrap the passage while tracking where each line began, so the
+        # sentence can be found again after wrapping
+        lines, offsets, cursor = [], [], 0
+        for para in full.split("\n"):
+            for line in (_wrap(para, font, px) or [""]):
+                i = full.find(line, cursor)
+                if i < 0:
+                    i = cursor
+                lines.append(line)
+                offsets.append(i)
+                cursor = i + len(line)
+        if not lines:
+            lines, offsets = [""], [0]
 
-        above = _wrap(prev_text, font, px)[-TELE_ANCHOR:] if TELE_ANCHOR else []
-        above = [""] * (TELE_ANCHOR - len(above)) + above     # pad to the anchor
-        rows = (above + now_lines + _wrap(next_text, font, px))[:TELE_ROWS]
-        rows += [""] * (TELE_ROWS - len(rows))
+        # first and last wrapped line the current sentence touches
+        first = max((n for n, o in enumerate(offsets) if o <= start), default=0)
+        last = max((n for n, o in enumerate(offsets) if o < max(end, start + 1)),
+                   default=first)
+
+        top = first - TELE_ANCHOR            # the scroll position
+        shown = []                           # (row text, source offset)
+        for r in range(TELE_ROWS):
+            n = top + r
+            shown.append((lines[n], offsets[n]) if 0 <= n < len(lines)
+                         else ("", None))
+        caret_on = bool(self.theme.get("caret")) and bool(shown[TELE_ANCHOR][0])
+        rows = [txt for txt, _ in shown]
+        if caret_on:
+            rows[TELE_ANCHOR] = "▌ " + rows[TELE_ANCHOR]
 
         t = self.text
         t.configure(state="normal")
         t.delete("1.0", "end")
         t.insert("1.0", "\n".join(rows))
-        for i in range(TELE_ANCHOR):
-            t.tag_add("done", f"{i + 1}.0", f"{i + 1}.end")
-        for i in range(TELE_ANCHOR, min(TELE_ANCHOR + len(now_lines), TELE_ROWS)):
-            first = i == TELE_ANCHOR and self.theme.get("caret") and now_text
-            t.tag_add("now", f"{i + 1}.{2 if first else 0}", f"{i + 1}.end")
-            if first:
-                t.tag_add("caret", f"{i + 1}.0", f"{i + 1}.1")
+        for r, (txt, off) in enumerate(shown):
+            if off is None or not txt:
+                continue
+            shift = 2 if (r == TELE_ANCHOR and caret_on) else 0
+            # whole row as context first; `now` is configured last so it
+            # has the higher tag priority and paints over this
+            t.tag_add("done" if off < start else "upcoming",
+                      f"{r + 1}.{shift}", f"{r + 1}.end")
+            # highlight only the characters of the sentence itself, so a
+            # line shared with the neighbouring sentence is not swept up
+            a, b = max(start, off), min(end, off + len(txt))
+            if a < b:
+                t.tag_add("now", f"{r + 1}.{a - off + shift}",
+                          f"{r + 1}.{b - off + shift}")
+            if shift:
+                t.tag_add("caret", f"{r + 1}.0", f"{r + 1}.1")
         t.configure(state="disabled")
 
     def _render_rows(self, prev_text, now_text, next_text):
@@ -441,12 +534,14 @@ class Overlay:
             self.miss = 0
             # the server groups chunks into sentences (/now `sentence`);
             # merging them here as well is what used to paint the opening
-            # of a multi-chunk sentence twice
+            # of a multi-chunk sentence twice. `full` is in the key so the
+            # teleprompter repaints as more of the passage is synthesized.
             now = (d.get("prev", ""), d.get("sentence", d.get("text", "")),
-                   d.get("next", ""))
+                   d.get("next", ""), d.get("full", ""),
+                   tuple(d.get("span") or ()))
             if now != self.last_render:
                 self.last_render = now
-                self.render(*now)
+                self.render(d)
             if not self.visible:
                 self.root.deiconify()
                 self.visible = True

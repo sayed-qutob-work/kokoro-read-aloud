@@ -1859,6 +1859,95 @@ primary = `1920x1080+0+0`, so the strip now opens at x=510. The union
 fallback stays correct on a single-monitor desktop and on Windows, where
 Tk reports the primary monitor anyway.
 
+#### Tray ported (RELEASE_PLAN §4.4/§4.5) — and there is deliberately NO tray icon on Linux
+
+`tray.py` could not even be **imported** on Linux: it built ctypes
+structures against `ctypes.wintypes` at module scope. The Win32 icon
+(`Shell_NotifyIcon`, the hidden message window, `make_icon`) is now
+`tray_win32.py`, imported only when `sys.platform == "win32"`. It talks
+to nothing but the `app` object it is handed — the menu used to call
+`api()`/`restart_server()`/`os.startfile()` directly, and those became
+`app.stop_speaking()`, `app.restart_server_async()`, `app.open_folder()`
+and friends. **The Windows path is unchanged in behaviour but is
+UNTESTED on Windows from here** — the extraction was mechanical (the
+block was copied verbatim, not retyped) but someone should click the
+tray menu once on Windows before shipping.
+
+**Why Linux gets no icon — this is a dead end, not a to-do.** GNOME
+removed the notification area. An indicator needs the third-party
+AppIndicator shell extension (present on this Fedora but **not
+enabled**) *and* PyGObject. Fedora builds `gi` only for the system
+Python — measured, `/usr/lib64/python3.14/site-packages/gi/_gi.cpython-**314**-...so`
+— while this venv must be **3.12** (kokoro requires `<3.13`), so the
+venv can never import the system `gi`. Getting an icon means compiling
+PyGObject from source into the venv and depending on an extension the
+user must keep enabled. Declined with the user 2026-08-18 in favour of
+RELEASE_PLAN §4.4's own planned fallback:
+
+- `linux/install-desktop.sh` writes a per-user `.desktop` entry, so the
+  panel is in the app grid as **"Kokoro Settings"** (paths baked in at
+  install time from the script's location — re-run it after moving the
+  folder).
+- `tray.py --settings` opens the panel directly from a terminal.
+- `App.start()` opens the panel by itself when there is no icon, since
+  otherwise a launch would put nothing on screen at all.
+
+Also platform-split: `PY` (`env/Scripts/python.exe` vs `env/bin/python`),
+`spawn_hidden` (`CREATE_NO_WINDOW|DETACHED_PROCESS` vs
+`start_new_session=True`), `kill_script`, and `open_folder`
+(`os.startfile` vs `xdg-open`).
+
+**`pgrep -f` needs a guard that `Get-CimInstance` did not.** `-f`
+matches the whole command line, which also matches any SHELL whose
+command line happens to quote the script name — including the harness
+shell running the command. That killed this session's own shell twice
+before `_pids_posix` started checking `/proc/<pid>/comm` for a real
+`python` executable. The Windows version filters on `Name='python.exe'`
+and never had the problem.
+
+**Caption settings are now in the panel** (`caption_style`,
+`caption_layout`). They had to be added to `DEFAULTS` or
+`load_settings`/`save_settings` would silently drop them — the trap
+RELEASE_PLAN §3.4 already warned about. They are the only settings the
+**server never sees**: `push()` filters them out of `/config`, because
+`overlay.py` reads them off disk at startup. Save therefore restarts the
+strip when either changed, and nothing else applies them.
+
+#### The "teleprompter" layout was not one — and multi-monitor placement is now a setting
+
+**User: "the teleprompter is the same as the other option (or am I
+imagining it)". They were not imagining it.** The first version showed
+one sentence of context on each side and re-rendered per sentence, which
+is very nearly what the rows layout does. A teleprompter's defining
+behaviour is that **the text moves**. The layout now wraps the WHOLE
+passage once and picks the window onto it so the current sentence starts
+on row `TELE_ANCHOR`; as the read advances that window slides down, so
+the text scrolls up line by line past a stationary reading line.
+
+That needed more than one sentence from the server, so
+`_sentence_context()` now also returns `full` (every chunk joined) and
+`span` (the sentence's offsets inside it), and `/now` passes them
+through. Rows still uses `prev`/`sentence`/`next`; only the teleprompter
+reads `full`/`span`.
+
+Highlighting is by **character range, not by line**: wrapped lines do not
+align with sentences, so tagging whole lines swept up the start of the
+next sentence when it shared a line. Verified by asserting the tagged
+text equals the sentence exactly across a five-sentence passage.
+
+**Multi-monitor placement is now user-controllable** (`caption_monitor`,
+`caption_position`), both in the panel. `_primary_monitor()` became
+`list_monitors()` returning every monitor, which the tray reads directly
+so the dropdown can never offer something the strip does not understand.
+
+**One parser bug worth remembering: `gdbus` prints a GVariant type tag
+only on the FIRST tuple of an array.** The logical-monitor list came back
+as `(0, 0, 1.0, uint32 0, true, ...)` then `(1920, 0, 1.0, 0, true, ...)`
+— no `uint32` on the second — so a regex requiring the tag found exactly
+one monitor on a two-monitor desktop and silently looked correct. The
+prefix has to be optional. Measured after the fix: `eDP-1 1920x1080+0+0`
+and `DP-1 1920x1080+1920+0`.
+
 #### Still open (next Linux-porting session)
 
 - Caption strip itself: the §1 spike only proves the *rendering
@@ -1867,11 +1956,11 @@ Tk reports the primary monitor anyway.
   chunk fields) is unbuilt on both platforms; Linux inherits it once
   built, per the plan (`highlight_ok` always `false` on Linux → Auto
   resolves to "on").
-- `tray.py` Linux port (§4.5): `env/bin/python` + `psutil`/`pgrep`
-  instead of `Get-CimInstance`.
+- **Verify `tray_win32.py` on Windows** — the split is mechanical and
+  unexercised there (see the tray entry above).
 - `systemd --user` units to replace `start_tts.vbs` (§4.5) — not done
-  this session; the server was started by hand for testing and is not
-  yet autostarted.
+  this session; the server, strip and tray were started by hand for
+  testing and none of them autostart yet. `linux/` is where they go.
 - Folder restructure (§4.6) — deliberately still deferred, per the plan's
   own sequencing.
 

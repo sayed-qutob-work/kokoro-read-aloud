@@ -33,10 +33,10 @@ Launched hidden by start_tts.vbs, same as the server and highlighter. Killing
 it affects nothing else -- the tray is a control surface, not a dependency.
 """
 
-import ctypes
 import json
 import os
 import queue
+import shutil
 import subprocess
 import sys
 import threading
@@ -44,16 +44,19 @@ import time
 import traceback
 import urllib.error
 import urllib.request
-from ctypes import wintypes
 
 import tkinter as tk
 from tkinter import ttk
+
+IS_WIN = sys.platform == "win32"
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 SETTINGS = os.path.join(ROOT, "settings.json")
 LOG = os.path.join(ROOT, "tray.log")
 SERVER = "http://127.0.0.1:5111"
-PY = os.path.join(ROOT, "env", "Scripts", "python.exe")
+# venvs put the interpreter in different places per platform
+PY = os.path.join(ROOT, "env", "Scripts" if IS_WIN else "bin",
+                  "python.exe" if IS_WIN else "python")
 
 # Voices, from the tts_server.py config block. lang_code is derived from the
 # prefix by the server (af_ -> 'a', bf_ -> 'b'), so this list is all it needs.
@@ -85,8 +88,32 @@ DEFAULTS = {
     "playback_speed": 1.8,
     "pause": 0.1,
     "first_chunk_audio": 2.0,
-    "output_device": None,      # None = follow the Windows default
+    "output_device": None,      # None = follow the system default
+    # caption strip (overlay.py). Read by the strip at startup, not by the
+    # server -- /config ignores them, and changing either needs the strip
+    # restarted, which the panel does for you.
+    "caption_style": "underline",
+    "caption_layout": "rows",
+    "caption_position": "bottom",
+    "caption_monitor": "primary",   # or a connector name, e.g. "DP-1"
 }
+
+# Taken from overlay.py rather than restated, so the panel can never offer
+# a value the strip does not understand.
+try:
+    import overlay as _overlay
+    CAPTION_STYLES = list(_overlay.THEMES)
+    CAPTION_LAYOUTS = list(_overlay.LAYOUTS)
+    CAPTION_POSITIONS = list(_overlay.POSITIONS)
+except Exception:                     # panel still works without the strip
+    _overlay = None
+    CAPTION_STYLES = ["underline", "terminal", "rail"]
+    CAPTION_LAYOUTS = ["rows", "teleprompter"]
+    CAPTION_POSITIONS = ["bottom", "center", "top"]
+
+MONITOR_PRIMARY_LABEL = "Primary monitor"
+CAPTION_KEYS = ("caption_style", "caption_layout", "caption_position",
+                "caption_monitor")
 
 
 def log(msg):
@@ -158,15 +185,49 @@ def server_up():
 def spawn_hidden(args, stdout_path=None):
     """Start a detached, window-less child, mirroring start_tts.vbs."""
     try:
-        flags = 0x08000000 | 0x00000008   # CREATE_NO_WINDOW | DETACHED_PROCESS
         out = open(stdout_path, "w") if stdout_path else subprocess.DEVNULL
-        subprocess.Popen(args, cwd=ROOT, creationflags=flags,
-                         stdout=out, stderr=subprocess.STDOUT,
-                         stdin=subprocess.DEVNULL, close_fds=True)
+        kw = {}
+        if IS_WIN:
+            kw["creationflags"] = 0x08000000 | 0x00000008   # NO_WINDOW|DETACHED
+        else:
+            # detach from this process group so quitting the tray (or the
+            # terminal that started it) does not take the server with it
+            kw["start_new_session"] = True
+        subprocess.Popen(args, cwd=ROOT, stdout=out, stderr=subprocess.STDOUT,
+                         stdin=subprocess.DEVNULL, close_fds=True, **kw)
         return True
     except Exception as e:
         log(f"spawn failed {args}: {e}")
         return False
+
+
+def _pids_windows(name):
+    ps = ("Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | "
+          f"Where-Object {{ $_.CommandLine -like '*{name}*' }} | "
+          "ForEach-Object { $_.ProcessId }")
+    r = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
+                       capture_output=True, text=True, timeout=15)
+    return r.stdout.split()
+
+
+def _pids_posix(name):
+    """pgrep -f, then keep only real python processes.
+
+    -f matches the whole command line, which also matches any SHELL whose
+    command line happens to quote the script name -- killing those takes
+    out the terminal that launched us. Checking the executable name is
+    what makes this safe."""
+    r = subprocess.run(["pgrep", "-f", name], capture_output=True,
+                       text=True, timeout=10)
+    out = []
+    for pid in r.stdout.split():
+        try:
+            with open(f"/proc/{int(pid)}/comm", encoding="utf-8") as f:
+                if f.read().strip().startswith("python"):
+                    out.append(pid)
+        except (OSError, ValueError):
+            continue
+    return out
 
 
 def kill_script(name):
@@ -176,25 +237,39 @@ def kill_script(name):
     tray are all python.exe, and each runs as a venv-launcher + child pair."""
     n = 0
     try:
-        ps = ("Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | "
-              f"Where-Object {{ $_.CommandLine -like '*{name}*' }} | "
-              "ForEach-Object { $_.ProcessId }")
-        r = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
-                           capture_output=True, text=True, timeout=15)
         me = os.getpid()
-        for line in r.stdout.split():
+        for line in (_pids_windows(name) if IS_WIN else _pids_posix(name)):
             try:
                 pid = int(line.strip())
             except ValueError:
                 continue
             if pid == me:
                 continue
-            subprocess.run(["taskkill", "/F", "/PID", str(pid)],
-                           capture_output=True, timeout=10)
+            if IS_WIN:
+                subprocess.run(["taskkill", "/F", "/PID", str(pid)],
+                               capture_output=True, timeout=10)
+            else:
+                try:
+                    os.kill(pid, 15)          # SIGTERM; these all exit cleanly
+                except OSError:
+                    continue
             n += 1
     except Exception as e:
         log(f"kill {name} failed: {e}")
     return n
+
+
+def open_folder():
+    """Show the install folder in the desktop's file manager."""
+    try:
+        if IS_WIN:
+            os.startfile(ROOT)                       # noqa: S606 - Windows only
+        else:
+            subprocess.Popen(["xdg-open", ROOT], start_new_session=True)
+        return True
+    except Exception as e:
+        log(f"open folder failed: {e}")
+        return False
 
 
 def restart_server():
@@ -216,337 +291,38 @@ def restart_highlighter():
     return ok
 
 
+def restart_overlay():
+    """Restart the caption strip. It reads caption_style/caption_layout once
+    at startup, so changing either only takes effect through here."""
+    kill_script("overlay.py")
+    time.sleep(0.4)
+    ok = spawn_hidden([PY, "overlay.py"], os.path.join(ROOT, "overlay.err"))
+    log(f"overlay restart spawned={ok}")
+    return ok
+
+
 # --------------------------------------------------------------- tray icon
 
-user32 = ctypes.WinDLL("user32", use_last_error=True)
-gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
-shell32 = ctypes.WinDLL("shell32", use_last_error=True)
-kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+def make_tray(app):
+    """The notification-area icon, where the desktop has one.
 
-WM_DESTROY = 0x0002
-WM_COMMAND = 0x0111
-WM_RBUTTONUP = 0x0205
-WM_LBUTTONUP = 0x0202
-WM_LBUTTONDBLCLK = 0x0203
-WM_APP_TRAY = 0x0400 + 17
-WM_TASKBARCREATED = None          # registered at runtime; tray survives explorer restart
-
-NIM_ADD, NIM_MODIFY, NIM_DELETE = 0, 1, 2
-NIF_MESSAGE, NIF_ICON, NIF_TIP = 0x01, 0x02, 0x04
-TPM_RIGHTBUTTON, TPM_RETURNCMD = 0x0002, 0x0100
-MF_STRING, MF_SEPARATOR, MF_GRAYED = 0x0000, 0x0800, 0x0001
-
-LRESULT = ctypes.c_ssize_t
-WNDPROC = ctypes.WINFUNCTYPE(LRESULT, wintypes.HWND, wintypes.UINT,
-                             wintypes.WPARAM, wintypes.LPARAM)
-
-
-class WNDCLASS(ctypes.Structure):
-    _fields_ = [("style", wintypes.UINT), ("lpfnWndProc", WNDPROC),
-                ("cbClsExtra", ctypes.c_int), ("cbWndExtra", ctypes.c_int),
-                ("hInstance", wintypes.HINSTANCE), ("hIcon", wintypes.HICON),
-                ("hCursor", wintypes.HANDLE), ("hbrBackground", wintypes.HBRUSH),
-                ("lpszMenuName", wintypes.LPCWSTR),
-                ("lpszClassName", wintypes.LPCWSTR)]
-
-
-class NOTIFYICONDATA(ctypes.Structure):
-    _fields_ = [("cbSize", wintypes.DWORD), ("hWnd", wintypes.HWND),
-                ("uID", wintypes.UINT), ("uFlags", wintypes.UINT),
-                ("uCallbackMessage", wintypes.UINT), ("hIcon", wintypes.HICON),
-                ("szTip", wintypes.WCHAR * 128), ("dwState", wintypes.DWORD),
-                ("dwStateMask", wintypes.DWORD), ("szInfo", wintypes.WCHAR * 256),
-                ("uVersion", wintypes.UINT), ("szInfoTitle", wintypes.WCHAR * 64),
-                ("dwInfoFlags", wintypes.DWORD),
-                ("guidItem", ctypes.c_byte * 16), ("hBalloonIcon", wintypes.HICON)]
-
-
-class ICONINFO(ctypes.Structure):
-    _fields_ = [("fIcon", wintypes.BOOL), ("xHotspot", wintypes.DWORD),
-                ("yHotspot", wintypes.DWORD), ("hbmMask", wintypes.HBITMAP),
-                ("hbmColor", wintypes.HBITMAP)]
-
-
-class BITMAPINFOHEADER(ctypes.Structure):
-    _fields_ = [("biSize", wintypes.DWORD), ("biWidth", ctypes.c_long),
-                ("biHeight", ctypes.c_long), ("biPlanes", wintypes.WORD),
-                ("biBitCount", wintypes.WORD), ("biCompression", wintypes.DWORD),
-                ("biSizeImage", wintypes.DWORD),
-                ("biXPelsPerMeter", ctypes.c_long),
-                ("biYPelsPerMeter", ctypes.c_long),
-                ("biClrUsed", wintypes.DWORD), ("biClrImportant", wintypes.DWORD)]
-
-
-class POINT(ctypes.Structure):
-    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
-
-
-# ctypes assumes C `int` for anything it has no prototype for, so on 64-bit
-# every HWND/HINSTANCE/HMENU silently truncates -- or, as here, raises
-# "int too long to convert" from CreateWindowExW's hInstance. AUDIT records
-# the same lesson for the highlighter's layered window: declare the
-# prototypes, don't rely on defaults.
-UINT_PTR = ctypes.c_size_t
-
-user32.CreateWindowExW.restype = wintypes.HWND
-user32.CreateWindowExW.argtypes = [
-    wintypes.DWORD, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD,
-    ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
-    wintypes.HWND, wintypes.HMENU, wintypes.HINSTANCE, wintypes.LPVOID]
-user32.DefWindowProcW.restype = LRESULT
-user32.DefWindowProcW.argtypes = [wintypes.HWND, wintypes.UINT,
-                                  wintypes.WPARAM, wintypes.LPARAM]
-user32.RegisterClassW.restype = wintypes.ATOM
-user32.RegisterClassW.argtypes = [ctypes.POINTER(WNDCLASS)]
-user32.CreatePopupMenu.restype = wintypes.HMENU
-user32.CreatePopupMenu.argtypes = []
-user32.AppendMenuW.argtypes = [wintypes.HMENU, wintypes.UINT, UINT_PTR,
-                               wintypes.LPCWSTR]
-user32.TrackPopupMenu.restype = wintypes.BOOL
-user32.TrackPopupMenu.argtypes = [wintypes.HMENU, wintypes.UINT, ctypes.c_int,
-                                  ctypes.c_int, ctypes.c_int, wintypes.HWND,
-                                  wintypes.LPVOID]
-user32.DestroyMenu.argtypes = [wintypes.HMENU]
-user32.SetForegroundWindow.argtypes = [wintypes.HWND]
-user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT,
-                                wintypes.WPARAM, wintypes.LPARAM]
-user32.GetMessageW.argtypes = [ctypes.POINTER(wintypes.MSG), wintypes.HWND,
-                               wintypes.UINT, wintypes.UINT]
-user32.LoadCursorW.restype = wintypes.HANDLE
-user32.LoadCursorW.argtypes = [wintypes.HINSTANCE, wintypes.LPVOID]
-user32.CreateIconIndirect.restype = wintypes.HICON
-user32.CreateIconIndirect.argtypes = [ctypes.POINTER(ICONINFO)]
-user32.RegisterWindowMessageW.restype = wintypes.UINT
-user32.RegisterWindowMessageW.argtypes = [wintypes.LPCWSTR]
-gdi32.CreateDIBSection.restype = wintypes.HBITMAP
-gdi32.CreateDIBSection.argtypes = [
-    wintypes.HDC, ctypes.POINTER(BITMAPINFOHEADER), wintypes.UINT,
-    ctypes.POINTER(ctypes.c_void_p), wintypes.HANDLE, wintypes.DWORD]
-gdi32.CreateBitmap.restype = wintypes.HBITMAP
-gdi32.CreateBitmap.argtypes = [ctypes.c_int, ctypes.c_int, wintypes.UINT,
-                               wintypes.UINT, wintypes.LPVOID]
-gdi32.DeleteObject.argtypes = [wintypes.HGDIOBJ]
-shell32.Shell_NotifyIconW.restype = wintypes.BOOL
-shell32.Shell_NotifyIconW.argtypes = [wintypes.DWORD,
-                                      ctypes.POINTER(NOTIFYICONDATA)]
-kernel32.GetModuleHandleW.restype = wintypes.HMODULE
-kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
-
-
-def make_icon(size=32):
-    """Build the tray icon in memory: a rounded accent-blue tile with three
-    white 'text lines'. Drawn rather than shipped as a .ico so there is no
-    binary asset to lose, and no file path to get wrong at startup.
-
-    #3d5afe is the same accent the in-place highlighter paints words with."""
-    px = bytearray(size * size * 4)          # BGRA, premultiplied not required
-    r_out = size // 2 - 1
-    cx = cy = (size - 1) / 2.0
-    R, G, B = 0x3d, 0x5a, 0xfe
-
-    def rounded(x, y, radius=6.0):
-        """Inside a rounded square of half-width r_out with corner `radius`."""
-        dx, dy = abs(x - cx), abs(y - cy)
-        if dx > r_out or dy > r_out:
-            return False
-        ix, iy = r_out - radius, r_out - radius
-        if dx <= ix or dy <= iy:
-            return True
-        return (dx - ix) ** 2 + (dy - iy) ** 2 <= radius ** 2
-
-    # three text lines, as (top, bottom, left, right) in fractions of size
-    lines = [(0.30, 0.38, 0.26, 0.66),
-             (0.46, 0.54, 0.26, 0.74),
-             (0.62, 0.70, 0.26, 0.58)]
-
-    for y in range(size):
-        for x in range(size):
-            if not rounded(x, y):
-                continue
-            on_line = any(size * t <= y < size * bt and size * l <= x < size * rr
-                          for t, bt, l, rr in lines)
-            i = (y * size + x) * 4
-            if on_line:
-                px[i:i + 4] = bytes((255, 255, 255, 255))
-            else:
-                px[i:i + 4] = bytes((B, G, R, 255))
-
-    bi = BITMAPINFOHEADER()
-    bi.biSize = ctypes.sizeof(BITMAPINFOHEADER)
-    bi.biWidth = size
-    bi.biHeight = -size                      # top-down
-    bi.biPlanes = 1
-    bi.biBitCount = 32
-    bi.biCompression = 0                     # BI_RGB
-
-    bits = ctypes.c_void_p()
-    dib = gdi32.CreateDIBSection(None, ctypes.byref(bi), 0,
-                                 ctypes.byref(bits), None, 0)
-    if not dib or not bits.value:
-        raise OSError("CreateDIBSection failed for tray icon")
-    ctypes.memmove(bits.value, bytes(px), len(px))
-
-    # 1bpp AND mask: all zero = "use the color bitmap's alpha everywhere"
-    mask = gdi32.CreateBitmap(size, size, 1, 1, bytes(size * size // 8))
-    ii = ICONINFO(True, 0, 0, mask, dib)
-    hicon = user32.CreateIconIndirect(ctypes.byref(ii))
-    gdi32.DeleteObject(dib)
-    gdi32.DeleteObject(mask)
-    if not hicon:
-        raise OSError("CreateIconIndirect failed for tray icon")
-    return hicon
-
-
-# Menu command ids
-ID_STATUS, ID_SETTINGS, ID_STOP = 1, 2, 3
-ID_RESTART_SRV, ID_RESTART_HL, ID_LOGS, ID_QUIT = 4, 5, 6, 7
-ID_RECONNECT, ID_DEVICE = 8, 9
-
-
-class Tray:
-    """Hidden message window + notification-area icon, on its own thread."""
-
-    def __init__(self, app):
-        self.app = app
-        self.hwnd = None
-        self.hicon = None
-        self._proc = WNDPROC(self._wndproc)   # must outlive the window
-
-    # ---- win32 plumbing
-    def _wndproc(self, hwnd, msg, wparam, lparam):
-        try:
-            if msg == WM_APP_TRAY:
-                low = lparam & 0xFFFF
-                if low in (WM_RBUTTONUP, WM_LBUTTONUP, WM_LBUTTONDBLCLK):
-                    if low == WM_RBUTTONUP:
-                        self._menu()
-                    else:
-                        self.app.open_settings()
-                return 0
-            if msg == WM_COMMAND:
-                self._command(wparam & 0xFFFF)
-                return 0
-            if WM_TASKBARCREATED and msg == WM_TASKBARCREATED:
-                # explorer.exe restarted and took the tray with it
-                self._add()
-                return 0
-            if msg == WM_DESTROY:
-                user32.PostQuitMessage(0)
-                return 0
-        except Exception:
-            log("wndproc error\n" + traceback.format_exc())
-        return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
-
-    def _command(self, cid):
-        a = self.app
-        if cid == ID_SETTINGS:
-            a.open_settings()
-        elif cid == ID_STOP:
-            api("/stop", payload={})
-        elif cid == ID_RECONNECT:
-            # POST /devices re-initializes PortAudio and reopens the stream --
-            # the fix for "I replugged my headphones and sound went nowhere"
-            # without needing the settings panel at all.
-            threading.Thread(
-                target=api, args=("/devices",),
-                kwargs={"payload": {}, "timeout": 15.0}, daemon=True).start()
-        elif cid == ID_RESTART_SRV:
-            threading.Thread(target=restart_server, daemon=True).start()
-        elif cid == ID_RESTART_HL:
-            threading.Thread(target=restart_highlighter, daemon=True).start()
-        elif cid == ID_LOGS:
-            os.startfile(ROOT)
-        elif cid == ID_QUIT:
-            a.quit_all()
-
-    def _menu(self):
-        cfg = api("/config", timeout=0.6)
-        if cfg:
-            status = (f"Server: running  -  {cfg.get('effective_speed', '?')}x, "
-                      f"{cfg.get('voice', '?')}")
-            device = f"Output: {cfg.get('output_device_name') or '?'}"
-        else:
-            status = "Server: NOT RUNNING"
-            device = None
-
-        m = user32.CreatePopupMenu()
-        user32.AppendMenuW(m, MF_STRING | MF_GRAYED, ID_STATUS, status)
-        if device:
-            user32.AppendMenuW(m, MF_STRING | MF_GRAYED, ID_DEVICE, device)
-        user32.AppendMenuW(m, MF_SEPARATOR, 0, None)
-        user32.AppendMenuW(m, MF_STRING, ID_SETTINGS, "Settings...")
-        user32.AppendMenuW(m, MF_STRING, ID_STOP, "Stop speaking")
-        user32.AppendMenuW(m, MF_STRING, ID_RECONNECT, "Reconnect audio device")
-        user32.AppendMenuW(m, MF_SEPARATOR, 0, None)
-        user32.AppendMenuW(m, MF_STRING, ID_RESTART_SRV, "Restart TTS server")
-        user32.AppendMenuW(m, MF_STRING, ID_RESTART_HL, "Restart highlighter")
-        user32.AppendMenuW(m, MF_STRING, ID_LOGS, "Open Kokoro folder")
-        user32.AppendMenuW(m, MF_SEPARATOR, 0, None)
-        user32.AppendMenuW(m, MF_STRING, ID_QUIT, "Quit Kokoro")
-
-        pt = POINT()
-        user32.GetCursorPos(ctypes.byref(pt))
-        # Required dance: without the foreground grab the menu never closes
-        # when the user clicks elsewhere, and it swallows the next click.
-        user32.SetForegroundWindow(self.hwnd)
-        cid = user32.TrackPopupMenu(m, TPM_RIGHTBUTTON | TPM_RETURNCMD,
-                                    pt.x, pt.y, 0, self.hwnd, None)
-        user32.PostMessageW(self.hwnd, 0, 0, 0)
-        user32.DestroyMenu(m)
-        if cid:
-            self._command(cid)
-
-    def _nid(self, flags=NIF_MESSAGE | NIF_ICON | NIF_TIP):
-        nid = NOTIFYICONDATA()
-        nid.cbSize = ctypes.sizeof(NOTIFYICONDATA)
-        nid.hWnd = self.hwnd
-        nid.uID = 1
-        nid.uFlags = flags
-        nid.uCallbackMessage = WM_APP_TRAY
-        nid.hIcon = self.hicon or 0
-        nid.szTip = "Kokoro read-aloud"
-        return nid
-
-    def _add(self):
-        shell32.Shell_NotifyIconW(NIM_ADD, ctypes.byref(self._nid()))
-
-    def run(self):
-        """Create the window + icon and pump messages. Blocks its thread."""
-        global WM_TASKBARCREATED
-        hinst = kernel32.GetModuleHandleW(None)
-        cls = WNDCLASS()
-        cls.lpfnWndProc = self._proc
-        cls.hInstance = hinst
-        cls.lpszClassName = "KokoroTrayWnd"
-        # IDC_ARROW is a MAKEINTRESOURCE ordinal, not a string pointer
-        cls.hCursor = user32.LoadCursorW(None, ctypes.c_void_p(32512))
-        if not user32.RegisterClassW(ctypes.byref(cls)):
-            if ctypes.get_last_error() != 1410:           # already registered
-                raise OSError(f"RegisterClassW: {ctypes.get_last_error()}")
-
-        self.hwnd = user32.CreateWindowExW(0, "KokoroTrayWnd", "Kokoro",
-                                           0, 0, 0, 0, 0, None, None, hinst, None)
-        if not self.hwnd:
-            raise OSError(f"CreateWindowExW: {ctypes.get_last_error()}")
-
-        WM_TASKBARCREATED = user32.RegisterWindowMessageW("TaskbarCreated")
-        self.hicon = make_icon()
-        self._add()
-        log(f"tray icon added hwnd={self.hwnd}")
-
-        msg = wintypes.MSG()
-        while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
-            user32.TranslateMessage(ctypes.byref(msg))
-            user32.DispatchMessageW(ctypes.byref(msg))
-
-    def remove(self):
-        try:
-            if self.hwnd:
-                shell32.Shell_NotifyIconW(NIM_DELETE,
-                                          ctypes.byref(self._nid(NIF_MESSAGE)))
-                user32.PostMessageW(self.hwnd, WM_DESTROY, 0, 0)
-        except Exception:
-            pass
+    Windows gets the Shell_NotifyIcon implementation in tray_win32.py.
+    GNOME removed the legacy tray: an icon there needs the third-party
+    AppIndicator shell extension AND PyGObject, and Fedora builds `gi`
+    only for the system Python while this venv must be 3.12 (kokoro
+    requires <3.13), so the venv cannot import it at all. Rather than
+    depend on a source build plus an extension the user must keep
+    enabled, Linux has no icon and reaches the panel through the
+    desktop entry / `tray.py --settings` instead (RELEASE_PLAN 4.4's
+    planned fallback)."""
+    if not IS_WIN:
+        return None
+    try:
+        import tray_win32
+        return tray_win32.Tray(app)
+    except Exception:
+        log("tray icon unavailable\n" + traceback.format_exc())
+        return None
 
 
 # ------------------------------------------------------------ settings panel
@@ -562,7 +338,7 @@ class App:
         self.root.withdraw()
         self.win = None
         self.cfg = load_settings()
-        self.tray = Tray(self)
+        self.tray = make_tray(self)
         self._push_job = None     # debounce handle for slider drags
         self._rt = None           # last measured throughput, or None
         self._device_map = {DEVICE_DEFAULT_LABEL: None}   # label -> spec
@@ -591,9 +367,15 @@ class App:
         self.root.after(60, self._pump_ui)
 
     # ---- lifecycle
-    def start(self):
-        threading.Thread(target=self._tray_thread, daemon=True).start()
+    def start(self, open_panel=False):
+        if self.tray is not None:
+            threading.Thread(target=self._tray_thread, daemon=True).start()
+        elif not open_panel:
+            # no icon and no panel would leave nothing on screen at all
+            open_panel = True
         self.push(self.cfg, save=False)      # apply persisted settings on boot
+        if open_panel:
+            self.open_settings()
         self.root.mainloop()
 
     def _tray_thread(self):
@@ -606,7 +388,9 @@ class App:
         def go():
             kill_script("tts_server.py")
             kill_script("highlighter.py")
-            self.tray.remove()
+            kill_script("overlay.py")
+            if self.tray is not None:
+                self.tray.remove()
             try:
                 self.root.quit()
             except Exception:
@@ -617,10 +401,47 @@ class App:
     def open_settings(self):
         self.ui(self._open_settings)
 
+    # ---- actions the tray menu calls (see tray_win32.Tray's app contract)
+    def log(self, msg):
+        log(msg)
+
+    def menu_status(self):
+        """(status line, device line) for the top of the tray menu."""
+        cfg = api("/config", timeout=0.6)
+        if not cfg:
+            return "Server: NOT RUNNING", None
+        return (f"Server: running  -  {cfg.get('effective_speed', '?')}x, "
+                f"{cfg.get('voice', '?')}",
+                f"Output: {cfg.get('output_device_name') or '?'}")
+
+    def stop_speaking(self):
+        api("/stop", payload={})
+
+    def reconnect_audio(self):
+        threading.Thread(target=api, args=("/devices",),
+                         kwargs={"payload": {}, "timeout": 15.0},
+                         daemon=True).start()
+
+    def restart_server_async(self):
+        threading.Thread(target=restart_server, daemon=True).start()
+
+    def restart_highlighter_async(self):
+        threading.Thread(target=restart_highlighter, daemon=True).start()
+
+    def restart_overlay_async(self):
+        threading.Thread(target=restart_overlay, daemon=True).start()
+
+    def open_folder(self):
+        open_folder()
+
     # ---- server round trips
     def push(self, cfg, save=True):
-        """Send to the live server and optionally persist."""
-        api("/config", payload={k: cfg[k] for k in DEFAULTS if k in cfg})
+        """Send to the live server and optionally persist.
+
+        The caption keys are deliberately not sent: the server has no use
+        for them and the strip reads them off disk at startup."""
+        api("/config", payload={k: cfg[k] for k in DEFAULTS
+                                if k in cfg and k not in CAPTION_KEYS})
         if save:
             save_settings(cfg)
 
@@ -735,6 +556,44 @@ class App:
         ttk.Separator(frm).grid(row=next(rows), column=0, columnspan=3,
                                 sticky="ew", pady=10)
 
+        # --- caption strip. These two are the only settings the SERVER
+        # never sees: overlay.py reads them off disk when it starts, so
+        # they need it restarted rather than a /config push.
+        cap = ttk.LabelFrame(frm, text="Caption strip", padding=10)
+        cap.grid(row=next(rows), column=0, columnspan=3, sticky="ew", **pad)
+        ttk.Label(cap, text="Look").grid(row=0, column=0, sticky="w")
+        self.v_cap_style = tk.StringVar(value=self.cfg["caption_style"])
+        ttk.Combobox(cap, textvariable=self.v_cap_style, values=CAPTION_STYLES,
+                     state="readonly", width=16
+                     ).grid(row=0, column=1, sticky="e", pady=2)
+        ttk.Label(cap, text="Layout").grid(row=1, column=0, sticky="w")
+        self.v_cap_layout = tk.StringVar(value=self.cfg["caption_layout"])
+        ttk.Combobox(cap, textvariable=self.v_cap_layout, values=CAPTION_LAYOUTS,
+                     state="readonly", width=16
+                     ).grid(row=1, column=1, sticky="e", pady=2)
+
+        ttk.Label(cap, text="Show on").grid(row=2, column=0, sticky="w")
+        self._monitor_map = {MONITOR_PRIMARY_LABEL: "primary"}
+        self.v_cap_monitor = tk.StringVar(value=MONITOR_PRIMARY_LABEL)
+        self.cmb_monitor = ttk.Combobox(cap, textvariable=self.v_cap_monitor,
+                                        values=[MONITOR_PRIMARY_LABEL],
+                                        state="readonly", width=16)
+        self.cmb_monitor.grid(row=2, column=1, sticky="e", pady=2)
+
+        ttk.Label(cap, text="Position").grid(row=3, column=0, sticky="w")
+        self.v_cap_pos = tk.StringVar(value=self.cfg["caption_position"])
+        ttk.Combobox(cap, textvariable=self.v_cap_pos, values=CAPTION_POSITIONS,
+                     state="readonly", width=16
+                     ).grid(row=3, column=1, sticky="e", pady=2)
+
+        ttk.Label(cap, wraplength=400, foreground="#555", justify="left",
+                  text=("rows keeps the sentence in a fixed block; "
+                        "teleprompter scrolls the whole passage up past a "
+                        "fixed reading line. Save applies all of these.")
+                  ).grid(row=4, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        cap.columnconfigure(1, weight=1)
+        self._load_monitors()
+
         # --- advanced
         adv = ttk.LabelFrame(frm, text="Advanced", padding=10)
         adv.grid(row=next(rows), column=0, columnspan=3, sticky="ew", **pad)
@@ -805,7 +664,12 @@ class App:
                "playback_speed": round(playback, 3),
                "pause": round(self.v_pause.get(), 3),
                "first_chunk_audio": round(self.v_first.get(), 2),
-               "output_device": self._device_map.get(self.v_device.get())}
+               "output_device": self._device_map.get(self.v_device.get()),
+               "caption_style": self.v_cap_style.get(),
+               "caption_layout": self.v_cap_layout.get(),
+               "caption_position": self.v_cap_pos.get(),
+               "caption_monitor": self._monitor_map.get(
+                   self.v_cap_monitor.get(), "primary")}
         self.cfg = cfg
         self._push_debounced(cfg)
         return cfg
@@ -824,6 +688,29 @@ class App:
             lambda: threading.Thread(target=self.push, args=(cfg,),
                                      kwargs={"save": False},
                                      daemon=True).start())
+
+    def _load_monitors(self):
+        """Fill the monitor dropdown from the same enumeration the strip
+        uses, so the two can never disagree about what exists."""
+        mons = []
+        if _overlay is not None:
+            try:
+                mons = _overlay.list_monitors(self.root)
+            except Exception as e:
+                log(f"monitor list failed: {e}")
+        labels = [MONITOR_PRIMARY_LABEL]
+        self._monitor_map = {MONITOR_PRIMARY_LABEL: "primary"}
+        for m in mons:
+            label = (f"{m['name']}  {m['w']}x{m['h']}"
+                     + ("  (primary)" if m["primary"] else ""))
+            self._monitor_map[label] = m["name"]
+            labels.append(label)
+        self.cmb_monitor.config(values=labels)
+        want = self.cfg.get("caption_monitor", "primary")
+        self.v_cap_monitor.set(
+            next((lab for lab, name in self._monitor_map.items()
+                  if name == want and lab != MONITOR_PRIMARY_LABEL),
+                 MONITOR_PRIMARY_LABEL))
 
     def _load_devices(self, refresh=False):
         """Populate the output-device list, off the UI thread.
@@ -942,11 +829,20 @@ class App:
         self.status.config(text="Speaking a sample...")
 
     def _save(self):
+        was = load_settings()          # compare against disk, before the write
         cfg = self._apply_live()
         ok = save_settings(cfg)
-        self.status.config(
-            text="Saved - these settings now survive a restart." if ok
-                 else "Could not write settings.json (see tray.log).")
+        if not ok:
+            self.status.config(
+                text="Could not write settings.json (see tray.log).")
+            return
+        if any(was.get(k) != cfg.get(k) for k in CAPTION_KEYS):
+            # the strip reads these once at startup; nothing else applies them
+            self.restart_overlay_async()
+            self.status.config(text="Saved - restarting the caption strip.")
+        else:
+            self.status.config(
+                text="Saved - these settings now survive a restart.")
 
     def _reset(self):
         self.v_speed.set(round(DEFAULTS["model_speed"] * DEFAULTS["playback_speed"], 2))
@@ -955,6 +851,10 @@ class App:
         self.v_first.set(DEFAULTS["first_chunk_audio"])
         self.v_voice.set(DEFAULTS["voice"])
         self.v_device.set(DEVICE_DEFAULT_LABEL)
+        self.v_cap_style.set(DEFAULTS["caption_style"])
+        self.v_cap_layout.set(DEFAULTS["caption_layout"])
+        self.v_cap_pos.set(DEFAULTS["caption_position"])
+        self.v_cap_monitor.set(MONITOR_PRIMARY_LABEL)
         self._speed_changed()
         self.status.config(text="Reset to defaults (not saved yet).")
 
@@ -967,8 +867,10 @@ class App:
 
 
 def main():
+    """--settings opens the panel straight away, which is how the desktop
+    entry launches it where there is no tray icon to click."""
     try:
-        App().start()
+        App().start(open_panel="--settings" in sys.argv[1:])
     except Exception:
         log("FATAL\n" + traceback.format_exc())
         raise

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Same accent and three-text-lines motif as the Windows tray icon
+       (tray_win32.make_icon), drawn as vector so the desktop can scale it. -->
+  <rect x="4" y="4" width="56" height="56" rx="12" fill="#3d5afe"/>
+  <g fill="#ffffff">
+    <rect x="17" y="21" width="26" height="5" rx="2.5"/>
+    <rect x="17" y="30" width="30" height="5" rx="2.5"/>
+    <rect x="17" y="39" width="20" height="5" rx="2.5"/>
+  </g>
+</svg>

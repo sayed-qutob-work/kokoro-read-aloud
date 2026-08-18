@@ -826,8 +826,15 @@ def _word_char_end(text, words, idx):
 
 
 def _sentence_context(seq, pos, within=None):
-    """Return (previous sentence, current sentence, next sentence) around
-    the point currently being spoken, for the caption strip.
+    """Describe where the voice is, for the caption strip. Returns a dict:
+
+        prev/sentence/next  the sentence being spoken and one either side
+        full                every chunk synthesized so far, joined
+        span                [start, end] of `sentence` inside `full`
+
+    The three sentences drive the fixed-rows layout; `full` + `span` drive
+    the teleprompter, which scrolls the whole passage past a fixed line and
+    so needs more than one sentence of context in each direction.
 
     `within` is how many characters of the chunk at `pos` have actually
     been spoken (from the word timings). Without it the whole chunk
@@ -856,7 +863,8 @@ def _sentence_context(seq, pos, within=None):
     `seq` runs ahead of `pos` (synthesis leads playback), which is what
     makes the upcoming text available at all."""
     if not (0 <= pos < len(seq)):
-        return "", "", ""
+        return {"prev": "", "sentence": "", "next": "", "full": "",
+                "span": [0, 0]}
     texts = [c["text"] for c in seq]
     full = " ".join(texts)
     if within is None:
@@ -877,7 +885,12 @@ def _sentence_context(seq, pos, within=None):
     # `within` decides WHICH sentence is current, nothing more.
     prev_text = full[bounds[i - 1]:start] if i > 0 else ""
     nend = bounds[i + 2] if i + 2 < len(bounds) else len(full)
-    return prev_text.strip(), full[start:end].strip(), full[end:nend].strip()
+    sentence = full[start:end]
+    # span is reported against `full` UNSTRIPPED, so the teleprompter can
+    # locate the sentence inside the passage it renders
+    return {"prev": prev_text.strip(), "sentence": sentence.strip(),
+            "next": full[end:nend].strip(), "full": full,
+            "span": [start, start + len(sentence.rstrip())]}
 
 
 @app.get("/now")
@@ -907,12 +920,11 @@ def now():
     within = (_word_char_end(s["text"], s["words"], idx)
               if 0 <= pos < len(seq) and seq[pos]["text"] == s["text"]
               else None)
-    prev_text, sentence, next_text = _sentence_context(seq, pos, within)
+    ctx = _sentence_context(seq, pos, within)
     ends_sentence = seq[pos]["ends_sentence"] if 0 <= pos < len(seq) else False
     return jsonify(active=True, text=s["text"], words=s["words"],
                    word=idx, t=round(t, 3), utt=s["gen"],
-                   sentence=sentence, prev=prev_text, next=next_text,
-                   ends_sentence=ends_sentence)
+                   ends_sentence=ends_sentence, **ctx)
 
 
 @app.get("/utterance")
