@@ -285,6 +285,7 @@ ramp gapped *every* time.
 | **`MODEL_SPEED` > 1.3** | Rejected | Garbles onsets/endings. Use `PLAYBACK_SPEED` instead. |
 | **Trimming AHK `Sleep`/`KeyWait`** | Pointless | AHK contributes ~0 to START. Measured. |
 | **In-place highlighting in a terminal, via the terminal's OWN TextPattern** | **Impossible — proven 2026-07-18, still true** | xterm.js (VS Code's integrated terminal) paints text to a canvas and exposes it to accessibility through a hidden off-screen DOM mirror. Probed live: terminal text reports rects at `x=-11571` and `x=-14907`, height `58557`, for a window occupying `x=-1928..8`. UIA gives the text but no usable geometry and nothing bridges the two. Reading terminal text still works (that is `copyOnSelection`, unrelated). **Narrowed 2026-07-21** — the *ancestor* path is a different story, see §8. |
+| **Solaar for remapping the Logitech G Pro Wireless's buttons (Linux)** | **Tested, rejected — 2026-08-18** | Solaar's button remapping needs the HID++ `REPROG CONTROLS` feature (`0x1B00`/`0x1B04`). The G Pro Wireless exposes `MOUSE BUTTON SPY` (`0x8110`) and `ONBOARD PROFILES` (`0x8100`) instead — it's a gaming mouse, profile-programmed via G HUB's protocol on Windows, not the productivity-line reprogrammable-controls feature MX-series mice expose. `solaar show` confirms the feature is simply absent. Used `input-remapper` (evdev/uinput-level, Wayland-safe) instead — see 2026-08-18 §8 entry. |
 
 ### GPU — **TESTED AND ADOPTED 2026-08-11 on the current laptop.** See the
 ### 2026-08-11 entry in §8 for the measurements. Result: **25.03x RT** (from
@@ -1638,6 +1639,160 @@ instead of painting confident, wrong rectangles.
   out of view has no rectangle to paint, which is correct behaviour, not a
   miss. Judge reads by whether the marker is on the **right** word, and by
   `WRONG`/`rewinds`, not by `painted=`.
+
+---
+
+### DEPLOYED 2026-08-18: Linux (Fedora) install stood up — RELEASE_PLAN §1 spike passes, GPU already working, hotkeys wired
+
+Same laptop (i7-11370H + GTX 1650), now dual-booted into **Fedora 44
+Workstation, GNOME on Wayland** (`XDG_SESSION_TYPE=wayland`,
+`XDG_CURRENT_DESKTOP=GNOME` — confirmed, this is `docs/RELEASE_PLAN.md`
+open question 1, answered). This is the ground-truth session for
+`RELEASE_PLAN.md` §4 (Phase 4). Record of what was actually done and
+measured, not assumed.
+
+#### RELEASE_PLAN §1 spike: PASS — the cheap option works
+
+Ran the exact test §1 prescribed: a bare `tkinter` window with
+`overrideredirect(True)` + `-topmost` + `-alpha`, the same technique
+`overlay.py` already uses. It rendered on top of other windows and did
+**not** steal keyboard focus — confirmed visually by the user watching
+their own screen (I have no screenshot capability here; GNOME's
+`org.gnome.Shell.Screenshot` D-Bus call refuses non-interactive callers
+with `AccessDenied`, so this had to be eyeballed, not captured).
+
+**This resolves §1 in favor of option 1 (cheapest): no GNOME Shell
+extension, no KDE session, no `wlr-layer-shell` needed.** The caption
+strip can ship on Fedora/GNOME/Wayland using `overlay.py` close to
+unchanged. Phase 3/4 caption-strip work can proceed on that basis.
+
+#### GPU: already solved, just needed measuring (§4.2)
+
+The NVIDIA proprietary driver was **already installed** on this Fedora
+image (`nvidia-smi` → driver 610.57.04, GTX 1650 visible, RPM Fusion
+`akmod-nvidia` presumably done at OS-install time, not by this session).
+`requirements-cuda.txt` installs unmodified on Linux — PyTorch's `cu126`
+wheel index serves Linux wheels from the same URL, `torch==2.13.0+cu126`
+resolved and installed cleanly, `torch.cuda.is_available()` → `True`.
+
+**Measured, not carried over from Windows** (RELEASE_PLAN explicitly
+warns not to):
+
+| | Windows, this laptop, GTX 1650 (2026-08-11) | Fedora, this laptop, GTX 1650 (2026-08-18) |
+|---|---|---|
+| Throughput | 25.03x RT | **13.29x RT** |
+| Model warmup | not recorded | 3098ms |
+
+Lower than Windows, but headroom vs `playback_speed` 1.8 is still **~7.4x**
+— nowhere near break-even risk. Driver/OS stack legitimately changes the
+number; do not assume Linux inherits the Windows figure on other hardware.
+Not yet root-caused (different cuDNN build, different kernel driver
+version, first-run vs warm state — unmeasured, low priority since it's
+still far above the floor).
+
+#### Python / install: same constraint as Windows, different fix
+
+System Python is 3.14 (too new — same `kokoro` `<3.13` ceiling as the
+Windows venv note). Fedora ships 3.12 in repos but not installed by
+default: `sudo dnf install python3.12 python3.12-devel python3-tkinter
+python3.12-tkinter`, then `python3.12 -m venv env` (POSIX layout —
+`env/bin/python`, not `env/Scripts/python.exe`). `requirements-base.txt`'s
+`comtypes ; sys_platform == "win32"` marker correctly no-ops on Linux, no
+edits needed there. `portaudio` and `espeak-ng` were already present as
+Fedora system packages — no DLL-bundling step like Windows'
+`espeakng-loader` dance was needed, `misaki[en]` just used the system
+`espeak-ng`. `tts_server.py` needed **zero code changes** to run on Linux
+— the location-independence work in Phase 1 (`v0.1.0-beta` hygiene) paid
+off exactly as intended.
+
+`sudo` has no TTY in this environment (agent-run shell); `pkexec <cmd>`
+worked instead, popping a graphical polkit prompt — use that for any
+future package install here rather than assuming `sudo` works.
+
+#### Hotkeys (§4.3): `read_aloud.sh` (already committed) wired to GNOME custom shortcuts
+
+`read_aloud.sh` (added same day, prior commit) needed no changes. Bound
+via `gsettings` — GNOME's custom-keybinding path is a `dconf` list, not a
+config file, so this is scriptable, not GUI-only:
+
+```
+gsettings set org.gnome.settings-daemon.plugins.media-keys custom-keybindings \
+  "[...existing..., '.../custom3/', '.../custom4/', '.../custom5/']"
+# then per index: name / command / binding on
+# org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:<path>
+```
+
+Bound: **Ctrl+Alt+R** → `read_aloud.sh selection`, **Ctrl+Alt+T** →
+`read_aloud.sh clipboard`, **Ctrl+Alt+S** → `read_aloud.sh stop` — same
+chords as Windows, for muscle memory. Confirmed working end to end
+(`wl-paste --primary` → `/speak`).
+
+#### Mouse macro (§4.3, "Linux is arguably better here" — partly true, partly harder)
+
+Hardware: **Logitech G Pro Wireless**, via a Lightspeed receiver
+(`046d:c539`). **Solaar cannot remap this mouse's buttons** — see the new
+§6 row. Used **`input-remapper`** instead (`dnf install input-remapper`,
+`pkexec systemctl enable --now input-remapper` — it's a system service,
+not per-user), which works at the evdev/uinput level and is Wayland-safe
+(grabs the physical device, re-emits a virtual one, unmapped events
+including relative motion pass through untouched).
+
+The user wanted the same trick the Windows G HUB macro used (§8,
+2026-07-xx: "click-down → on release, click-up + Ctrl+Alt+R") — one
+button does double duty as the left mouse button (for drag-select) *and*
+the read trigger (on release), rather than needing left-click *and* a
+separate macro button. `input-remapper`'s macro language supports this
+directly via `hold()`, which holds a simulated key/button down for
+exactly as long as the physical trigger is held
+(`injection/macros/tasks/hold.py`):
+
+```
+hold(BTN_LEFT).wait(60).modify(KEY_LEFTCTRL, modify(KEY_LEFTALT, key(KEY_R)))
+```
+
+Bound to the mouse's side button. Real left-click is untouched (separate
+physical button, passed through unmapped).
+
+**Bug found and fixed the same session:** interrupting a playing read by
+selecting new text sometimes re-spoke the **old** (still-playing) text.
+Confirmed **not** a server bug — `/speak` (`tts_server.py:773-779`) takes
+exactly the POSTed text and `player.speak()` bumps `self.gen` fresh every
+call (`tts_server.py:598-614`), nothing is cached server-side. Root cause
+was a client-side race: the macro originally chained straight from the
+`BTN_LEFT` release into the `Ctrl+Alt+R` send with no gap, and
+occasionally fired before the target app's toolkit finished claiming
+PRIMARY-selection ownership from the just-completed drag — so
+`wl-paste --primary` in `read_aloud.sh` read the *previous* selection.
+**Fixed by adding `wait(60)` between the release and the hotkey** (in the
+macro above). General lesson for this platform: **PRIMARY-selection
+ownership transfer is not synchronous with the mouse-up event** — any
+future same-button select-and-trigger design needs a settle gap.
+
+#### Free side effect: tray dependency already satisfied
+
+`dnf install solaar` pulled in `gnome-shell-extension-appindicator` as a
+dependency — this is exactly the package RELEASE_PLAN §4.4 flagged as
+required friction for the Linux tray (GNOME dropped the legacy
+`StatusNotifier`/tray API; `pystray` needs the AppIndicator extension to
+show anything). It's installed but unverified — `tray.py` itself hasn't
+been touched yet (still hardcodes `env/Scripts/python.exe` and
+`Get-CimInstance`, RELEASE_PLAN §4.5).
+
+#### Still open (next Linux-porting session)
+
+- Caption strip itself: the §1 spike only proves the *rendering
+  technique* works. The strip's content/trigger logic (RELEASE_PLAN
+  Phase 2/3 — P3 anchor-scoring, `/highlight_state`, `/now` `prev`/`next`
+  chunk fields) is unbuilt on both platforms; Linux inherits it once
+  built, per the plan (`highlight_ok` always `false` on Linux → Auto
+  resolves to "on").
+- `tray.py` Linux port (§4.5): `env/bin/python` + `psutil`/`pgrep`
+  instead of `Get-CimInstance`.
+- `systemd --user` units to replace `start_tts.vbs` (§4.5) — not done
+  this session; the server was started by hand for testing and is not
+  yet autostarted.
+- Folder restructure (§4.6) — deliberately still deferred, per the plan's
+  own sequencing.
 
 ---
 

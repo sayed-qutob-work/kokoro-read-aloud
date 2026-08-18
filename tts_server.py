@@ -453,6 +453,13 @@ class Player:
         self.now = None                      # chunk being played, for /now
         self.source = ""                     # original text of the utterance
         self.source_gen = 0
+        # chunk text/ends_sentence in synthesis order, for the caption strip's
+        # prev/next context (RELEASE_PLAN §3.1/3.2). Reset per gen; appended
+        # in _synth_loop, walked by position in _play_loop. Same race
+        # tolerance as the rest of this class: a stale-gen entry can slip in
+        # between the check and the append, self-corrects next chunk.
+        self.chunk_seq = []
+        self.play_pos = -1
 
         self.lock = threading.Lock()
         self.cv = threading.Condition()
@@ -603,6 +610,8 @@ class Player:
             self.t_speak = time.perf_counter()
             self.source = text          # original, pre-sanitize: /utterance
             self.source_gen = gen
+            self.chunk_seq = []
+            self.play_pos = -1
         self._ensure_default_device()
         self._reset_audio()
         self._drain(self.audio_q)
@@ -616,6 +625,8 @@ class Player:
     def stop(self):
         with self.lock:
             self.gen += 1
+            self.chunk_seq = []
+            self.play_pos = -1
         self.now = None
         self._reset_audio()
         self._drain(self.audio_q)
@@ -718,7 +729,8 @@ class Player:
                        for t, _, s, e in words]
             # a real sentence end - or the end of the whole selection - earns
             # a real pause; clause boundaries and cuts get almost none
-            pause = SENTENCE_PAUSE if final or last in ".!?…" else CUT_PAUSE
+            ends_sentence = final or last in ".!?…"
+            pause = SENTENCE_PAUSE if ends_sentence else CUT_PAUSE
             if pause > 0:
                 audio = np.concatenate(
                     [audio, np.zeros(int(pause * sr), np.float32)])
@@ -729,6 +741,9 @@ class Player:
                 if gen != self.gen:
                     continue
                 self.play_until = max(self.play_until, now) + len(audio) / sr
+                # caption context (RELEASE_PLAN §3.1/3.2): index this chunk
+                # by synthesis order, walked positionally in _play_loop
+                self.chunk_seq.append({"text": buf, "ends_sentence": ends_sentence})
             self.audio_q.put((gen, audio, sr, buf, wordmap))
 
     def _play_loop(self):
@@ -740,6 +755,7 @@ class Player:
             waited = time.perf_counter() - t0
             if gen != self.gen:
                 continue
+            self.play_pos += 1
             # what /now reports; replaced whole so reads stay consistent
             self.now = {"gen": gen, "t0": time.perf_counter(),
                         "dur": len(audio) / sr, "text": buf, "words": wordmap}
@@ -788,7 +804,9 @@ def stop():
 @app.get("/now")
 def now():
     """What is being spoken right now, for the caption overlay: the chunk
-    text, its word timings, and which word is sounding at this instant."""
+    text, its word timings, which word is sounding, and one chunk of
+    context on either side (RELEASE_PLAN §3.1) plus whether this chunk
+    ends a sentence (§3.2, merge chunks until this is true)."""
     s = player.now
     if not s or s["gen"] != player.gen:
         return jsonify(active=False)
@@ -801,8 +819,14 @@ def now():
             idx = i
         else:
             break
+    seq, pos = player.chunk_seq, player.play_pos
+    prev_text = seq[pos - 1]["text"] if 0 < pos <= len(seq) else ""
+    next_text = seq[pos + 1]["text"] if 0 <= pos < len(seq) - 1 else ""
+    ends_sentence = seq[pos]["ends_sentence"] if 0 <= pos < len(seq) else False
     return jsonify(active=True, text=s["text"], words=s["words"],
-                   word=idx, t=round(t, 3), utt=s["gen"])
+                   word=idx, t=round(t, 3), utt=s["gen"],
+                   prev=prev_text, next=next_text,
+                   ends_sentence=ends_sentence)
 
 
 @app.get("/utterance")
