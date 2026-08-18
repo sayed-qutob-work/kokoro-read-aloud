@@ -4,5 +4,7 @@
   "playback_speed": 1.8,
   "pause": 0.1,
   "first_chunk_audio": 2.0,
-  "output_device": null
+  "output_device": null,
+  "caption_style": "underline",
+  "caption_layout": "rows"
 }

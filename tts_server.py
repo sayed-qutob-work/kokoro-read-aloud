@@ -801,12 +801,92 @@ def stop():
     return jsonify(ok=True)
 
 
+# end of sentence = terminal punctuation (plus any closing quote/bracket)
+# followed by whitespace. Sentence ends land in the MIDDLE of chunks, so
+# this runs over the text, never over chunk boundaries - see below.
+_SENTENCE_END = re.compile(r"(?<=[.!?…])[\"')\]]*\s+")
+
+
+def _word_char_end(text, words, idx):
+    """Char offset in `text` just past the word at `idx`.
+
+    `words` carries only the spoken tokens; punctuation and spacing live
+    in `text`, so the tokens are walked forward through it the same way
+    the caption strip used to map them."""
+    if idx < 0:
+        return 0
+    p = 0
+    for i, (w, _a, _b) in enumerate(words):
+        j = text.find(w, p)
+        if j >= 0:
+            p = j + len(w)
+        if i == idx:
+            return p
+    return len(text)
+
+
+def _sentence_context(seq, pos, within=None):
+    """Return (previous sentence, current sentence, next sentence) around
+    the point currently being spoken, for the caption strip.
+
+    `within` is how many characters of the chunk at `pos` have actually
+    been spoken (from the word timings). Without it the whole chunk
+    counts as played, and since one chunk here can hold several whole
+    sentences, the highlight would jump straight to the last sentence of
+    the chunk and sit there while the earlier ones are still being read.
+
+    Two things this deliberately does NOT do, each a bug that shipped:
+
+    - It does not take context from the neighbouring CHUNKS. Chunks cut
+      mid-sentence, so the chunk before `pos` is usually part of the very
+      sentence being highlighted, and the strip painted it twice: once
+      dimmed as "already spoken", once inside the highlight.
+    - It does not group by each chunk's `ends_sentence` flag either. That
+      flag only reports whether a chunk's LAST character is terminal
+      punctuation (_synth_loop), but chunks are packed to a character
+      budget and routinely swallow several sentence ends mid-chunk. On a
+      fast machine the chunks are large enough that no boundary is found
+      until the utterance ends, and the whole passage highlights as one
+      "sentence".
+
+    So sentences are found by splitting the reconstructed text, and the
+    current one is truncated at the chunk actually being played - that
+    truncation is what makes it the sentence "so far".
+
+    `seq` runs ahead of `pos` (synthesis leads playback), which is what
+    makes the upcoming text available at all."""
+    if not (0 <= pos < len(seq)):
+        return "", "", ""
+    texts = [c["text"] for c in seq]
+    full = " ".join(texts)
+    if within is None:
+        played_end = len(" ".join(texts[:pos + 1]))
+    else:
+        head = len(" ".join(texts[:pos]))            # start of this chunk
+        played_end = (head + 1 if pos else 0) + within
+
+    # sentence boundaries as offsets into `full`
+    bounds = [0] + [m.end() for m in _SENTENCE_END.finditer(full)] + [len(full)]
+    i = next((k for k in range(len(bounds) - 1)
+              if bounds[k] < played_end <= bounds[k + 1]), len(bounds) - 2)
+
+    start, end = bounds[i], bounds[i + 1]
+    # the WHOLE current sentence highlights, not just the spoken part of
+    # it: the strip is meant to be read slightly ahead of the voice, and
+    # a highlight that grew word by word reflowed the text constantly.
+    # `within` decides WHICH sentence is current, nothing more.
+    prev_text = full[bounds[i - 1]:start] if i > 0 else ""
+    nend = bounds[i + 2] if i + 2 < len(bounds) else len(full)
+    return prev_text.strip(), full[start:end].strip(), full[end:nend].strip()
+
+
 @app.get("/now")
 def now():
     """What is being spoken right now, for the caption overlay: the chunk
-    text, its word timings, which word is sounding, and one chunk of
-    context on either side (RELEASE_PLAN §3.1) plus whether this chunk
-    ends a sentence (§3.2, merge chunks until this is true)."""
+    text, its word timings, which word is sounding, and the sentence
+    being spoken with one sentence of context on either side
+    (RELEASE_PLAN 3.1/3.2). The strip renders `sentence` directly - it
+    does no chunk merging of its own."""
     s = player.now
     if not s or s["gen"] != player.gen:
         return jsonify(active=False)
@@ -820,12 +900,18 @@ def now():
         else:
             break
     seq, pos = player.chunk_seq, player.play_pos
-    prev_text = seq[pos - 1]["text"] if 0 < pos <= len(seq) else ""
-    next_text = seq[pos + 1]["text"] if 0 <= pos < len(seq) - 1 else ""
+    # how far into THIS chunk the voice has actually got, so a chunk
+    # holding several sentences still highlights the right one. Only
+    # trustworthy while chunk_seq[pos] is the chunk /now is describing -
+    # the two are written by different threads.
+    within = (_word_char_end(s["text"], s["words"], idx)
+              if 0 <= pos < len(seq) and seq[pos]["text"] == s["text"]
+              else None)
+    prev_text, sentence, next_text = _sentence_context(seq, pos, within)
     ends_sentence = seq[pos]["ends_sentence"] if 0 <= pos < len(seq) else False
     return jsonify(active=True, text=s["text"], words=s["words"],
                    word=idx, t=round(t, 3), utt=s["gen"],
-                   prev=prev_text, next=next_text,
+                   sentence=sentence, prev=prev_text, next=next_text,
                    ends_sentence=ends_sentence)
 
 

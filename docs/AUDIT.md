@@ -1778,6 +1778,87 @@ show anything). It's installed but unverified — `tray.py` itself hasn't
 been touched yet (still hardcodes `env/Scripts/python.exe` and
 `Get-CimInstance`, RELEASE_PLAN §4.5).
 
+#### Caption strip built (RELEASE_PLAN Phase 3 core) — and two bugs found by watching `/now`, not the screen
+
+Built on Linux first (user's call, reversing the plan's Windows-first
+order): Linux is the simpler case because there is no in-place
+highlighter to arbitrate against, so the strip is always on.
+
+`/now` gained `sentence`, `prev`, `next` (§3.1) and `ends_sentence`
+(§3.2); `overlay.py` renders dimmed / highlighted / upcoming with three
+selectable themes (`caption_style` in settings.json — `underline`,
+`terminal`, `rail`, from a design pass where all three were kept rather
+than one chosen for the user).
+
+**Bug 1 — the strip painted the same text twice**, reported by the user
+as "text repeated when it goes from one sentence to another". Cause was
+a granularity mismatch introduced in the first cut: `/now` returned the
+previous/next **chunk** while the strip highlighted an accumulated
+**sentence**, so whenever a sentence spanned several chunks the earlier
+chunk appeared both dimmed and inside the highlight. Fixed by making the
+context sentence-aligned server-side and deleting the strip's own
+chunk-merging state machine — the merge was being done twice, in two
+different units.
+
+**Bug 2 — found while verifying bug 1, and the more serious of the
+two.** With the context now grouped by each chunk's `ends_sentence`
+flag, a 3-sentence read highlighted **all 340 characters as one
+"sentence"**. `ends_sentence` only reports whether a chunk's LAST
+character is terminal punctuation (`_synth_loop`), but chunks are packed
+to a character budget and routinely swallow sentence ends mid-chunk. On
+this GPU chunks are large (200+ chars, ~13s of audio), so no boundary is
+detected until the utterance ends. **Chunk boundaries cannot express
+sentences on a fast machine, and the faster the machine the worse it
+gets** — the feature would have looked fine on the old CPU-bound desktop
+and broken here. Fixed by splitting the reconstructed text on terminal
+punctuation instead (`_SENTENCE_END`), independent of chunking.
+
+Fixing that exposed the last piece: with several sentences inside one
+chunk, chunk-level position put the highlight on the chunk's LAST
+sentence immediately and left it there for the whole ~13s. `/now`
+already had per-word timings, so `_word_char_end()` converts the
+sounding word index into a character offset and that picks the current
+sentence. The whole sentence highlights (not a word-by-word reveal —
+that reflowed the text on every word and fought reading ahead).
+
+Verified by polling `/now` across real reads and asserting no overlap
+between the dimmed and highlighted regions, plus a walk of the voice
+through a single multi-sentence chunk (3 stable states, one per
+sentence). **`painted=`-style "it looked right" was deliberately not
+used as the check** — same reasoning as the 2026-08-12 entry.
+
+#### Two follow-ups from using it: a moving anchor, and the wrong monitor
+
+**The highlighted sentence moved on every advance.** User: "it is hard
+to focus ... each sentence changes position going from the previous to
+the next." The three regions were flowed as ONE paragraph, so the
+highlight began wherever the previous sentence happened to end, landing
+somewhere different each time. Fixed by painting three fixed ROWS with
+the context rows **clamped to exactly one display line** (`_clip_line`,
+trimming with an ellipsis — previous keeps its tail, upcoming keeps its
+head). The clamp is the load-bearing part: a two-line neighbour would
+push the sentence to a different height and undo the whole thing. Rows
+stay present when empty for the same reason.
+
+**A second layout, since this is taste, not correctness**
+(`caption_layout`: `rows` | `teleprompter`). Teleprompter pins the
+current sentence to a fixed ROW (`TELE_ANCHOR`) with history scrolling
+up through it — text is pre-wrapped in `_wrap()` so the lines can be
+counted, and the widget is set `wrap="none"` so it cannot re-wrap on
+top of that. Verified by asserting the `now` tag starts on the same row
+across every state of a read.
+
+**The strip opened on the seam between two monitors.** `winfo_screenwidth()`
+returns the union of every monitor — measured **3840x1080** here — so
+centring on it put the strip at x=1470, straddling both screens.
+`_primary_monitor()` probes **xrandr** (absent on this Fedora install)
+then **Mutter's `org.gnome.Mutter.DisplayConfig`** over `gdbus`, falling
+back to the union. Note the logical-monitor record carries no size: the
+primary's connector must be resolved to its `is-current` mode. Measured
+primary = `1920x1080+0+0`, so the strip now opens at x=510. The union
+fallback stays correct on a single-monitor desktop and on Windows, where
+Tk reports the primary monitor anyway.
+
 #### Still open (next Linux-porting session)
 
 - Caption strip itself: the §1 spike only proves the *rendering

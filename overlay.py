@@ -8,16 +8,28 @@ process, launched hidden by start_tts.vbs with pythonw.exe on Windows
 (read_aloud.sh does not launch it on Linux yet; run it directly); the
 server does not know it exists.
 
-Highlights at SENTENCE granularity, not per word (RELEASE_PLAN §3.2):
-/now's chunks cut mid-sentence, so consecutive chunks are merged into a
-"sentence so far" buffer until one arrives with ends_sentence=True. The
-chunk immediately before/after (/now's prev/next, §3.1) is shown as
-already-spoken / upcoming context around it, giving ~4 lines total.
+Highlights at SENTENCE granularity, not per word (RELEASE_PLAN §3.2).
+The server does the sentence grouping (/now returns `sentence` with
+`prev`/`next` around it, §3.1); this only paints it.
+
+The three regions are three fixed ROWS -- one line of already-spoken
+context, the current sentence, one line of upcoming text -- so the
+highlighted sentence always starts at the same point on screen. Flowing
+them as one paragraph instead made the sentence begin wherever the last
+one ended, moving on every advance, and it was hard to follow.
+
+Three visual styles (settings.json "caption_style", or KOKORO_CAPTION_STYLE
+to override) came out of a design pass with three genuinely different
+directions on the table -- see THEMES below. All three were judged good
+enough to keep, so the choice is the user's, not baked into the code.
 
 Drag to move. Right-click to close. Appears only while speech is
 playing; hides itself ~0.7s after playback ends or Ctrl+Alt+S.
 """
 import json
+import os
+import re
+import subprocess
 import tkinter as tk
 import tkinter.font as tkfont
 from urllib.request import urlopen
@@ -26,59 +38,327 @@ URL = "http://127.0.0.1:5111/now"
 POLL_MS = 80          # while visible
 IDLE_MS = 500         # while hidden (also covers "server down")
 HIDE_AFTER_MS = 700   # inactive time before the strip hides
-WIDTH, HEIGHT = 900, 170   # ~4 lines at the font size below
+WIDTH = 900
+# "rows": one context line + up to ~3 lines of sentence + one context
+# line. "teleprompter": TELE_ROWS lines of running text with the current
+# sentence pinned to row TELE_ANCHOR. Both plus indicator row and hint.
+ROWS_HEIGHT = 220
+TELE_HEIGHT = 258
+TELE_ROWS, TELE_ANCHOR = 7, 2
+MARGIN_BOTTOM = 90        # gap between the strip and the screen edge
 
-BG = "#1b1b22"
-FG = "#e8e8ee"        # upcoming (not yet spoken)
-FG_DIM = "#84848f"    # already spoken
-HL_BG = "#3d5afe"     # sentence currently sounding
-HL_FG = "#ffffff"
+MAX_ALPHA = 0.94
+FADE_MS = 160          # show/hide fade duration
+FADE_STEP_MS = 16
 
-# "Segoe UI" (Windows) isn't installed on Linux; Tk silently substitutes
-# something for a missing family, but picking a real match keeps the
-# look intentional on both platforms instead of leaving it to chance.
-_PREFERRED_FONTS = ("Segoe UI", "Cantarell", "Noto Sans", "DejaVu Sans")
+_ROOT = os.path.dirname(os.path.abspath(__file__))
+SETTINGS_FILE = os.path.join(_ROOT, "settings.json")
+
+# "Segoe UI"/"Consolas" (Windows) aren't installed on Linux; Tk silently
+# substitutes something for a missing family, but picking a real match
+# keeps the look intentional on both platforms instead of leaving it to
+# chance.
+_SANS = ("Segoe UI", "Cantarell", "Noto Sans", "DejaVu Sans")
+_MONO = ("Cascadia Mono", "Consolas", "DejaVu Sans Mono", "Liberation Mono")
 
 
-def _pick_font(size):
+def _pick_font(families, size, **kw):
     available = set(tkfont.families())
-    for name in _PREFERRED_FONTS:
+    for name in families:
         if name in available:
-            return tkfont.Font(family=name, size=size)
-    return tkfont.Font(size=size)  # Tk's platform default
+            return tkfont.Font(family=name, size=size, **kw)
+    return tkfont.Font(size=size, **kw)  # Tk's platform default
+
+
+def _run(cmd):
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=3).stdout
+
+
+def _monitor_from_xrandr():
+    for line in _run(["xrandr", "--query"]).splitlines():
+        if " connected primary " in line:
+            m = re.search(r"(\d+)x(\d+)\+(\d+)\+(\d+)", line)
+            if m:
+                w, h, x, y = (int(g) for g in m.groups())
+                return x, y, w, h
+    return None
+
+
+def _monitor_from_mutter():
+    """GNOME/Wayland, where xrandr is often not installed at all."""
+    out = _run(["gdbus", "call", "--session",
+                "--dest", "org.gnome.Mutter.DisplayConfig",
+                "--object-path", "/org/gnome/Mutter/DisplayConfig",
+                "--method", "org.gnome.Mutter.DisplayConfig.GetCurrentState"])
+    # logical monitor: (x, y, scale, transform, primary, [(connector,...)], {})
+    log = re.search(r"\((\d+), (\d+), ([\d.]+), uint32 \d+, true, \[\('([^']+)'",
+                    out or "")
+    if not log:
+        return None
+    x, y, scale, connector = (int(log.group(1)), int(log.group(2)),
+                              float(log.group(3)), log.group(4))
+    # the logical monitor carries no size; its connector's CURRENT mode does
+    blk = out[out.index(f"(('{connector}',"):]
+    for m in re.finditer(r"\('[^']+', (\d+), (\d+), [\d.]+, [\d.]+, "
+                         r"\[[^\]]*\], \{([^}]*)\}\)", blk):
+        if "'is-current': <true>" in m.group(3):
+            return x, y, round(int(m.group(1)) / scale), round(int(m.group(2)) / scale)
+    return None
+
+
+def _primary_monitor(root):
+    """(x, y, w, h) of the PRIMARY monitor.
+
+    Tk only ever reports the union of every monitor - 3840x1080 across
+    two screens - so centring on winfo_screenwidth() lands the strip on
+    the seam between them. Both probes are best-effort; the union is the
+    fallback and is correct on a single-monitor desktop (and on Windows,
+    where Tk reports the primary monitor anyway)."""
+    for probe in (_monitor_from_xrandr, _monitor_from_mutter):
+        try:
+            got = probe()
+        except Exception:
+            got = None
+        if got and got[2] > 0 and got[3] > 0:
+            return got
+    return 0, 0, root.winfo_screenwidth(), root.winfo_screenheight()
+
+
+def _wrap(text, font, px):
+    """Greedy word wrap to a list of lines that each fit `px`.
+
+    Done here rather than by the Text widget so the teleprompter knows
+    exactly how many lines everything occupies - that is what lets the
+    current sentence sit on a fixed row."""
+    lines, line = [], ""
+    for word in text.split():
+        trial = f"{line} {word}" if line else word
+        if line and font.measure(trial) > px:
+            lines.append(line)
+            line = word
+        else:
+            line = trial
+    if line:
+        lines.append(line)
+    return lines
+
+
+def _clip_line(text, font, px, keep="head"):
+    """Trim `text` so it occupies exactly one display line of `px` pixels.
+
+    The context rows MUST NOT wrap: a two-line neighbour would push the
+    highlighted sentence to a different height and the reader would have
+    to hunt for it again (see `render`). keep="tail" keeps the END of the
+    text (the words just spoken), keep="head" keeps the beginning."""
+    if not text or font.measure(text) <= px:
+        return text
+    ell = "…"
+    if keep == "tail":
+        lo, hi = 0, len(text)
+        while lo < hi:                      # smallest suffix that fits
+            mid = (lo + hi) // 2
+            if font.measure(ell + text[mid:]) <= px:
+                hi = mid
+            else:
+                lo = mid + 1
+        return ell + text[lo:].lstrip()
+    lo, hi = 0, len(text)
+    while lo < hi:                          # longest prefix that fits
+        mid = (lo + hi + 1) // 2
+        if font.measure(text[:mid] + ell) <= px:
+            lo = mid
+        else:
+            hi = mid - 1
+    return text[:lo].rstrip() + ell
+
+
+# Three directions from the design pass (kokoro-caption-strip-directions
+# artifact), all kept -- none of them was a clear loser, so this is a
+# setting, not a decision made for the user.
+THEMES = {
+    # A -- no fill on the current sentence at all: bold text plus a
+    # colored underline, and a dot+label instead of a top bar.
+    "underline": dict(
+        fonts=_SANS, font_size=14,
+        bg="#16161d", border="#2c2c38",
+        fg_done="#55555f", fg_now="#f4f4f8", fg_next="#9a9aa8",
+        now_bold=True, now_style="underline",
+        accent="#ffb454", label="R E A D I N G", label_color="#c98a3c",
+        hint_color="#3d3d4c", indicator="dot", rail=False,
+    ),
+    # B -- monospace, near-black, phosphor green; a caret marks where
+    # speech is, small equalizer bars replace the top bar.
+    "terminal": dict(
+        fonts=_MONO, font_size=13,
+        bg="#0c0c0f", border="#23231f",
+        fg_done="#3a4a42", fg_now="#eafff5", fg_next="#7a9a8a",
+        now_bold=False, now_style="underline", caret=True,
+        accent="#5fffb0", label="reading -- live", label_color="#3f7a5e",
+        hint_color="#2c2c28", indicator="equalizer", rail=False,
+    ),
+    # C -- left accent rail instead of a top bar; current sentence gets
+    # a muted low-contrast tint, not a loud solid block.
+    "rail": dict(
+        fonts=_SANS, font_size=14,
+        bg="#17171f", border="#2a2a35",
+        fg_done="#63636f", fg_now="#f2f0ff", fg_next="#c7c5d6",
+        now_bold=False, now_style="fill", now_bg="#2a2440",
+        accent="#b48cff", label="Reading", label_color="#8f8fa3",
+        hint_color="#414150", indicator="waveform", rail=True,
+    ),
+}
+DEFAULT_STYLE = "underline"
+
+
+LAYOUTS = ("rows", "teleprompter")
+DEFAULT_LAYOUT = "rows"
+
+
+def _setting(env, key, allowed, default):
+    val = os.environ.get(env)
+    if not val:
+        try:
+            with open(SETTINGS_FILE, encoding="utf-8") as f:
+                val = json.load(f).get(key)
+        except (FileNotFoundError, ValueError):
+            val = None
+    return val if val in allowed else default
 
 
 class Overlay:
     def __init__(self):
+        self.theme = THEMES[_setting("KOKORO_CAPTION_STYLE", "caption_style",
+                                     THEMES, DEFAULT_STYLE)]
+        self.layout = _setting("KOKORO_CAPTION_LAYOUT", "caption_layout",
+                               LAYOUTS, DEFAULT_LAYOUT)
+        self.height = TELE_HEIGHT if self.layout == "teleprompter" else ROWS_HEIGHT
         self.root = tk.Tk()
         self.root.withdraw()
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", True)
-        self.root.attributes("-alpha", 0.93)
-        self.root.configure(bg=BG)
-        self.text = tk.Text(self.root, wrap="word", bd=0, padx=14, pady=10,
-                            bg=BG, fg=FG, cursor="arrow", highlightthickness=0,
-                            font=_pick_font(13), state="disabled")
-        self.text.pack(fill="both", expand=True)
-        self.text.tag_configure("done", foreground=FG_DIM)
-        self.text.tag_configure("now", background=HL_BG, foreground=HL_FG)
-        sw = self.root.winfo_screenwidth()
-        sh = self.root.winfo_screenheight()
-        self.root.geometry(f"{WIDTH}x{HEIGHT}+{(sw - WIDTH) // 2}+{sh - HEIGHT - 90}")
-        for w in (self.root, self.text):
+        self.root.attributes("-alpha", 0.0)   # fades in on first show
+        self._build_ui()
+
+        mx, my, mw, mh = _primary_monitor(self.root)
+        self.root.geometry(f"{WIDTH}x{self.height}"
+                           f"+{mx + (mw - WIDTH) // 2}"
+                           f"+{my + mh - self.height - MARGIN_BOTTOM}")
+        for w in self._draggable:
             w.bind("<Button-1>", self._drag_start)
             w.bind("<B1-Motion>", self._drag_move)
             w.bind("<Button-3>", lambda e: self.root.destroy())
         self.visible = False
         self.miss = 0
+        self._alpha = 0.0
+        self._fade_job = None
         self._reset_sentence_state()
         self.root.after(IDLE_MS, self.poll)
 
+    def _build_ui(self):
+        th = self.theme
+        bg, border, accent = th["bg"], th["border"], th["accent"]
+
+        self.root.configure(bg=border)          # 1px border shows through the pad
+        outer = tk.Frame(self.root, bg=border)
+        outer.pack(fill="both", expand=True, padx=1, pady=1)
+        card = tk.Frame(outer, bg=bg)
+        card.pack(fill="both", expand=True)
+
+        left = tk.Frame(card, bg=accent, width=4) if th["rail"] else None
+        if left:
+            left.pack(fill="y", side="left")
+        else:
+            tk.Frame(card, bg=accent, height=3).pack(fill="x", side="top")
+
+        body = tk.Frame(card, bg=bg)
+        body.pack(fill="both", expand=True, side="left" if th["rail"] else "top")
+
+        indicator_row = tk.Frame(body, bg=bg)
+        indicator_row.pack(fill="x", side="top",
+                           padx=(18 if th["rail"] else 20, 20),
+                           pady=(14, 0))
+        self._build_indicator(indicator_row)
+
+        text_font = _pick_font(th["fonts"], th["font_size"])
+        now_font = _pick_font(th["fonts"], th["font_size"],
+                              weight="bold" if th["now_bold"] else "normal")
+        pad = 18 if th["rail"] else 20
+        tele = self.layout == "teleprompter"
+        self.font = text_font
+        # usable text width, for the one-line clamp and the wrapper
+        self.text_px = WIDTH - 2 - (4 if th["rail"] else 0) - 2 * pad
+        # teleprompter pre-wraps its own lines so it can count them, so
+        # the widget must not wrap on top of that
+        self.text = tk.Text(body, wrap="none" if tele else "word", bd=0,
+                            padx=pad, pady=14,
+                            bg=bg, fg=th["fg_next"], cursor="arrow",
+                            highlightthickness=0, font=text_font,
+                            spacing2=0 if tele else 5, state="disabled")
+        self.text.pack(fill="both", expand=True, side="top")
+        self.text.tag_configure("done", foreground=th["fg_done"])
+        self.text.tag_configure("caret", foreground=accent, font=now_font)
+        self.text.tag_configure("upcoming", spacing1=0 if tele else 8)
+        now_cfg = dict(foreground=th["fg_now"], font=now_font,
+                       spacing1=0 if tele else 8, spacing3=0 if tele else 2)
+        if th["now_style"] == "fill":
+            self.text.tag_configure("now", background=th["now_bg"], **now_cfg)
+        else:
+            self.text.tag_configure("now", underline=True, underlinefg=accent,
+                                    **now_cfg)
+
+        hint = tk.Label(body, text="drag to move  ·  right-click to close",
+                        bg=bg, fg=th["hint_color"],
+                        font=_pick_font(th["fonts"], 9), anchor="e")
+        hint.pack(fill="x", side="bottom", padx=(18 if th["rail"] else 16, 20),
+                  pady=(0, 8))
+
+        self._draggable = [self.root, outer, card, body, indicator_row,
+                           self.text, hint] + ([left] if left else [])
+
+    def _build_indicator(self, row):
+        th = self.theme
+        kind = th["indicator"]
+        if kind == "dot":
+            c = tk.Canvas(row, width=8, height=8, bg=th["bg"],
+                         highlightthickness=0)
+            c.create_oval(1, 1, 7, 7, fill=th["accent"], outline="")
+            c.pack(side="left")
+        elif kind in ("equalizer", "waveform"):
+            heights = (6, 11, 8, 14, 5) if kind == "equalizer" else (4, 10, 14, 8, 4)
+            w = tk.Canvas(row, width=len(heights) * 4, height=14,
+                         bg=th["bg"], highlightthickness=0)
+            for i, h in enumerate(heights):
+                x = i * 4
+                w.create_rectangle(x, 14 - h, x + 2, 14, fill=th["accent"],
+                                   outline="")
+            w.pack(side="left")
+        lbl = tk.Label(row, text=th["label"], bg=th["bg"], fg=th["label_color"],
+                       font=_pick_font(th["fonts"], 11 if th["indicator"] == "dot"
+                                       else 12))
+        lbl.pack(side="left", padx=(6, 0))
+
+    def _fade_to(self, target, on_done=None):
+        if self._fade_job:
+            self.root.after_cancel(self._fade_job)
+            self._fade_job = None
+        steps = max(1, FADE_MS // FADE_STEP_MS)
+        start = self._alpha
+        delta = (target - start) / steps
+
+        def step(n=0):
+            self._alpha = target if n >= steps else start + delta * n
+            self.root.attributes("-alpha", max(0.0, min(MAX_ALPHA, self._alpha)))
+            if n < steps:
+                self._fade_job = self.root.after(FADE_STEP_MS, step, n + 1)
+            else:
+                self._fade_job = None
+                if on_done:
+                    on_done()
+
+        step()
+
     def _reset_sentence_state(self):
-        self.last_utt = None
-        self.last_chunk = None
-        self.sentence_buf = ""
-        self.prev_ended = True   # the next new chunk starts a fresh sentence
+        self.last_render = None   # (prev, sentence, next) last painted
 
     def _drag_start(self, e):
         self._dx = e.x_root - self.root.winfo_x()
@@ -88,28 +368,67 @@ class Overlay:
         self.root.geometry(f"+{e.x_root - self._dx}+{e.y_root - self._dy}")
 
     def render(self, prev_text, now_text, next_text):
-        """Lay out done/now/upcoming as one block and tag each span.
-        Each piece is optional (start or end of an utterance)."""
-        parts, spans, cursor = [], {}, 0
-        for key, s in (("done", prev_text), ("now", now_text), (None, next_text)):
-            if not s:
-                continue
-            if parts:
-                parts.append(" ")
-                cursor += 1
-            start = cursor
-            parts.append(s)
-            cursor += len(s)
-            if key:
-                spans[key] = (start, cursor)
-        full = "".join(parts)
+        if self.layout == "teleprompter":
+            self._render_teleprompter(prev_text, now_text, next_text)
+        else:
+            self._render_rows(prev_text, now_text, next_text)
+
+    def _render_teleprompter(self, prev_text, now_text, next_text):
+        """Running text with the current sentence pinned to a fixed row.
+
+        Everything is pre-wrapped so the rows can be counted: the spoken
+        history is trimmed (or padded) to exactly TELE_ANCHOR lines, which
+        puts the sentence on the same row every time while the text
+        appears to scroll up through it."""
+        px, font = self.text_px, self.font
+        now_lines = _wrap(now_text, font, px) or [""]
+        if self.theme.get("caret") and now_text:
+            now_lines[0] = "▌ " + now_lines[0]
+
+        above = _wrap(prev_text, font, px)[-TELE_ANCHOR:] if TELE_ANCHOR else []
+        above = [""] * (TELE_ANCHOR - len(above)) + above     # pad to the anchor
+        rows = (above + now_lines + _wrap(next_text, font, px))[:TELE_ROWS]
+        rows += [""] * (TELE_ROWS - len(rows))
 
         t = self.text
         t.configure(state="normal")
         t.delete("1.0", "end")
-        t.insert("1.0", full)
-        for key, (a, b) in spans.items():
-            t.tag_add(key, f"1.0+{a}c", f"1.0+{b}c")
+        t.insert("1.0", "\n".join(rows))
+        for i in range(TELE_ANCHOR):
+            t.tag_add("done", f"{i + 1}.0", f"{i + 1}.end")
+        for i in range(TELE_ANCHOR, min(TELE_ANCHOR + len(now_lines), TELE_ROWS)):
+            first = i == TELE_ANCHOR and self.theme.get("caret") and now_text
+            t.tag_add("now", f"{i + 1}.{2 if first else 0}", f"{i + 1}.end")
+            if first:
+                t.tag_add("caret", f"{i + 1}.0", f"{i + 1}.1")
+        t.configure(state="disabled")
+
+    def _render_rows(self, prev_text, now_text, next_text):
+        """Paint the three regions as three fixed ROWS, not one flowed
+        paragraph.
+
+        Flowing them together meant the highlighted sentence began
+        wherever the previous one happened to end, so it landed at a
+        different place on every advance and the reader had to find it
+        again each time. Here the context rows are clamped to exactly one
+        line each, so the current sentence always starts at the same
+        point and only its own length varies."""
+        t = self.text
+        caret = self.theme.get("caret") and now_text
+        prev_line = _clip_line(prev_text, self.font, self.text_px, keep="tail")
+        next_line = _clip_line(next_text, self.font, self.text_px, keep="head")
+        now_line = ("▌ " + now_text) if caret else now_text
+
+        t.configure(state="normal")
+        t.delete("1.0", "end")
+        # the rows stay present even when empty: a collapsed row would
+        # move the sentence, which is the whole thing being fixed here
+        t.insert("1.0", f"{prev_line}\n{now_line}\n{next_line}")
+        t.tag_add("done", "1.0", "1.end")
+        t.tag_add("now", "2.2" if caret else "2.0", "2.end")
+        if caret:
+            t.tag_add("caret", "2.0", "2.1")
+        t.tag_add("upcoming", "3.0", "3.end")
         t.configure(state="disabled")
 
     def poll(self):
@@ -120,26 +439,28 @@ class Overlay:
             d = {}
         if d.get("active"):
             self.miss = 0
-            utt = d.get("utt")
-            chunk_text = d.get("text", "")
-            if utt != self.last_utt:
-                self._reset_sentence_state()
-                self.last_utt = utt
-            if chunk_text != self.last_chunk:
-                self.sentence_buf = chunk_text if self.prev_ended else \
-                    (self.sentence_buf + " " + chunk_text).strip()
-                self.prev_ended = d.get("ends_sentence", False)
-                self.last_chunk = chunk_text
-                self.render(d.get("prev", ""), self.sentence_buf, d.get("next", ""))
+            # the server groups chunks into sentences (/now `sentence`);
+            # merging them here as well is what used to paint the opening
+            # of a multi-chunk sentence twice
+            now = (d.get("prev", ""), d.get("sentence", d.get("text", "")),
+                   d.get("next", ""))
+            if now != self.last_render:
+                self.last_render = now
+                self.render(*now)
             if not self.visible:
                 self.root.deiconify()
                 self.visible = True
+                self._fade_to(MAX_ALPHA)
         elif self.visible:
             self.miss += 1
             if self.miss * POLL_MS >= HIDE_AFTER_MS:
-                self.root.withdraw()
                 self.visible = False
                 self._reset_sentence_state()
+
+                def _hidden():
+                    self.root.withdraw()
+
+                self._fade_to(0.0, on_done=_hidden)
         self.root.after(POLL_MS if self.visible else IDLE_MS, self.poll)
 
 

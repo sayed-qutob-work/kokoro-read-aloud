@@ -8,11 +8,11 @@ reports rects at x=-11571 with a 58557px height for a window living in
 x=-1928..8. UIA yields the terminal's text but no usable geometry, and
 nothing bridges the two. Don't spend time here again.
 
-The point: highlight the word being spoken ON the original text, not a
-copy of it. Windows won't let one process restyle another's rendered
+Ton't let one process restyle another's rendered
 text, but UI Automation exposes the exact on-screen rectangle of any
 text range, and a layered click-through window can tint just that
-rectangle. Visually the word in the source document gets a translucent
+rectangle. Visually the word in the source document gets ahe point: highlight the word being spoken ON the original text, not a
+copy of it. Windows w translucent
 marker, Speechify-style. If an app exposes no TextPattern at all, this
 process simply does nothing. (The Chromium extension in
 C:\kokoro\extension is optional; Firefox works through UIA directly.)
