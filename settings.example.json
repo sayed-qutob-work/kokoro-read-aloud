@@ -8,5 +8,6 @@
   "caption_style": "underline",
   "caption_layout": "rows",
   "caption_position": "bottom",
-  "caption_monitor": "primary"
+  "caption_monitor": "primary",
+  "caption_smooth": "on"
 }

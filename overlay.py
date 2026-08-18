@@ -49,7 +49,8 @@ MARGIN_EDGE = 90          # gap between the strip and the screen edge
 
 MAX_ALPHA = 0.94
 FADE_MS = 160          # show/hide fade duration
-FADE_STEP_MS = 16
+FADE_STEP_MS = 16      # ~60fps, the tick for every animation here
+SCROLL_MS = 280        # teleprompter glide between reading positions
 
 _ROOT = os.path.dirname(os.path.abspath(__file__))
 SETTINGS_FILE = os.path.join(_ROOT, "settings.json")
@@ -272,6 +273,10 @@ class Overlay:
         # fall back to the primary monitor
         self.monitor = (os.environ.get("KOKORO_CAPTION_MONITOR")
                         or _raw_setting("caption_monitor") or "primary")
+        # motion can be unwelcome (vestibular sensitivity, or just taste),
+        # and it is the kind of thing that must be switchable off
+        self.smooth = _setting("KOKORO_CAPTION_SMOOTH", "caption_smooth",
+                               ("on", "off"), "on") == "on"
         self.height = TELE_HEIGHT if self.layout == "teleprompter" else ROWS_HEIGHT
         self.root = tk.Tk()
         self.root.withdraw()
@@ -289,6 +294,11 @@ class Overlay:
         self.miss = 0
         self._alpha = 0.0
         self._fade_job = None
+        self._scroll_job = None
+        self._scroll_pos = 0.0
+        self._line_h = None
+        self._tele_full = None
+        self._tele_lines, self._tele_offsets = [], []
         self._reset_sentence_state()
         self.root.after(IDLE_MS, self.poll)
 
@@ -396,10 +406,12 @@ class Overlay:
             self._fade_job = None
         steps = max(1, FADE_MS // FADE_STEP_MS)
         start = self._alpha
-        delta = (target - start) / steps
 
         def step(n=0):
-            self._alpha = target if n >= steps else start + delta * n
+            # ease-in-out, so the strip appears and leaves without a snap
+            p = 1.0 if n >= steps else (n / steps)
+            p = p * p * (3 - 2 * p)                    # smoothstep
+            self._alpha = start + (target - start) * p
             self.root.attributes("-alpha", max(0.0, min(MAX_ALPHA, self._alpha)))
             if n < steps:
                 self._fade_job = self.root.after(FADE_STEP_MS, step, n + 1)
@@ -411,7 +423,9 @@ class Overlay:
         step()
 
     def _reset_sentence_state(self):
-        self.last_render = None   # (prev, sentence, next) last painted
+        self.last_render = None   # last /now fields painted
+        self._tele_full = None    # forget the wrapped passage
+        self._scroll_pos = 0.0
 
     def _drag_start(self, e):
         self._dx = e.x_root - self.root.winfo_x()
@@ -432,23 +446,16 @@ class Overlay:
                               d.get("sentence", d.get("text", "")),
                               d.get("next", ""))
 
-    def _render_teleprompter(self, full, span):
-        """The whole passage, scrolling upward past a fixed reading line.
-
-        The first draft of this only had one sentence of context either
-        side, which made it look almost identical to the rows layout. A
-        teleprompter's defining behaviour is that the TEXT MOVES: the
-        entire passage is wrapped once, and the window onto it is chosen
-        so the current sentence always begins on row TELE_ANCHOR. As the
-        read advances that window slides down the text, so on screen the
-        text scrolls up, line by line, through a stationary reading line."""
-        px, font = self.text_px, self.font
-        start, end = span
-        # wrap the passage while tracking where each line began, so the
-        # sentence can be found again after wrapping
+    def _tele_wrap(self, full):
+        """Wrap the passage once and lay it into the widget, padded so the
+        first line can still sit on the anchor row and the last can scroll
+        up past it. Cached: this only redoes itself as more of the passage
+        arrives, never on every poll."""
+        if full == self._tele_full:
+            return self._tele_lines, self._tele_offsets
         lines, offsets, cursor = [], [], 0
         for para in full.split("\n"):
-            for line in (_wrap(para, font, px) or [""]):
+            for line in (_wrap(para, self.font, self.text_px) or [""]):
                 i = full.find(line, cursor)
                 if i < 0:
                     i = cursor
@@ -457,44 +464,99 @@ class Overlay:
                 cursor = i + len(line)
         if not lines:
             lines, offsets = [""], [0]
+        self._tele_full, self._tele_lines, self._tele_offsets = \
+            full, lines, offsets
+
+        t = self.text
+        t.configure(state="normal")
+        t.delete("1.0", "end")
+        t.insert("1.0", "\n".join([""] * TELE_ANCHOR + lines + [""] * TELE_ROWS))
+        t.configure(state="disabled")
+        self._line_h = None
+        return lines, offsets
+
+    def _tele_line_h(self):
+        """Measured, not computed from font metrics: tag spacing and the
+        widget's own padding both feed into it."""
+        if not self._line_h:
+            self.root.update_idletasks()
+            a = self.text.dlineinfo("1.0")
+            b = self.text.dlineinfo("2.0")
+            self._line_h = (b[1] - a[1]) if (a and b) else \
+                self.font.metrics("linespace")
+        return self._line_h
+
+    def _scroll_to(self, line):
+        """Glide the reading position to `line`. Whole-line jumps are what
+        the eye reads as the text 'moving'; easing it out over SCROLL_MS
+        keeps that motion continuous instead of a snap per sentence."""
+        if self._scroll_job:
+            self.root.after_cancel(self._scroll_job)
+            self._scroll_job = None
+        start, target = self._scroll_pos, float(line)
+        h = self._tele_line_h()
+
+        def place(pos):
+            self._scroll_pos = pos
+            self.text.yview_moveto(0.0)
+            self.text.yview_scroll(int(round(max(0.0, pos) * h)), "pixels")
+
+        if not self.smooth or abs(target - start) < 0.02:
+            place(target)
+            return
+        steps = max(1, SCROLL_MS // FADE_STEP_MS)
+
+        def step(n=1):
+            p = 1 - (1 - n / steps) ** 3          # ease-out cubic
+            place(start + (target - start) * p)
+            if n < steps:
+                self._scroll_job = self.root.after(FADE_STEP_MS, step, n + 1)
+            else:
+                place(target)
+                self._scroll_job = None
+
+        step()
+
+    def _render_teleprompter(self, full, span):
+        """The whole passage, scrolling upward past a fixed reading line.
+
+        The first draft of this only had one sentence of context either
+        side, which made it look almost identical to the rows layout. A
+        teleprompter's defining behaviour is that the TEXT MOVES: the
+        entire passage goes into the widget and the WIDGET is scrolled, so
+        the motion can be animated between reading positions rather than
+        the content being re-sliced each time."""
+        start, end = span
+        lines, offsets = self._tele_wrap(full)
 
         # first and last wrapped line the current sentence touches
         first = max((n for n, o in enumerate(offsets) if o <= start), default=0)
         last = max((n for n, o in enumerate(offsets) if o < max(end, start + 1)),
                    default=first)
-
-        top = first - TELE_ANCHOR            # the scroll position
-        shown = []                           # (row text, source offset)
-        for r in range(TELE_ROWS):
-            n = top + r
-            shown.append((lines[n], offsets[n]) if 0 <= n < len(lines)
-                         else ("", None))
-        caret_on = bool(self.theme.get("caret")) and bool(shown[TELE_ANCHOR][0])
-        rows = [txt for txt, _ in shown]
-        if caret_on:
-            rows[TELE_ANCHOR] = "▌ " + rows[TELE_ANCHOR]
+        caret_on = bool(self.theme.get("caret"))
 
         t = self.text
         t.configure(state="normal")
-        t.delete("1.0", "end")
-        t.insert("1.0", "\n".join(rows))
-        for r, (txt, off) in enumerate(shown):
-            if off is None or not txt:
+        for tag in ("done", "upcoming", "now", "caret"):
+            t.tag_remove(tag, "1.0", "end")
+        for n, (txt, off) in enumerate(zip(lines, offsets)):
+            if not txt:
                 continue
-            shift = 2 if (r == TELE_ANCHOR and caret_on) else 0
+            row = n + TELE_ANCHOR + 1                  # padded line number
             # whole row as context first; `now` is configured last so it
             # has the higher tag priority and paints over this
             t.tag_add("done" if off < start else "upcoming",
-                      f"{r + 1}.{shift}", f"{r + 1}.end")
+                      f"{row}.0", f"{row}.end")
             # highlight only the characters of the sentence itself, so a
             # line shared with the neighbouring sentence is not swept up
             a, b = max(start, off), min(end, off + len(txt))
             if a < b:
-                t.tag_add("now", f"{r + 1}.{a - off + shift}",
-                          f"{r + 1}.{b - off + shift}")
-            if shift:
-                t.tag_add("caret", f"{r + 1}.0", f"{r + 1}.1")
+                t.tag_add("now", f"{row}.{a - off}", f"{row}.{b - off}")
+        if caret_on and first < len(lines):
+            row = first + TELE_ANCHOR + 1
+            t.tag_add("caret", f"{row}.0", f"{row}.end")
         t.configure(state="disabled")
+        self._scroll_to(first)
 
     def _render_rows(self, prev_text, now_text, next_text):
         """Paint the three regions as three fixed ROWS, not one flowed

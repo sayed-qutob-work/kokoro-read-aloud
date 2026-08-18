@@ -1948,6 +1948,34 @@ one monitor on a two-monitor desktop and silently looked correct. The
 prefix has to be optional. Measured after the fix: `eDP-1 1920x1080+0+0`
 and `DP-1 1920x1080+1920+0`.
 
+#### Smooth scrolling — the teleprompter now animates between reading positions
+
+Requested after the layout landed. The strip re-sliced its content on
+every advance, so motion could only ever be a one-line snap. Now the
+whole passage is inserted into the widget ONCE (cached on `full`,
+padded above/below so the first and last lines can still reach the
+anchor row) and the WIDGET is scrolled, which is what makes the motion
+animatable at all.
+
+- **Tk text widgets do pixel scrolling**: `yview_scroll(n, "pixels")`,
+  verified on Tk 8.6.17 here (7px vs 19px gave a 12px shift). Absolute
+  positioning is `yview_moveto(0)` then one pixel scroll, which avoids
+  the drift of accumulating deltas.
+- Line height is **measured** from `dlineinfo` of two consecutive lines
+  (24px here), not derived from font metrics — tag spacing and widget
+  padding both feed into it.
+- Ease-out cubic over `SCROLL_MS` (280ms) at the 16ms tick, so the text
+  decelerates into place; the show/hide fade got a smoothstep at the
+  same time. Verified by sampling `_scroll_pos` mid-flight: 0.17, 0.31,
+  0.44, 0.55, 0.65, 0.73, 0.80, 0.85, 0.90.
+- **`caption_smooth` (on/off) exists because motion is not universally
+  welcome** — vestibular sensitivity, and taste. Off restores the
+  instant jump; the code path is the same, it just places the target
+  directly.
+
+Tagging moved to the whole passage rather than the visible window (tags
+are cheap and only re-applied when the sentence changes, not per poll).
+
 #### Still open (next Linux-porting session)
 
 - Caption strip itself: the §1 spike only proves the *rendering

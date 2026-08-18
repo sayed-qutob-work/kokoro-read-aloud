@@ -96,6 +96,7 @@ DEFAULTS = {
     "caption_layout": "rows",
     "caption_position": "bottom",
     "caption_monitor": "primary",   # or a connector name, e.g. "DP-1"
+    "caption_smooth": "on",         # animate the teleprompter scroll
 }
 
 # Taken from overlay.py rather than restated, so the panel can never offer
@@ -113,7 +114,7 @@ except Exception:                     # panel still works without the strip
 
 MONITOR_PRIMARY_LABEL = "Primary monitor"
 CAPTION_KEYS = ("caption_style", "caption_layout", "caption_position",
-                "caption_monitor")
+                "caption_monitor", "caption_smooth")
 
 
 def log(msg):
@@ -586,11 +587,17 @@ class App:
                      state="readonly", width=16
                      ).grid(row=3, column=1, sticky="e", pady=2)
 
+        self.v_cap_smooth = tk.StringVar(value=self.cfg["caption_smooth"])
+        ttk.Checkbutton(cap, text="Animate scrolling",
+                        variable=self.v_cap_smooth, onvalue="on",
+                        offvalue="off").grid(row=4, column=0, columnspan=2,
+                                             sticky="w", pady=(6, 0))
+
         ttk.Label(cap, wraplength=400, foreground="#555", justify="left",
                   text=("rows keeps the sentence in a fixed block; "
                         "teleprompter scrolls the whole passage up past a "
                         "fixed reading line. Save applies all of these.")
-                  ).grid(row=4, column=0, columnspan=3, sticky="w", pady=(6, 0))
+                  ).grid(row=5, column=0, columnspan=3, sticky="w", pady=(6, 0))
         cap.columnconfigure(1, weight=1)
         self._load_monitors()
 
@@ -669,7 +676,8 @@ class App:
                "caption_layout": self.v_cap_layout.get(),
                "caption_position": self.v_cap_pos.get(),
                "caption_monitor": self._monitor_map.get(
-                   self.v_cap_monitor.get(), "primary")}
+                   self.v_cap_monitor.get(), "primary"),
+               "caption_smooth": self.v_cap_smooth.get()}
         self.cfg = cfg
         self._push_debounced(cfg)
         return cfg
@@ -855,6 +863,7 @@ class App:
         self.v_cap_layout.set(DEFAULTS["caption_layout"])
         self.v_cap_pos.set(DEFAULTS["caption_position"])
         self.v_cap_monitor.set(MONITOR_PRIMARY_LABEL)
+        self.v_cap_smooth.set(DEFAULTS["caption_smooth"])
         self._speed_changed()
         self.status.config(text="Reset to defaults (not saved yet).")
 
