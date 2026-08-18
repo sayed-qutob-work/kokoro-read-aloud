@@ -43,12 +43,12 @@ port. Phase 1 (release hygiene) shipped as `v0.1.0-beta`.
 | `tray.py` | Settings panel over `/config` + process control. Platform-neutral since 2026-08-18; `--settings` opens the panel directly |
 | `tray_win32.py` | The Windows notification-area icon (Shell_NotifyIcon), split out of `tray.py` so it imports on Linux. Talks only to the `app` object, never to the server |
 | `linux/` | `install-desktop.sh` (app-grid launcher — **there is no tray icon on GNOME**, see AUDIT 2026-08-18), the `.desktop` template and the icon |
-| `settings.json` | User's tuned voice/speed/pause. **Written by the tray, loaded by the server at startup.** Untracked since v0.1.0-beta — it is per-user, not a default. `settings.example.json` documents the shape. `caption_style`/`caption_layout` are the exception: read by `overlay.py` at startup, never by the server, so changing them needs the strip restarted |
+| `settings.json` | User's tuned voice/speed/pause. **Written by the tray, loaded by the server at startup.** Untracked since v0.1.0-beta — it is per-user, not a default. `settings.example.json` documents the shape. The five `caption_*` keys (`caption_style`, `caption_layout`, `caption_scroll`, `caption_position`, `caption_monitor`) are the exception: read by `overlay.py` at startup, never by the server, so changing them needs the strip restarted |
 | `requirements.txt` | CPU install. `requirements-cuda.txt` is the NVIDIA one; both pull shared pins from `requirements-base.txt`. **Install one or the other, not both** |
 | `docs/` | `AUDIT.md`, `plan.md`, `RELEASE_PLAN.md` — moved out of the root in v0.1.0-beta |
 | `calibration.json` | Measured `density`/`rt` for THIS machine, so a boot starts calibrated. Delete it to re-learn |
 | `extension/` | Chromium in-page highlighter (load unpacked); Firefox works via UIA instead |
-| `overlay.py` | Retired caption strip (kept, not autostarted) |
+| `overlay.py` | Caption strip: polls `/now`, renders the sentence being read. `teleprompter`/`rows` layouts, three themes, continuous scrolling. The only position indicator on Linux (no UIA there). **Not autostarted on either platform** — start it by hand; the tray restarts it when a `caption_*` setting changes |
 | `start_tts.vbs` | Autostart: server + AHK + highlighter + tray, hidden; server output → `server.log` |
 | `server.log` | **Read this first on any failure.** Truncated at each server start |
 | `highlighter.log` | Highlighter diagnostics (on by default). Rotated to `.log.1` at each start |
