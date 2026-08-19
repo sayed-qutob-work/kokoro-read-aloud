@@ -13,6 +13,7 @@ highlighter.log.*
 highlighter.err
 highlighter.out
 tray.log
+read_aloud.log
 tray.err
 tray.out
 __pycache__/

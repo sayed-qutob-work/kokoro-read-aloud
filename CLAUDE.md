@@ -39,6 +39,7 @@ port. Phase 1 (release hygiene) shipped as `v0.1.0-beta`.
 |---|---|
 | `tts_server.py` | Flask server on 127.0.0.1:5111; model resident; config block holds the DEFAULTS, `settings.json` overrides them at boot |
 | `read_aloud.ahk` | Hotkeys (AutoHotkey **v2**); window-aware clipboard/copy logic |
+| `read_aloud.sh` | The Linux hotkey handler (GNOME custom shortcuts → `selection`/`clipboard`/`stop`). Reads the PRIMARY selection — it never copies, Wayland forbids injecting Ctrl+C. Its **settle loop is load-bearing**: `wl-paste` steals focus to read PRIMARY, which races VTE's on-release claim and made the first terminal read speak the previous selection (AUDIT 2026-08-19). Diagnostics in `read_aloud.log` |
 | `highlighter.py` | In-place word highlighter (UIA TextPattern + layered window) |
 | `tray.py` | Settings panel over `/config` + process control. Platform-neutral since 2026-08-18; `--settings` opens the panel directly |
 | `tray_win32.py` | The Windows notification-area icon (Shell_NotifyIcon), split out of `tray.py` so it imports on Linux. Talks only to the `app` object, never to the server |
@@ -51,6 +52,7 @@ port. Phase 1 (release hygiene) shipped as `v0.1.0-beta`.
 | `overlay.py` | Caption strip: polls `/now`, renders the sentence being read. `teleprompter`/`rows` layouts, three themes, continuous scrolling. The only position indicator on Linux (no UIA there). **Not autostarted on either platform** — start it by hand; the tray restarts it when a `caption_*` setting changes |
 | `start_tts.vbs` | Autostart: server + AHK + highlighter + tray, hidden; server output → `server.log` |
 | `server.log` | **Read this first on any failure.** Truncated at each server start |
+| `read_aloud.log` | Per-try PRIMARY reads from `read_aloud.sh` (`sha`/`blank`/`stale` + excerpt). Read it before re-diagnosing a wrong/empty selection; truncated past 256KB |
 | `highlighter.log` | Highlighter diagnostics (on by default). Rotated to `.log.1` at each start |
 | `highlighter.err` | Highlighter stderr; an import/COM-init crash lands here. Empty = healthy |
 | `env\` | The venv. Always `env\Scripts\python.exe -m pip`, never bare `pip` |

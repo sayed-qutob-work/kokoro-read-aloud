@@ -2095,6 +2095,67 @@ wakes, but it can be **absent for the first stretch after a cold boot** with
 the mouse asleep. If the button is dead right after booting, wake the mouse
 before assuming the config broke again.
 
+### DIAGNOSED & FIXED 2026-08-19: the first terminal read spoke the PREVIOUS selection (or "nothing selected") — wl-paste steals focus at the exact instant VTE claims PRIMARY
+
+Symptom as reported: reading from the terminal, "the first read always
+either says nothing selected or repeats the last selected text, but the
+second time it works normally". Nowhere else — browsers, editors, PDFs
+were all fine on the first press.
+
+**Measured, not guessed.** `WAYLAND_DEBUG=1 wl-paste --primary` on this
+session (Fedora 44, GNOME/mutter 50, wl-clipboard 2.2.1) binds
+`wl_compositor`, `wl_seat`, `xdg_activation_v1`, `gtk_shell1`,
+`zwp_primary_selection_device_manager_v1` — and **no data-control
+manager** (neither `zwlr_` nor `ext_`). mutter does not implement it, and
+`wl-paste --watch` says so outright: *"Watch mode requires a compositor
+that supports the data-control protocol"*. Consequences, both load-bearing:
+
+1. A selection offer is only delivered to the client that holds keyboard
+   focus, so **every `wl-paste` run briefly steals focus** (that is what
+   `xdg_activation_v1`/`gtk_shell1` are for). Cost measured: **~40ms per
+   run**, 3/3 runs.
+2. There is **no passive way to watch PRIMARY** on this desktop. Any
+   monitor would itself have to steal focus, so `--watch`-based designs
+   are off the table — don't re-propose one.
+
+The race: `~/.config/input-remapper-2/presets/Logitech G Pro /*.json` maps
+the side button to `hold(BTN_LEFT).wait(10).modify(CTRL, modify(ALT, R))`
+— the read fires **10ms after the left button is released**. Apps that
+republish PRIMARY on every drag motion (browsers, Electron/VS Code) are
+already committed by then. **VTE claims PRIMARY only on button-release**,
+which is precisely when `wl-paste` takes focus away — the terminal's claim
+lands unfocused and is deferred, so the read sees the *previous* PRIMARY,
+or an empty one. Focus returns when `wl-paste` exits, the claim flushes,
+and the second press works. GNOME's own window introspection is not
+available to confirm the focused app from the script
+(`org.gnome.Shell.Introspect.GetWindows` → `AccessDenied`), so the fix
+cannot be made terminal-specific by asking who has focus.
+
+**Fix — the settle loop in `read_aloud.sh`** (selection mode only): re-read
+PRIMARY up to `KOKORO_SETTLE_TRIES` (5) times, 60ms apart, until the value
+is non-blank **and** is not the digest of the text spoken last (kept in
+`$XDG_RUNTIME_DIR/kokoro-read-aloud/last-spoken`). It is self-healing under
+the mechanism above: the first read's own focus-return is what makes the
+deferred claim flush, so try #1 sees the real selection. Measured on this
+machine: fresh selection **96ms total, first try accepted — no added
+latency** on the normal path; stale first read 533ms worst case; genuinely
+empty PRIMARY 400ms before the "nothing selected" notification. Clipboard
+mode (Ctrl+Alt+T) deliberately does **not** settle — re-reading the same
+clipboard on purpose is normal.
+
+Known limit, accepted: staleness is inferred by comparing against the last
+*spoken* text, since nothing else distinguishes "not committed yet" from
+"the user really did re-select the same words". Deliberately re-reading the
+same selection therefore costs the full ~530ms budget and then reads it
+anyway (correct, just late), and a stale value the user selected but never
+read is not detectable at all.
+
+`read_aloud.log` (next to the script, truncated past 256KB, disable with
+`KOKORO_READ_LOG=`) records per-try `rc/len/sha/blank/stale` plus a 48-char
+excerpt. **Diagnose from it, don't guess**: `try=0 … stale=1` followed by
+`try=1 … stale=0` with different text *is* this race; all tries identical
+means something else.
+
 #### Still open (next Linux-porting session)
 
 - Caption strip itself: the §1 spike only proves the *rendering
