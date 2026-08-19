@@ -2049,6 +2049,52 @@ that those steps are now EVENLY spaced: measured gap between 1px steps
 reads as creep; uneven cadence reads as rigid. Do not expect to remove
 the stepping itself without a different toolkit.
 
+### DIAGNOSED & FIXED 2026-08-19: nothing came back after a reboot — two independent autostart gaps, neither of them a bug in the app
+
+Symptom as reported: after rebooting, read-aloud "didn't work", and the
+mouse-button binding didn't either. Both were **missing autostart**, not
+breakage — every component was fine once started by hand. They are listed
+separately because they had nothing to do with each other and were fixed
+in different places.
+
+**Gap 1 — the server never started.** `start_tts.vbs` is Windows-only and
+`linux/install-desktop.sh` only ever installed the app-grid *settings*
+launcher, so on Linux nothing brought up `tts_server.py` at login. This was
+already recorded as open in this section ("`systemd --user` units … not
+done"). Confirmed by `ps` (only `tray.py --settings` and `overlay.py` were
+alive) and `curl /config` refusing. The GNOME custom shortcuts survived the
+reboot intact — `Ctrl+Alt+R/T/S` were still bound to `read_aloud.sh`, which
+is why the failure looked like a dead hotkey rather than a dead server.
+
+Fixed by building the units §4.5 called for: `linux/kokoro-server.service.in`,
+`linux/kokoro-overlay.service.in` and `linux/install-systemd.sh` (same
+`@ROOT@`-substitution pattern as the `.desktop` installer, so nothing
+hardcodes a path). `StandardOutput=truncate:` keeps the Windows contract that
+`server.log` is truncated at each start and is the first thing to read on a
+failure. **The server unit is enabled; the overlay unit is installed but
+deliberately NOT enabled** — the caption strip stays opt-in on both
+platforms, per §9. Verified: `systemctl --user is-enabled` → `enabled`, and a
+`POST /speak` after the unit came up logged `START first sound 142ms`.
+
+**Gap 2 — the mouse button.** `input-remapper` was running and the G Pro
+preset existed and was correct (`BTN_SIDE` → `hold(BTN_LEFT).wait(10).modify(CTRL, modify(ALT, R))`), but `~/.config/input-remapper-2/config.json`
+had **`"autoload": {}`**. A preset that is merely saved is not a preset that
+loads: input-remapper injects at boot only for devices listed under
+`autoload`. The service log said so outright — `ERROR: No presets configured
+to autoload`. Fixed by mapping the device name to the preset name
+(`{"Logitech G Pro ": "new preset"}` — note the **trailing space**, that is
+genuinely part of the evdev name) and re-running `--command autoload`, which
+then logged `Starting injecting the preset`.
+
+**Trap for next time, do not re-diagnose it:** this mouse enumerates under
+*two different names* depending on whether it is awake when the machine
+boots — `Logitech G Pro Wireless Gaming Mouse` at 08:11:51, `Logitech G Pro `
+at 09:38 once it reconnected. Only the latter has a preset directory.
+Autoload re-fires on hotplug, so the binding does arrive when the mouse
+wakes, but it can be **absent for the first stretch after a cold boot** with
+the mouse asleep. If the button is dead right after booting, wake the mouse
+before assuming the config broke again.
+
 #### Still open (next Linux-porting session)
 
 - Caption strip itself: the §1 spike only proves the *rendering
@@ -2059,9 +2105,10 @@ the stepping itself without a different toolkit.
   resolves to "on").
 - **Verify `tray_win32.py` on Windows** — the split is mechanical and
   unexercised there (see the tray entry above).
-- `systemd --user` units to replace `start_tts.vbs` (§4.5) — not done
-  this session; the server, strip and tray were started by hand for
-  testing and none of them autostart yet. `linux/` is where they go.
+- ~~`systemd --user` units to replace `start_tts.vbs` (§4.5)~~ — **DONE
+  2026-08-19**, see the entry above. `kokoro-server` is enabled;
+  `kokoro-overlay` is installed but opt-in; the tray/settings panel is
+  still on-demand from the app grid and is not a unit.
 - Folder restructure (§4.6) — deliberately still deferred, per the plan's
   own sequencing.
 

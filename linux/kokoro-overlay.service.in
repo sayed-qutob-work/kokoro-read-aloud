@@ -1,0 +1,19 @@
+[Unit]
+Description=Kokoro read-aloud caption strip
+Documentation=https://github.com/sayed-qutob-work/kokoro-read-aloud
+# tkinter needs DISPLAY (XWayland), which GNOME only puts into the systemd
+# user environment once the graphical session is up.
+After=graphical-session.target kokoro-server.service
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+WorkingDirectory=@ROOT@
+ExecStart=@ROOT@/env/bin/python @ROOT@/overlay.py
+StandardOutput=truncate:@ROOT@/overlay.log
+StandardError=truncate:@ROOT@/overlay.err
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

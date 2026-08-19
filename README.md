@@ -228,8 +228,25 @@ indicator would need the third-party AppIndicator extension plus PyGObject, whic
 Fedora builds only for the system Python (3.14) while this venv must be 3.12.
 `docs/AUDIT.md` (2026-08-18) has the detail.
 
-Nothing autostarts on Linux yet. Start the server, the strip and the panel by
-hand; `systemd --user` units are planned.
+Autostart is `systemd --user` units:
+
+```bash
+linux/install-systemd.sh
+```
+
+That installs `kokoro-server` (enabled — the hotkeys do nothing without it) and
+`kokoro-overlay` (installed but **not** enabled, because the caption strip is
+opt-in). Re-run it after moving the folder; the paths are baked in at install
+time.
+
+```bash
+systemctl --user status kokoro-server
+systemctl --user enable --now kokoro-overlay   # captions, if you want them
+```
+
+The settings panel stays on-demand from the app grid — it is a window, not a
+daemon. `server.log` is still truncated at each start and is still the first
+thing to read on a failure.
 
 ### Optional extras
 

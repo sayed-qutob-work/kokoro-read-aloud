@@ -42,7 +42,7 @@ port. Phase 1 (release hygiene) shipped as `v0.1.0-beta`.
 | `highlighter.py` | In-place word highlighter (UIA TextPattern + layered window) |
 | `tray.py` | Settings panel over `/config` + process control. Platform-neutral since 2026-08-18; `--settings` opens the panel directly |
 | `tray_win32.py` | The Windows notification-area icon (Shell_NotifyIcon), split out of `tray.py` so it imports on Linux. Talks only to the `app` object, never to the server |
-| `linux/` | `install-desktop.sh` (app-grid launcher — **there is no tray icon on GNOME**, see AUDIT 2026-08-18), the `.desktop` template and the icon |
+| `linux/` | `install-desktop.sh` (app-grid launcher — **there is no tray icon on GNOME**, see AUDIT 2026-08-18), the `.desktop` template and the icon; `install-systemd.sh` + the two `*.service.in` templates (autostart — `kokoro-server` enabled, `kokoro-overlay` opt-in, AUDIT 2026-08-19). Restarting the server on Linux means `systemctl --user restart kokoro-server`, not a bare `python tts_server.py` |
 | `settings.json` | User's tuned voice/speed/pause. **Written by the tray, loaded by the server at startup.** Untracked since v0.1.0-beta — it is per-user, not a default. `settings.example.json` documents the shape. The five `caption_*` keys (`caption_style`, `caption_layout`, `caption_scroll`, `caption_position`, `caption_monitor`) are the exception: read by `overlay.py` at startup, never by the server, so changing them needs the strip restarted |
 | `requirements.txt` | CPU install. `requirements-cuda.txt` is the NVIDIA one; both pull shared pins from `requirements-base.txt`. **Install one or the other, not both** |
 | `docs/` | `AUDIT.md`, `plan.md`, `RELEASE_PLAN.md` — moved out of the root in v0.1.0-beta |

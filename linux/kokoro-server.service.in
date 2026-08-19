@@ -1,0 +1,21 @@
+[Unit]
+Description=Kokoro read-aloud TTS server
+Documentation=https://github.com/sayed-qutob-work/kokoro-read-aloud
+# PipeWire is socket-activated, so this is a hint rather than a hard dependency:
+# PortAudio only opens a stream on the first read, long after boot.
+After=pipewire.service
+Wants=pipewire.service
+
+[Service]
+Type=simple
+WorkingDirectory=@ROOT@
+ExecStart=@ROOT@/env/bin/python @ROOT@/tts_server.py
+# Same contract as start_tts.vbs on Windows: server.log is truncated at each
+# start, and is the first thing to read on any failure.
+StandardOutput=truncate:@ROOT@/server.log
+StandardError=inherit
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
