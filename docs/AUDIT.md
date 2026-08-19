@@ -376,6 +376,16 @@ cmd equivalent of the kill: `taskkill /F /IM python.exe` (blunter — kills all 
   `AttributeError: 'dict' object has no attribute 'strip'` (a 500, not a 400).
   **Cast it:** `$t = [string](Get-Content $f -Raw)`. Hit 2026-07-25 while scripting a
   highlighter test.
+- **Linux: `python3` in a shell here is the repo venv (3.12), not the system
+  interpreter.** The venv auto-activates from the profile, so anything that
+  imports system packages built for **3.14** — `evdev`, `inputremapper` —
+  fails, and confusingly: a bare `import evdev` gives `ModuleNotFoundError`,
+  while forcing the path onto `sys.path` gives
+  `cannot import name '_input' from partially initialized module 'evdev'
+  (most likely due to a circular import)`. That is **not** a circular import,
+  it is a 3.14 `.so` refusing to load in a 3.12 interpreter. Use
+  **`/usr/bin/python3`** explicitly for anything touching system site-packages.
+  Hit 2026-08-19 while validating input-remapper macros.
 - **Windows 11 suppresses `TrayTip`.** All AHK errors now use `MsgBox`. Do not revert.
 - **AHK tray icon hides** behind the `^` arrow. Settings → Personalization → Taskbar →
   Other system tray icons → toggle AutoHotkey on.
@@ -2172,6 +2182,122 @@ means something else.
   still on-demand from the app grid and is not a unit.
 - Folder restructure (§4.6) — deliberately still deferred, per the plan's
   own sequencing.
+
+---
+
+### DIAGNOSED & FIXED 2026-08-19: the mouse side button can't be split in software — the right-side button IS `BTN_SIDE`. Tap/hold on one code is the fix
+
+Symptom as reported: "I put the shortcut for the read command on the right
+side button of my mouse, but when I did that the left side button (used to
+go backwards) now functions to do the read command." Wanted: read on the
+right-side button, back **and** forward still working on the left pair.
+
+**The mouse is a `G Pro Wireless Gaming Mouse`, not a G Pro X Superlight**
+(`solaar show`: WPID 4079, HID++ 4.2, Lightspeed receiver 046d:C539). It is
+the ambidextrous model with *two removable side panels*, and the user has
+**both** installed. Logitech ships both panels programmed identically
+(Back/Forward) because you are meant to fit only one, for your handedness.
+
+**Measured, not guessed.** No `evtest` on this box, but the user is in the
+`input` group, so raw 24-byte `struct input_event` reads off
+`/dev/input/event10` (`usb-Logitech_USB_Receiver-if02-event-mouse`) work
+fine — see the snippet at the end. Two captures, injection stopped:
+
+- 90s free-form: the mouse emits **only three codes, ever** — `272`
+  `BTN_LEFT`, `275` `BTN_SIDE`, `276` `BTN_EXTRA`. No fourth code exists.
+- 40s pressing **only the right-side button**: 44/44 presses came out as
+  **`275` `BTN_SIDE`** — byte-identical to the left-side *back* button.
+
+So the right-side button and the left-side back button are **the same code**.
+input-remapper sees one button, not two. Any mapping on `275` necessarily
+fires for both and steals "back" from both. **This was never a config bug**
+and no input-remapper/GNOME/libinput setting can fix it — the distinction
+does not survive the mouse's firmware.
+
+**Why per-button firmware remapping was dropped.** `solaar show` lists
+`ONBOARD PROFILES {8100}` with `Device Mode: On-Board`, `Profile 1`, and
+**no `REPROG CONTROLS {1B04}`** — button assignments live in the mouse's
+onboard profile, so separating the panels means rewriting that profile with
+G HUB (Windows) or `libratbag`/`piper` (`libratbag-ratbagd` + `piper`,
+in Fedora 44 repos, **not installed**). Prepared, then abandoned: the
+tap/hold macro below gets the same result with no package install and no
+write to onboard memory. Don't install those unless the tap/hold approach
+is ever rejected.
+
+**Fix — one code, two gestures**, in
+`~/.config/input-remapper-2/presets/Logitech G Pro /new preset.json`
+(mapping `type:1 code:275`, target `keyboard + mouse`):
+
+```
+parallel(
+  hold_keys(BTN_LEFT),
+  if_tap(
+    key(BTN_SIDE),
+    hold().wait(10).modify(KEY_LEFTCTRL, modify(KEY_LEFTALT, key(KEY_R))),
+    200))
+```
+
+- `parallel` runs both branches at once, so `hold_keys(BTN_LEFT)` puts the
+  left button down at **t=0** — drag-select starts from the exact pixel
+  pressed, with **no lead-in delay** — and lifts it on trigger release.
+- `if_tap(then, else, timeout)`: released **< 200ms** → `then` → `key(BTN_SIDE)`,
+  i.e. ordinary back navigation. Still held at 200ms → `else` fires
+  *immediately at the 200ms mark*, so `hold()` **with no argument** is
+  needed there: it is the "wait for trigger release" primitive, and it is
+  what defers Ctrl+Alt+R to release instead of to the timeout.
+- `276` `BTN_EXTRA` (left-side forward) is left **unmapped** — untouched.
+
+Net: tap either 275 button = back; hold either = select-by-drag then read.
+Forward keeps working. Nothing lost.
+
+**A first attempt used the reverse ordering** —
+`if_tap(key(BTN_SIDE), hold(BTN_LEFT).wait(10).modify(...), 300)`, with the
+left button pressed only *inside* the else-branch. Correct, but rejected by
+the user on feel: the click only began at the 300ms mark, so the first 300ms
+of the drag was lost and the selection started wherever the cursor had
+drifted to. Don't re-propose it as-is.
+
+**Accepted trade-off (user informed, explicitly fine with it).** Because
+`BTN_LEFT` now goes down unconditionally at t=0, a quick "back" tap also
+emits a **real left click** at the cursor — down and up, ~150ms apart. It
+cannot be retracted, since the tap/hold verdict only exists at release.
+Harmless over empty page area (which is where the cursor almost always is
+when reaching for back), but over a link or checkbox it activates it *and*
+goes back. If that ever bites, the dial is a lead-in:
+`parallel(wait(80).hold_keys(BTN_LEFT), if_tap(...))` — taps faster than
+80ms then emit no click at all, at the cost of 80ms of drag.
+
+**This supersedes the macro quoted in the wl-paste/settle-loop entry above**
+(`hold(BTN_LEFT).wait(10).modify(CTRL, modify(ALT, R))`). That entry's
+*reasoning is unaffected*: `hold_keys` still releases `BTN_LEFT` on trigger
+release and the read still fires **10ms after release**, so the VTE
+claims-PRIMARY-on-button-release race, and the settle loop that fixes it,
+are unchanged.
+
+#### Operating notes (Linux, input-remapper 2.2.1)
+
+- Editing a preset JSON does nothing to the running injection. Reload with
+  `input-remapper-control --command stop-all`, then
+  `--command autoload` (sleep ~1s between). Autoload lives in
+  `~/.config/input-remapper-2/config.json`; with it set, the mapping
+  survives login.
+- **While diagnosing, stop the injection first** — input-remapper
+  `EVIOCGRAB`s the device and creates a second `Logitech G Pro` event node
+  (`Phys=input-remapper/...`), so reading the raw device while it runs gives
+  you the wrong picture.
+- Validate a macro *before* deploying it — the injector fails quietly:
+  ```
+  /usr/bin/python3 -c "from inputremapper.injection.macros.parse import Parser; \
+    Parser.parse('<macro>', None); print('OK')"
+  ```
+- Raw button capture without `evtest` (24-byte `llHHi` per event, `type==1`
+  is `EV_KEY`, `value` 1=down 0=up 2=autorepeat):
+  ```python
+  import struct; f=open('/dev/input/event10','rb',buffering=0)
+  while True:
+      _s,_us,t,c,v = struct.unpack('llHHi', f.read(24))
+      if t==1: print(c,v)
+  ```
 
 ---
 
