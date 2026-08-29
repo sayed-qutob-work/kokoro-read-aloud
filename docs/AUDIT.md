@@ -2178,7 +2178,9 @@ means something else.
   unexercised there (see the tray entry above).
 - ~~`systemd --user` units to replace `start_tts.vbs` (§4.5)~~ — **DONE
   2026-08-19**, see the entry above. `kokoro-server` is enabled;
-  `kokoro-overlay` is installed but opt-in; the tray/settings panel is
+  `kokoro-overlay` is installed but opt-in (the installer still leaves it
+  disabled; **on this machine it was enabled by hand 2026-08-25**, so the
+  caption strip now comes up at login here); the tray/settings panel is
   still on-demand from the app grid and is not a unit.
 - Folder restructure (§4.6) — deliberately still deferred, per the plan's
   own sequencing.
