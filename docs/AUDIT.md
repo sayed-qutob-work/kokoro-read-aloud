@@ -2303,6 +2303,98 @@ are unchanged.
 
 ---
 
+### DIAGNOSED & FIXED 2026-09-16: the side button worked "some sessions, not others" — the mouse has TWO device names, and only one was in the autoload map
+
+Symptom as reported: "the side mouse button sometimes works and sometimes
+doesn't, it depends on the session, so I think there is an issue with auto
+loading the shortcut on the startup."
+
+**Autostart was not the bug.** `/etc/xdg/autostart/input-remapper-autoload.desktop`
+(generated into `app-input\x2dremapper\x2dautoload@autostart.service`) ran
+correctly, and `input-remapper.service` is enabled and was up the whole time.
+
+**The real cause: the G Pro Wireless enumerates as two completely different
+USB devices, with two different evdev names, and the autoload map only listed
+one of them.**
+
+| Connection | USB ID | evdev name (= input-remapper group key) |
+|---|---|---|
+| Lightspeed receiver (on battery) | `046d:c539` receiver → HID++ child `046d:4079` | `"Logitech G Pro "` (**trailing space**) |
+| USB cable plugged into the mouse | `046d:c088` direct | `"Logitech G Pro Wireless Gaming Mouse"` |
+
+`config.json` had only `"Logitech G Pro ": "new preset"`. So plugging the
+mouse in to charge silently killed the hotkey, and unplugging it silently
+restored it. That is the whole "depends on the session" pattern — it tracks
+the charging cable, not the login.
+
+**Read straight out of the journal, not guessed** (`journalctl -u input-remapper.service -b`):
+
+```
+10:13:08  Autoloading for all devices
+10:13:08  Found "Sleep Button", ... (no Logitech at all — receiver not up yet)
+10:13:52  kernel: usb 3-4: idProduct=c539 ... input: Logitech G Pro
+10:13:53  Request to autoload for "Logitech G Pro "
+10:13:53  Autoloading for "Logitech G Pro "  → injecting        ← WORKS
+10:14:06  usb 3-4: USB disconnect            (cable plugged in)
+10:14:09  usb 3-4: idProduct=c088  Product: G Pro Wireless Gaming Mouse
+10:14:10  Request to autoload for "Logitech G Pro Wireless Gaming Mouse"
+          (no "Autoloading for", no "start injecting" — no entry, silent no-op)
+                                                                 ← DEAD ~3h
+13:07:54  USB disconnect (cable out)
+13:07:58  Request to autoload for "Logitech G Pro "
+13:07:59  Autoloading → injecting                                ← WORKS again
+```
+
+The dead window was 10:14:10 → 13:07:54. A missing autoload entry produces
+**no error line at all**, which is why this never looked like a failure.
+
+**Secondary, real but self-healing:** the login-time autoload at 10:13:08 ran
+~44s *before* the receiver enumerated, so it found no Logitech. input-remapper's
+udev hotplug listener re-autoloads on device appearance and covered it. So
+ordering costs a few seconds after login but is not the bug — do not "fix" the
+autostart unit's ordering, it isn't what broke.
+
+**The fix.** Added a second preset + autoload entry for the wired identity:
+
+```
+~/.config/input-remapper-2/presets/Logitech G Pro Wireless Gaming Mouse/new preset.json
+~/.config/input-remapper-2/config.json:
+  "autoload": {
+      "Logitech G Pro ": "new preset",
+      "Logitech G Pro Wireless Gaming Mouse": "new preset"
+  }
+```
+
+The preset is the same tap/hold macro as the wireless one (§8 2026-08-19) with
+**`origin_hash` deliberately omitted**. `origin_hash` is
+`md5(str(device.capabilities(absinfo=False)) + device.name)`
+(`inputremapper/utils.py:get_device_hash`), so it differs between the two
+enumerations and a copied hash would be stale. It is `Optional`, and
+`Injector._find_input_device_fallback()` re-resolves any unmatched
+`input_combination` to whichever device in the group actually exposes the code
+(ranked keyboard > gamepad > mouse) and rewrites the hash at injection time.
+Omitting it is therefore both correct and more robust than pinning it.
+
+**Gotchas for next time:**
+
+- The group key is the **shortest** name among the grouped evdev nodes
+  (`groups.py`, `sorted(names, key=len)[0]`), which is why the wireless one is
+  the truncated `"Logitech G Pro "` *with a trailing space*. Quote it and keep
+  the space.
+- A preset for a device name that never appears is a **silent** no-op. Check
+  `Request to autoload for "X"` is followed by `Autoloading for "X"` — if it
+  isn't, `X` is missing from `config.json`.
+- `presets/Logitech G Pro /new preset 2.json` is **0 bytes** (abandoned) and
+  `presets/Logitech G Pro Wireless Gaming Mouse/new preset 2.json` maps
+  `BTN_MIDDLE`→`hold(BTN_LEFT)` — neither is autoloaded; unrelated leftovers.
+- Editing `config.json` by hand is fine, but the input-remapper **GUI rewrites
+  it on save** — if the hotkey regresses after using the GUI, re-check that both
+  keys are still in `autoload`.
+- Verify wired mode by plugging the cable in and watching for
+  `Autoloading for "Logitech G Pro Wireless Gaming Mouse"`.
+
+---
+
 ## 9. Accepted trade-offs (settled — reopen only with new information)
 
 - **Bottom caption strip — NARROWLY REOPENED 2026-07-22.** "No bottom
