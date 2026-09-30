@@ -2436,10 +2436,25 @@ Open: the settle loop existed because wl-paste's focus steal deferred VTE's
 button-release PRIMARY claim (§8 2026-08-19). The X route steals no focus,
 so the loop is probably moot now. It is harmless (a fresh read is accepted on
 try 0) and stays until a terminal read is measured with `via=x11`.
-Not yet measured by the user: a real drag-select in a Wayland app (terminal,
-browser) through the side button. Before the fix, a Tk read of the Wayland-owned
-PRIMARY returned the live text, so the bridge carries it. Confirm with
-`try=0 via=x11 … stale=0` lines.
+**Follow-up, same day: "works everywhere except the terminal" was Claude
+Code, not Ptyxis.** Browser and VS Code reads went `try=0 … stale=0` at
+~70ms. Terminal reads went stale through all 5 tries (07:15:42, 07:17:00,
+07:19:55, 07:20:02). A passive XFixes PRIMARY-owner watcher (no focus
+taken) logged VS Code drags within ms but **no owner change at all** for
+those terminal selections, even after a 3s wait. The selections were made
+**inside the Claude Code CLI TUI** running in Ptyxis. That app captures the
+mouse, so VTE never selects and never claims PRIMARY. Claude Code draws its
+own selection and publishes it by spawning `wl-copy` and
+`wl-copy --primary`. The live processes carried `_=~/.local/bin/claude` and
+`CLAUDE_CODE_ENTRYPOINT=cli`. Those `wl-copy` runs hit the **same mutter
+50.5 focus refusal**, and the user-visible `"wl-clipboard" is ready` on
+terminal selection was *theirs*, not ours. When a `wl-copy` finally got
+focus (07:25:42–59), the watcher saw the owner change and the next reads
+were `try=0 stale=0`. **Not fixable from this repo**: the copy belongs to
+Claude Code. Workaround (standard VTE behaviour, not yet measured here): **Shift+drag** in the TUI bypasses its mouse
+capture, so VTE makes a native selection and claims PRIMARY itself,
+with no wl-copy involved. Don't re-diagnose "terminal reads are stale" without
+first checking whether the selection was made inside a mouse-capturing TUI.
 
 ---
 
