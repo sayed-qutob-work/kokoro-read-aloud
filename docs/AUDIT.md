@@ -2393,6 +2393,54 @@ Omitting it is therefore both correct and more robust than pinning it.
 - Verify wired mode by plugging the cable in and watching for
   `Autoloading for "Logitech G Pro Wireless Gaming Mouse"`.
 
+### DIAGNOSED & FIXED 2026-09-30: every read posted `"wl-clipboard" is ready`, took seconds, and spoke the PREVIOUS selection — mutter 50.5 stopped granting wl-paste focus
+
+Symptom as reported: each hotkey press popped a GNOME notification
+*io.github.bugaevc.wl-clipboard — "wl-clipboard" is ready*, and reads were
+slow or repeated old text.
+
+**Measured.** `read_aloud.log` `try=0` timing was **37–91ms** on every read
+up to 2026-09-29 and **1.7–4.3s** from the 2026-09-30 07:02 boot on (one
+press waited 70s), with the settle loop exhausting all 5 tries on
+`stale=1`. `rpm -q --last`: `mutter`/`gnome-shell` **50.4 → 50.5** at
+2026-09-30 00:52, so this is the first boot on 50.5. wl-clipboard (2.2.1)
+has not changed since April. A bare `wl-paste --primary` now takes **1.0–2.2s**, 3/3 runs.
+`WAYLAND_DEBUG=1`: wl-paste maps its 1×1 `io.github.bugaevc.wl-clipboard`
+toplevel with `gtk_surface1.present(0)` and **no `xdg_activation` token**,
+then gets **no `wl_keyboard.enter` and no selection offer**. mutter's
+focus-stealing prevention now refuses that window. gnome-shell turns the
+refused activation into the "is ready" notification. With no focus there is no offer
+(§8 2026-08-19 point 1), so wl-paste ends up with stale or no data.
+
+**Fix: read through Xwayland instead** (`linux/xselection.py`, called
+first by `grab()` in `read_aloud.sh`). mutter bridges the Wayland selections
+to X11 and answers `ConvertSelection` for any X client. X11 has no focus
+rule, so the reader maps nothing and takes nothing. It uses raw
+python-xlib under **`/usr/bin/python3`** (installed with input-remapper; the
+venv has no Xlib) and requests `UTF8_STRING`, with INCR handled.
+Measured: helper **~50ms**, full `read_aloud.sh selection` → `/speak`
+**68ms**, first try accepted. A UTF-8 payload (`— 日本語 🙂`, quotes,
+backslash, newline) round-trips **byte-exact**. Exit codes: `0` text, `1`
+nothing/unowned/non-text, `2` X unavailable. **Only `2` falls back to
+wl-paste.** Falling back on `1` would bring the stall back on every
+empty read. The log now records the route as `via=x11|wl`.
+
+Rejected on the way: Tk `selection_get` (fast, but Tk 8.6 mangled the em dash
+and CJK to `?`); xclip/xsel (not installed, needs sudo).
+
+Also fixed: `text=$(grab …)` ran `grab` in a subshell, so `GRAB_RC`/`GRAB_ERR`
+never reached the log (**every** line said `rc=0`). `grab` now sets
+`GRAB_OUT` instead.
+
+Open: the settle loop existed because wl-paste's focus steal deferred VTE's
+button-release PRIMARY claim (§8 2026-08-19). The X route steals no focus,
+so the loop is probably moot now. It is harmless (a fresh read is accepted on
+try 0) and stays until a terminal read is measured with `via=x11`.
+Not yet measured by the user: a real drag-select in a Wayland app (terminal,
+browser) through the side button. Before the fix, a Tk read of the Wayland-owned
+PRIMARY returned the live text, so the bridge carries it. Confirm with
+`try=0 via=x11 … stale=0` lines.
+
 ---
 
 ## 9. Accepted trade-offs (settled — reopen only with new information)

@@ -54,14 +54,29 @@ note() {
 ERRF=$(mktemp) || ERRF=/dev/null
 trap 'rm -f "$ERRF"' EXIT
 
-GRAB_RC=0 GRAB_ERR=
-grab() {  # $1 = primary|clipboard -> text on stdout, diagnostics in GRAB_RC/GRAB_ERR
+# Read through Xwayland first (AUDIT 2026-09-30): mutter 50.5 stopped giving
+# wl-paste the focus it needs, so wl-paste stalls for seconds, returns the
+# PREVIOUS selection and GNOME posts '"wl-clipboard" is ready'. The X11 read
+# needs no focus. xselection.py exits 2 only when X itself is unavailable --
+# then, and only then, fall back to wl-paste. Exit 1 (nothing selected) must
+# NOT fall back, or every empty read would bring the stall back.
+XSEL="$HERE/linux/xselection.py"
+# Sets globals, not stdout: `text=$(grab ...)` would run it in a subshell and
+# the diagnostics would never reach the log (every line used to say rc=0).
+GRAB_OUT= GRAB_RC=0 GRAB_ERR= GRAB_VIA=
+grab() {  # $1 = primary|clipboard -> GRAB_OUT, diagnostics in GRAB_RC/GRAB_ERR/GRAB_VIA
   local out
-  if [[ $1 == primary ]]; then out=$(wl-paste --primary --no-newline 2>"$ERRF")
-  else                         out=$(wl-paste           --no-newline 2>"$ERRF"); fi
+  GRAB_VIA=x11
+  out=$(/usr/bin/python3 "$XSEL" "$1" 2>"$ERRF")
   GRAB_RC=$?
+  if (( GRAB_RC == 2 )) || [[ ! -f $XSEL ]]; then
+    GRAB_VIA=wl
+    if [[ $1 == primary ]]; then out=$(wl-paste --primary --no-newline 2>"$ERRF")
+    else                         out=$(wl-paste           --no-newline 2>"$ERRF"); fi
+    GRAB_RC=$?
+  fi
   GRAB_ERR=$(tr '\n' ';' <"$ERRF")
-  printf '%s' "$out"
+  GRAB_OUT=$out
 }
 
 digest() { printf '%s' "$1" | sha256sum | cut -c1-12; }
@@ -79,8 +94,8 @@ case "$mode" in
   clipboard)
     # The clipboard is explicit and sticky -- no settle needed, and re-reading
     # the same clipboard on purpose is a normal thing to do.
-    text=$(grab clipboard)
-    log "clipboard rc=$GRAB_RC len=${#text}${GRAB_ERR:+ err=$GRAB_ERR} [$(peek "$text")]"
+    grab clipboard; text=$GRAB_OUT
+    log "clipboard via=$GRAB_VIA rc=$GRAB_RC len=${#text}${GRAB_ERR:+ err=$GRAB_ERR} [$(peek "$text")]"
     ;;
   selection)
     last=''
@@ -88,11 +103,11 @@ case "$mode" in
     text=''
     for (( try = 0; try < SETTLE_TRIES; try++ )); do
       (( try )) && sleep "$SETTLE_SLEEP"
-      text=$(grab primary)
+      grab primary; text=$GRAB_OUT
       sha=$(digest "$text")
       stale=0; [[ $sha == "$last" ]] && stale=1
       blank "$text" && empty=1 || empty=0
-      log "try=$try rc=$GRAB_RC len=${#text} sha=$sha blank=$empty stale=$stale${GRAB_ERR:+ err=$GRAB_ERR} [$(peek "$text")]"
+      log "try=$try via=$GRAB_VIA rc=$GRAB_RC len=${#text} sha=$sha blank=$empty stale=$stale${GRAB_ERR:+ err=$GRAB_ERR} [$(peek "$text")]"
       (( empty || stale )) || break
     done
     ;;
