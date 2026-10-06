@@ -2456,6 +2456,116 @@ capture, so VTE makes a native selection and claims PRIMARY itself,
 with no wl-copy involved. Don't re-diagnose "terminal reads are stale" without
 first checking whether the selection was made inside a mouse-capturing TUI.
 
+### DEPLOYED 2026-10-06: Omarchy (Arch + Hyprland 0.56.2) install — second Linux machine, two caption-strip fixes
+
+Machine: Omarchy 4.0.4 (Arch), Hyprland 0.56.2 (Lua config) with Xwayland,
+RTX 4060 Ti on driver 610.57, and two monitors: DP-2 1920×1080 at 0,0 and
+DP-3 2560×1440 at 1920,0. System Python is 3.14.
+
+**Python and Tk.** mise's precompiled 3.12 (python-build-standalone) bundles
+Tk 9.0 **built without Xft**. `::tk::pkgconfig get fontsystem` returns `x11`,
+and `font families` returns only `fixed`, so the strip and the settings
+panel both rendered in a tiny bitmap font. The fix was
+`pacman -S tk` (8.6.16), then
+`MISE_PYTHON_COMPILE=1 mise install python@3.12.15`. The result reports
+fontsystem `xft` and 596 families. The venv is built from that interpreter
+and symlinks into its mise install dir, so `mise uninstall`/`prune` of
+3.12.15 breaks it.
+
+**GPU and eSpeak.** `requirements-cuda.txt` installed unchanged, and the
+cu126 wheels run on the 610 driver. `measured_rt` was 21.77 on the first
+reads, and the settings panel later showed 50.59x. No system eSpeak was
+needed: `espeakng-loader` ships a working library on Linux too, and the
+warm-up phonemizes with it.
+
+**Hotkeys.** First bound by hand with `o.bind` in
+`~/.config/hypr/bindings.lua`. None of the three were bound before. The
+same day this moved into **`linux/install-hyprland.sh`**, and the hand
+binds were removed. The script renders `linux/kokoro-hyprland.lua.in` to
+`~/.config/hypr/kokoro.lua`, using plain `hl.bind`/`hl.window_rule`, since
+`o.bind` is only a wrapper. It then appends one `dofile` line to
+`hyprland.lua`, with a backup, reloads Hyprland and fails on
+`configerrors`. It warns about leftover hand binds, which would fire every
+press twice. Checks: one bind per key, a re-run left one `dofile` line, and
+the exec string run through `/bin/sh -c` spoke. **`wtype` cannot test the
+binds**: Hyprland does not route virtual-keyboard-protocol keys to global
+binds, so a wtype Ctrl+Alt+T never ran the script. input-remapper's uinput
+device does reach them.
+`/usr/bin/python3` has no python-xlib, so `xselection.py` exits 2 and reads
+go `via=wl`. Hyprland implements ext-data-control, so wl-paste needs no
+focus here and the mutter problem above does not apply. The clipboard read
+took **16ms**, and the clipboard path is verified end to end. **PRIMARY
+works with real selections.** The hand tests are 5/5 in `read_aloud.log`,
+covering both the keyboard hotkey and the side button: `try=0 via=wl rc=0
+stale=0`, a read of **18–19ms**, and `/speak` returned by **26–77ms**. Two
+synthetic owners had both read back empty beforehand:
+- `wl-copy --primary` gave
+  `ext_data_control_device_v1.primary_selection(nil)`;
+- a Tk `selection_own` through Xwayland gave wl-paste "Nothing is copied"
+  and `xselection.py` rc=1.
+
+That was the test method, not Hyprland. Don't use either one to diagnose
+PRIMARY here.
+
+**Strip monitor enumeration.** Neither xrandr nor mutter exists here, so
+the strip fell back to the 4480×1440 union and centred itself across the
+seam. Added `_monitors_from_hyprctl` (`hyprctl monitors -j`; logical size =
+mode / scale, axes swapped on odd transforms). Hyprland has no primary
+monitor, so the first entry, DP-2, becomes primary.
+
+**Strip position.** Hyprland moves an override-redirect Tk 8.6 window
+mapped from withdrawn onto the *focused* monitor and keeps the
+monitor-relative offset. It asked for +510+732 and landed at +2430+732.
+The X geometry confirmed that, with `override_redirect=1`. It does not
+happen on every map:
+- a one-shot `after_idle` re-place after `deiconify` passed 2/2 runs and
+  then failed 5/5;
+- binding `<Map>` failed 2/2.
+
+The fix: `_pos` records where the strip belongs (a drag updates it), and a
+`<Configure>` handler puts the window back whenever it is anywhere else.
+That gave 4/4 show/hide cycles at +510+732 with the cursor on DP-3. The
+one observed Tk 9 run landed correctly, but the move is racy, so this does
+not show the bug is version-specific. Don't remove the handler without
+re-measuring.
+
+**Settings panel.** Its Tk class is the generic `Toplevel`, and it opened
+at 0,0 under the bar. A window rule matching the title
+`^Kokoro read-aloud - settings$` applies float + center. It is now part of
+the generated `kokoro.lua`, and the panel opened centred on the focused
+monitor when re-checked after the move.
+
+**Autostart.** `linux/install-systemd.sh` works unchanged under uwsm:
+`graphical-session.target` is active, and `DISPLAY`, `WAYLAND_DISPLAY` and
+`HYPRLAND_INSTANCE_SIGNATURE` are in the user environment.
+
+**Mouse side button.** This is the same G Pro and the same tap/hold macro
+as 2026-08-19, carried over unchanged:
+- **Package:** AUR `input-remapper` 2.2.1 (PKGBUILD reviewed; source is the
+  GitHub tag, pinned by sha256). Built with `makepkg`; the repo deps and
+  `pacman -U` + `systemctl enable --now input-remapper` went through
+  `pkexec`.
+- **Python 3.14 risk, cleared.** input-remapper imports `pydantic.v1`, which
+  pydantic says is unsupported on 3.14. Tested before installing, in a
+  scratch venv on Arch's 3.14.7 + pydantic 2.13.5: the macro parses and the
+  `Mapping` model validates, with no warnings.
+- **Preset:** written with input-remapper's own `Preset`/`GlobalConfig`, so
+  the format is this version's own. It is `presets/<group>/read-aloud.json`
+  for **both** `Logitech G Pro ` (trailing space, receiver) and
+  `Logitech G Pro Wireless Gaming Mouse` (cable), each with autoload
+  (2026-09-16 lesson). There is no `origin_hash`: the injector's
+  `_update_preset` picks the sub-device that has `BTN_SIDE`.
+- **Running:** `input-remapper-control --command autoload` created the
+  `input-remapper keyboard + mouse` virtual device and Hyprland lists it.
+- **Login:** uwsm runs XDG autostart (`xdg-desktop-autostart.target` is
+  active), so `/etc/xdg/autostart/input-remapper-autoload.desktop` is
+  generated as a user unit and reloads the preset at each login.
+- **Keyboard layout:** `us` only, so the injected `KEY_R` matches the
+  Hyprland bind.
+- **Hand test:** passed. The user confirmed that hold-and-drag reads the
+  selection, and those reads log as `try=0 stale=0`, the same as the
+  keyboard hotkey.
+
 ---
 
 ## 9. Accepted trade-offs (settled — reopen only with new information)

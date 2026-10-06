@@ -121,6 +121,20 @@ def _monitors_from_mutter():
     return mons
 
 
+def _monitors_from_hyprctl():
+    """Hyprland, which has neither mutter nor (usually) xrandr. Hyprland has
+    no primary monitor; list_monitors() promotes the first one."""
+    out = []
+    for m in json.loads(_run(["hyprctl", "monitors", "-j"]) or "[]"):
+        scale = float(m.get("scale") or 1)
+        w, h = round(m["width"] / scale), round(m["height"] / scale)
+        if m.get("transform", 0) % 2:   # 90/270-degree rotations swap axes
+            w, h = h, w
+        out.append({"name": m["name"], "x": m["x"], "y": m["y"],
+                    "w": w, "h": h, "primary": False})
+    return out
+
+
 def list_monitors(root=None):
     """Every monitor as {name, x, y, w, h, primary}.
 
@@ -131,7 +145,8 @@ def list_monitors(root=None):
     primary monitor anyway). Also used by the tray to populate the
     monitor dropdown, which is why it takes no Tk objects when `root`
     is not given."""
-    for probe in (_monitors_from_xrandr, _monitors_from_mutter):
+    for probe in (_monitors_from_xrandr, _monitors_from_mutter,
+                  _monitors_from_hyprctl):
         try:
             got = [m for m in probe() if m["w"] > 0 and m["h"] > 0]
         except Exception:
@@ -306,7 +321,16 @@ class Overlay:
         self.root.attributes("-alpha", 0.0)   # fades in on first show
         self._build_ui()
 
-        self.root.geometry(self._geometry())
+        geo = self._geometry()
+        self.root.geometry(geo)
+        # Hyprland can move an override-redirect window onto the focused
+        # monitor when it is mapped from withdrawn (measured 2026-10-06,
+        # Hyprland 0.56.2 + Tk 8.6: asked for +510+732 on DP-2, landed at
+        # +2430+732 on DP-3), and only on some maps, so a one-shot re-place
+        # after deiconify races it. Remember where the strip belongs (a drag
+        # updates it) and put it back whenever it is moved anywhere else.
+        self._pos = tuple(int(v) for v in geo.split("+")[1:])
+        self.root.bind("<Configure>", self._keep_pos)
         for w in self._draggable:
             w.bind("<Button-1>", self._drag_start)
             w.bind("<B1-Motion>", self._drag_move)
@@ -466,7 +490,13 @@ class Overlay:
         self._dy = e.y_root - self.root.winfo_y()
 
     def _drag_move(self, e):
-        self.root.geometry(f"+{e.x_root - self._dx}+{e.y_root - self._dy}")
+        self._pos = (e.x_root - self._dx, e.y_root - self._dy)
+        self.root.geometry("+%d+%d" % self._pos)
+
+    def _keep_pos(self, e):
+        if e.widget is self.root and (self.root.winfo_x(),
+                                      self.root.winfo_y()) != self._pos:
+            self.root.geometry("+%d+%d" % self._pos)
 
     def render(self, d):
         """`d` is a /now payload. The two layouts read different fields:

@@ -10,8 +10,8 @@ tinted in the source app, Windows only) or on a caption strip at the bottom of t
 screen (both platforms).
 
 > **Status.** The last tagged release is `v0.1.0-beta`, Windows only. Linux
-> (Fedora 44, GNOME on Wayland) support and the caption strip are on `main` and
-> untagged. The audio path is stable and in daily use; the in-place highlighter is
+> support (Fedora 44 on GNOME, and Omarchy on Hyprland, both Wayland) and the
+> caption strip are on `main` and untagged. The audio path is stable and in daily use; the in-place highlighter is
 > the rough part, see [Known issues](#known-issues).
 
 ## Processes
@@ -20,7 +20,7 @@ screen (both platforms).
 |---|---|---|
 | `tts_server.py` | both | Flask on 127.0.0.1:5111. Model resident, budget-driven chunking, WSOLA time-stretch, audio out |
 | `read_aloud.ahk` | Windows | AutoHotkey v2 hotkeys. Copies the selection (clipboard saved and restored) and POSTs it |
-| `read_aloud.sh` | Linux | Same hotkeys, bound through GNOME custom shortcuts. Reads the PRIMARY selection, so it never touches the clipboard |
+| `read_aloud.sh` | Linux | Same hotkeys, bound through GNOME custom shortcuts or Hyprland binds. Reads the PRIMARY selection, so it never touches the clipboard |
 | `highlighter.py` | Windows | Tints the spoken word in the source app via UI Automation and a click-through layered window. Read-only, cannot affect audio |
 | `overlay.py` | both | Caption strip. Polls `/now` and renders the sentence being read |
 | `tray.py` | both | Settings panel over `/config`, plus process control. Windows also gets a tray icon (`tray_win32.py`) |
@@ -133,7 +133,16 @@ whichever torch build is installed, so install one of `requirements.txt` or
 
 ## Install
 
-Both platforms need Python 3.12. `kokoro` declares `Requires-Python >=3.10,<3.13`,
+There is one download for every platform. The code works out which desktop
+it is running on, so only the install steps differ. Pick your section:
+
+| Platform | Desktop | Install section |
+|---|---|---|
+| Windows 11 | | [Windows](#windows) |
+| Fedora 44 | GNOME on Wayland | [Linux (Fedora 44, GNOME on Wayland)](#linux-fedora-44-gnome-on-wayland) |
+| Omarchy 4 (Arch) | Hyprland | [Linux (Omarchy, Hyprland)](#linux-omarchy-hyprland) |
+
+Every platform needs Python 3.12. `kokoro` declares `Requires-Python >=3.10,<3.13`,
 and on 3.13+ pip filters out every usable wheel and reports it as a missing
 package (see [Troubleshooting](#troubleshooting)). Having a newer Python installed
 is fine as long as the venv is not built from it.
@@ -247,6 +256,77 @@ systemctl --user enable --now kokoro-overlay   # captions, if you want them
 The settings panel stays on-demand from the app grid — it is a window, not a
 daemon. `server.log` is still truncated at each start and is still the first
 thing to read on a failure.
+
+### Linux (Omarchy, Hyprland)
+
+Tested on Omarchy 4.0.4 (Arch, Hyprland 0.56.2) with an NVIDIA GPU. The
+Linux scripts are the same as on Fedora. Three things differ:
+
+- **Python 3.12 must be compiled, not downloaded.** Arch ships only 3.14.
+  mise's prebuilt 3.12 installs fine, but its bundled Tk has no Xft, so it
+  sees exactly one bitmap font. The settings panel and the caption strip
+  then render in tiny `fixed` text. Building 3.12 against Arch's own `tk`
+  avoids that, and takes about a minute.
+- **The hotkeys are Hyprland binds**, written by `linux/install-hyprland.sh`.
+- **Fewer system packages.** No `espeak-ng`: `espeakng-loader` ships a
+  working library in the venv. No `python-xlib` either: Hyprland gives
+  `wl-paste` the selection directly, so the GNOME workaround in
+  `read_aloud.sh` is skipped (`read_aloud.log` shows `via=wl`).
+
+```bash
+sudo pacman -S --needed base-devel tk portaudio wl-clipboard jq curl libnotify
+
+# If mise already has a prebuilt 3.12, `mise uninstall python@3.12` first.
+MISE_PYTHON_COMPILE=1 mise install python@3.12
+
+git clone https://github.com/sayed-qutob-work/kokoro-read-aloud.git
+cd kokoro-read-aloud
+"$(mise where python@3.12)/bin/python3.12" -m venv env
+env/bin/python -V                  # must print 3.12.x
+env/bin/python -c "import tkinter as t; r = t.Tk(); r.withdraw(); print(r.tk.call('::tk::pkgconfig', 'get', 'fontsystem'))"
+                                   # must print xft
+
+# NVIDIA GPU:
+env/bin/python -m pip install -r requirements-cuda.txt
+# otherwise:
+env/bin/python -m pip install -r requirements.txt
+
+env/bin/python tts_server.py       # first run downloads the models; Ctrl+C once it says ready
+```
+
+Don't remove that Python with mise later. The venv links to it, and
+`mise uninstall` or `mise prune` would break the venv.
+
+Then the three installers. Each one is per-user and needs no root. Re-run
+them after moving the folder.
+
+```bash
+linux/install-systemd.sh     # autostart: kokoro-server enabled, caption strip opt-in
+linux/install-desktop.sh     # "Kokoro Settings" in the app launcher (Super+Space)
+linux/install-hyprland.sh    # Ctrl+Alt+R / T / S, plus a rule that centres the settings panel
+```
+
+`install-hyprland.sh` writes `~/.config/hypr/kokoro.lua`. It also adds one
+`dofile(...)` line for it to `~/.config/hypr/hyprland.lua`, and backs that
+file up first. Then it reloads Hyprland and stops if Hyprland reports config
+errors. If you had already bound `read_aloud.sh` by hand, it lists those
+files; remove those binds, or every press fires twice. Undo it by deleting
+the `dofile` line and `kokoro.lua`.
+
+Notes:
+
+- **Caption strip monitors** come from `hyprctl monitors`. Hyprland has no
+  primary monitor, so "Primary monitor" in Settings means the first one it
+  lists. Pick the connector (e.g. `DP-3`) to be explicit.
+- **`sudo` needs a terminal** for its password prompt. From a shell without
+  one, such as a script, an AI agent or Claude Code's `!` prefix, use
+  `pkexec` instead. Omarchy's shell shows the password dialog.
+- **Mouse button.** `input-remapper` is in the AUR. Build it with
+  `yay -S input-remapper`, then run
+  `sudo systemctl enable --now input-remapper`. The preset is the same as on
+  Fedora (see [Optional extras](#optional-extras)). Version 2.2.1 runs on
+  Arch's Python 3.14. Omarchy runs XDG autostart entries, so presets set to
+  autoload come back at every login.
 
 ### Optional extras
 
