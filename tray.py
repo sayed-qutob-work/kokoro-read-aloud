@@ -877,6 +877,11 @@ class App:
             w.destroy()
         except Exception:
             pass
+        # Without an icon (Linux) nothing can reopen this process's panel,
+        # so it would linger invisibly; every launcher or bar-widget click
+        # spawns a fresh one anyway.
+        if self.tray is None:
+            self.root.quit()
 
 
 def main():

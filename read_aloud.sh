@@ -127,7 +127,18 @@ fi
 if ! printf '%s' "$text" | jq -Rs '{text: .}' |
      curl -sf -m 10 -X POST "$SERVER/speak" \
           -H 'Content-Type: application/json' --data-binary @- >/dev/null; then
-  note 'Kokoro' 'server not running (start tts_server.py)'
+  # Off on purpose (kokoroctl off / the bar widget freeing VRAM) is not a
+  # failure, and must not wake the GPU behind a game's back either. is-active
+  # says "inactive" for a unit that does not exist too, hence the cat first.
+  unit_state=none
+  if systemctl --user cat kokoro-server >/dev/null 2>&1; then
+    unit_state=$(systemctl --user is-active kokoro-server 2>/dev/null)
+  fi
+  case $unit_state in
+    inactive)   note 'Kokoro is off' 'Its VRAM was freed. Turn it back on from the bar, or: kokoroctl gpu' ;;
+    active|activating) note 'Kokoro is still loading' 'Try again in a few seconds.' ;;
+    *)          note 'Kokoro' 'server not running (start tts_server.py)' ;;
+  esac
   exit 1
 fi
 

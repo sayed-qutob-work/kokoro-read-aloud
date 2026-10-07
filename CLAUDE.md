@@ -44,10 +44,12 @@ port. Phase 1 (release hygiene) shipped as `v0.1.0-beta`.
 | `tray.py` | Settings panel over `/config` + process control. Platform-neutral since 2026-08-18; `--settings` opens the panel directly |
 | `tray_win32.py` | The Windows notification-area icon (Shell_NotifyIcon), split out of `tray.py` so it imports on Linux. Talks only to the `app` object, never to the server |
 | `linux/` | `install-desktop.sh` (app-grid launcher — **there is no tray icon on GNOME**, see AUDIT 2026-08-18), the `.desktop` template and the icon; `install-systemd.sh` + the two `*.service.in` templates (autostart — `kokoro-server` enabled, `kokoro-overlay` opt-in, AUDIT 2026-08-19); `install-hyprland.sh` + `kokoro-hyprland.lua.in` (Hyprland binds + settings-panel window rule → `~/.config/hypr/kokoro.lua`, loaded by one `dofile` line in `hyprland.lua`, AUDIT 2026-10-06). Restarting the server on Linux means `systemctl --user restart kokoro-server`, not a bare `python tts_server.py` |
+| `linux/kokoroctl` | Stdlib CLI (system python3): `status` JSON, `gpu`/`cpu`/`off`/`restart`, `stop`, `clipboard`, `captions`, `settings`, `log`. **Freeing VRAM = ending the process** (a CUDA context lives as long as it does). CPU mode = a systemd drop-in in `$XDG_RUNTIME_DIR` setting `CUDA_VISIBLE_DEVICES=` (empty), so it ends at logout. A hotkey while off notifies and does **not** auto-start the model, so a game keeps its VRAM (AUDIT 2026-10-07) |
+| `linux/omarchy/` | Omarchy bar widget (Quickshell plugin `io.github.sayed-qutob-work.kokoro-read-aloud`): icon + panel, all actions via `kokoroctl`, `/now` polled directly by XHR. `linux/install-omarchy.sh` **copies** it to `~/.config/omarchy/plugins/<id>/` (the shell rejects symlinked plugins) and renders `Paths.js`; re-run after editing the QML. **The shell's hot-reload keeps the old compiled QML** (Quickshell 0.3.1 has no `Qt.clearComponentCache`), so a re-install restarts the shell. Never judge a QML edit before that restart (AUDIT 2026-10-07). QML errors: `qs log -p $OMARCHY_PATH/shell` |
 | `settings.json` | User's tuned voice/speed/pause. **Written by the tray, loaded by the server at startup.** Untracked since v0.1.0-beta — it is per-user, not a default. `settings.example.json` documents the shape. The five `caption_*` keys (`caption_style`, `caption_layout`, `caption_scroll`, `caption_position`, `caption_monitor`) are the exception: read by `overlay.py` at startup, never by the server, so changing them needs the strip restarted |
 | `requirements.txt` | CPU install. `requirements-cuda.txt` is the NVIDIA one; both pull shared pins from `requirements-base.txt`. **Install one or the other, not both** |
 | `docs/` | `AUDIT.md`, `plan.md`, `RELEASE_PLAN.md` — moved out of the root in v0.1.0-beta |
-| `calibration.json` | Measured `density`/`rt` for THIS machine, so a boot starts calibrated. Delete it to re-learn |
+| `calibration.json` | Measured `density`/`rt` for THIS machine, so a boot starts calibrated, kept **per device** (`by_device.cuda`/`.cpu`) since 2026-10-07. Delete it to re-learn |
 | `extension/` | Chromium in-page highlighter (load unpacked); Firefox works via UIA instead |
 | `overlay.py` | Caption strip: polls `/now`, renders the sentence being read. `teleprompter`/`rows` layouts, three themes, continuous scrolling. The only position indicator on Linux (no UIA there). **Not autostarted on either platform** — start it by hand; the tray restarts it when a `caption_*` setting changes |
 | `start_tts.vbs` | Autostart: server + AHK + highlighter + tray, hidden; server output → `server.log` |
@@ -107,7 +109,9 @@ UIA `FindText` returns ranges at the wrong position). `.md` reads happen in
 - `POST /speak {"text":...}`, `POST /stop`
 - `GET/POST /config` — live tuning; the tray persists it to `settings.json`,
   which the server loads at startup (`voice`, `model_speed`, `playback_speed`,
-  `pause`, `first_chunk_audio`, `output_device`)
+  `pause`, `first_chunk_audio`, `output_device`). GET also reports `device`
+  (`cuda`/`cpu`), `measured_rt`, and `rt_known` — false while `rt` is still
+  the 2.0 boot seed, so don't present it as a measurement then
 - `GET/POST /devices` — output devices. **POST re-initializes PortAudio**,
   which is the only way a device plugged in after startup becomes visible
   (PortAudio enumerates once). This is the headphone-replug fix

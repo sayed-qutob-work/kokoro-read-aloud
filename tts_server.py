@@ -168,29 +168,45 @@ def resolve_device(spec):
     return None
 
 
-def load_calibration():
-    """Last session's learned (density, rt), or (None, None).
+def load_calibration(device):
+    """Last session's learned (density, rt) on `device`, or (None, None).
 
     These are MEASURED properties of this machine, not preferences, and they
     take ~10 chunks of EMA to converge. Starting every boot from a hardcoded
     guess is what made the first read of a session mis-plan: the old default
     was 4.0x RT, measured on a 6-core desktop, while this laptop does ~1.7x.
     An rt guessed too HIGH over-fills chunks and starves playback, so a stale
-    value is clamped rather than trusted outright."""
+    value is clamped rather than trusted outright.
+
+    Kept per device since 2026-10-07, when `linux/kokoroctl cpu` made the
+    device switchable: the same desktop measures ~66x RT on its GPU and
+    ~4.6x on its CPU, so one shared value seeds every switch with the other
+    device's speed. A file from before that has no `by_device` and is read
+    as it always was."""
     try:
         with open(CALIB_FILE, encoding="utf-8") as f:
             d = json.load(f)
+        if "by_device" in d:
+            d = d["by_device"].get(device)
+            if not d:
+                return None, None
         return float(d["density"]), float(d["rt"])
     except Exception:
         return None, None
 
 
-def save_calibration(density, rt):
+def save_calibration(density, rt, device):
     try:
+        try:
+            with open(CALIB_FILE, encoding="utf-8") as f:
+                per = json.load(f).get("by_device") or {}
+        except Exception:
+            per = {}
+        per[device] = {"density": round(density, 5), "rt": round(rt, 3),
+                       "saved": time.strftime("%Y-%m-%d %H:%M:%S")}
         tmp = CALIB_FILE + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
-            json.dump({"density": round(density, 5), "rt": round(rt, 3),
-                       "saved": time.strftime("%Y-%m-%d %H:%M:%S")}, f)
+            json.dump({"by_device": per}, f, indent=1)
         os.replace(tmp, CALIB_FILE)
     except Exception:
         pass
@@ -383,7 +399,9 @@ class KokoroEngine:
         self.pipes = {}
         self.voice = KOKORO_VOICE
         self.model_speed = MODEL_SPEED
-        self._pipe_for(self.voice)
+        # "cuda" or "cpu" -- whatever KPipeline auto-picked. An empty
+        # CUDA_VISIBLE_DEVICES (kokoroctl's CPU mode) is what makes it cpu.
+        self.device = self._pipe_for(self.voice).model.device.type
 
     def _pipe_for(self, voice):
         code = "b" if voice.startswith("b") else "a"
@@ -421,6 +439,7 @@ class KokoroOnnxEngine:
         self.k = Kokoro(ONNX_MODEL, ONNX_VOICES)
         self.voice = KOKORO_VOICE
         self.model_speed = MODEL_SPEED
+        self.device = "cpu"
 
     def synth(self, sentence):
         lang = "en-gb" if self.voice.startswith("b") else "en-us"
@@ -446,9 +465,12 @@ class Player:
         # optimistic on this laptop. Over-estimating rt over-fills chunks and
         # starves playback, so a missing/absurd value falls back LOW, which
         # only costs a slightly choppier ramp.
-        dens, rt = load_calibration()
+        dens, rt = load_calibration(engine.device)
         self.density = dens if dens else 0.075
         self.rt = min(rt, 8.0) if rt else 2.0
+        # False while rt is the hardcoded seed, so /config consumers don't
+        # present 2.0 as a measurement of this machine
+        self.rt_known = rt is not None
         self._calib_n = 0
         self.now = None                      # chunk being played, for /now
         self.source = ""                     # original text of the utterance
@@ -704,13 +726,14 @@ class Player:
             w = wlen(buf)
             self.density = 0.7 * self.density + 0.3 * (d / max(w, 1))
             self.rt = 0.7 * self.rt + 0.3 * (d_raw / max(dt, 1e-6))
+            self.rt_known = True
             # persist so the NEXT boot starts calibrated. Early chunks are
             # written too: a session that only ever does short reads would
             # otherwise never reach the periodic save, and boot from the
             # conservative seed forever.
             self._calib_n += 1
             if self._calib_n <= 3 or self._calib_n % 20 == 0:
-                save_calibration(self.density, self.rt)
+                save_calibration(self.density, self.rt, self.engine.device)
             if VERBOSE:
                 print(f"synth {len(buf):3d}ch {w:3d}w -> {d:5.1f}s audio in "
                       f"{dt*1000:6.0f}ms ({d_raw/max(dt,1e-6):5.1f}x RT) "
@@ -984,6 +1007,7 @@ def config():
             if want != player.device_spec:
                 player.set_device(want)
     return jsonify(voice=player.engine.voice,
+                   device=player.engine.device,
                    model_speed=player.engine.model_speed,
                    playback_speed=PLAYBACK_SPEED,
                    effective_speed=round(player.engine.model_speed * PLAYBACK_SPEED, 2),
@@ -992,7 +1016,8 @@ def config():
                    output_device=player.device_spec,
                    output_device_name=player.device_name,
                    measured_density=round(player.density, 4),
-                   measured_rt=round(player.rt, 2))
+                   measured_rt=round(player.rt, 2),
+                   rt_known=player.rt_known)
 
 
 @app.route("/devices", methods=["GET", "POST"])
@@ -1016,7 +1041,8 @@ if __name__ == "__main__":
     t0 = time.perf_counter()
     engine.synth("Warm up.")
     print(f"[{engine.name}] warmed up in "
-          f"{(time.perf_counter() - t0) * 1000:.0f}ms", flush=True)
+          f"{(time.perf_counter() - t0) * 1000:.0f}ms on {engine.device}",
+          flush=True)
     player = Player(engine)
     print(f"[{engine.name}] ready on http://{HOST}:{PORT}", flush=True)
     app.run(host=HOST, port=PORT, threaded=True)

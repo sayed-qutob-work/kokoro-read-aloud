@@ -1,0 +1,393 @@
+#!/usr/bin/env python3
+"""kokoroctl -- control the read-aloud server from a terminal, a keybind or
+the Omarchy bar widget (linux/omarchy/, which calls nothing but this).
+
+Usage:  kokoroctl <command>
+
+  status               one line of JSON: state, device, VRAM/RAM, config
+  gpu | cpu            (re)start the server on that device
+  off                  stop the server -- its VRAM and RAM are freed
+  restart              restart on the device it is on now
+  stop                 stop speaking
+  clipboard            read the clipboard aloud
+  captions [on|off|toggle]
+  settings             open the settings panel (or focus it)
+  log                  follow server.log in a terminal
+
+Why the modes are process lifecycles (AUDIT 2026-10-07): on this desktop
+the server holds ~1.6 GB of VRAM and ~3 GB of RAM all day, and a game or a
+local LLM wants that VRAM back. A CUDA context lives as long as its process,
+so the only way to give the memory back is to end the process. CPU mode
+restarts it with CUDA_VISIBLE_DEVICES empty: no VRAM at all, and the
+i5-12400F still synthesizes at 4.4-5.2x realtime -- above the 1.8x
+playback speed, so reads keep working while the GPU is busy.
+
+CPU mode is a systemd drop-in in $XDG_RUNTIME_DIR, which is wiped at
+logout: the next login is back on the GPU without anyone remembering to
+switch it. Without the systemd unit (linux/install-systemd.sh) the server
+is killed and spawned directly instead, the way tray.py does it.
+
+Stdlib only, so the system python3 runs it in ~50ms. Importing anything
+from the venv would pull in torch and take seconds per call.
+"""
+
+import json
+import os
+import shutil
+import signal
+import subprocess
+import sys
+import time
+import urllib.request
+
+ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+PY = os.path.join(ROOT, "env", "bin", "python")
+SERVER = os.environ.get("KOKORO_SERVER", "http://127.0.0.1:5111")
+UNIT = "kokoro-server.service"
+OVERLAY_UNIT = "kokoro-overlay.service"
+RUNTIME = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+DROPIN = os.path.join(RUNTIME, "systemd", "user", UNIT + ".d",
+                      "50-kokoro-cpu.conf")
+SETTINGS_TITLE = "Kokoro read-aloud - settings"
+WIDGET_ID = "io.github.sayed-qutob-work.kokoro-read-aloud"
+
+
+def run(args, timeout=10):
+    try:
+        r = subprocess.run(args, capture_output=True, text=True,
+                           timeout=timeout)
+        return r.returncode, r.stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return -1, ""
+
+
+def api(path, payload=None, timeout=0.5):
+    """GET, or POST when payload is given. None when the server is down."""
+    try:
+        data = None if payload is None else json.dumps(payload).encode()
+        req = urllib.request.Request(SERVER + path, data=data,
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            body = r.read().decode()
+        return json.loads(body) if body.strip() else {}
+    except Exception:
+        return None
+
+
+def systemctl(*args, timeout=30):
+    return run(["systemctl", "--user", *args], timeout=timeout)
+
+
+def unit_props(unit):
+    rc, out = systemctl("show", unit, "-p", "LoadState", "-p", "ActiveState",
+                        "-p", "MainPID")
+    if rc != 0:
+        return {}
+    return dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
+
+
+def managed(unit=UNIT):
+    """True when the systemd unit is installed -- then systemd owns the
+    process, and killing it behind systemd's back would only confuse it."""
+    return unit_props(unit).get("LoadState") == "loaded"
+
+
+def pids(script):
+    """Python processes running `script`. pgrep -f alone also matches any
+    shell whose command line mentions the name, so check the binary too."""
+    _rc, out = run(["pgrep", "-f", script])
+    found = []
+    for pid in out.split():
+        try:
+            with open(f"/proc/{int(pid)}/comm", encoding="utf-8") as f:
+                if f.read().strip().startswith("python"):
+                    found.append(int(pid))
+        except (OSError, ValueError):
+            continue
+    return [p for p in found if p != os.getpid()]
+
+
+def server_pid():
+    p = unit_props(UNIT)
+    pid = int(p.get("MainPID") or 0)
+    if pid:
+        return pid
+    found = pids("tts_server.py")
+    return found[0] if found else None
+
+
+def proc_is_cpu(pid):
+    """Whether this process was started with the GPU hidden from it."""
+    try:
+        with open(f"/proc/{pid}/environ", "rb") as f:
+            return b"CUDA_VISIBLE_DEVICES=\x00" in (b"\x00" + f.read())
+    except OSError:
+        return False
+
+
+def proc_rss_mib(pid):
+    try:
+        with open(f"/proc/{pid}/status", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) // 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+def proc_uptime(pid):
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8") as f:
+            start = int(f.read().rsplit(")", 1)[1].split()[19])
+        with open("/proc/uptime", encoding="utf-8") as f:
+            up = float(f.read().split()[0])
+        return max(0, int(up - start / os.sysconf("SC_CLK_TCK")))
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def gpu_info(pid):
+    """(gpu, vram_mib held by pid). gpu is None without nvidia-smi."""
+    if not shutil.which("nvidia-smi"):
+        return None, None
+    rc, out = run(["nvidia-smi", "--query-gpu=name,memory.used,memory.total",
+                   "--format=csv,noheader,nounits"], timeout=5)
+    if rc != 0 or not out.strip():
+        return None, None
+    name, used, total = [s.strip() for s in out.splitlines()[0].split(",")]
+    gpu = {"name": name, "used_mib": int(used), "total_mib": int(total)}
+    vram = None
+    if pid:
+        _rc, out = run(["nvidia-smi", "--query-compute-apps=pid,used_memory",
+                        "--format=csv,noheader,nounits"], timeout=5)
+        for line in out.splitlines():
+            parts = [s.strip() for s in line.split(",")]
+            if len(parts) == 2 and parts[0] == str(pid):
+                vram = int(parts[1])
+    return gpu, vram
+
+
+def status():
+    is_managed = managed()
+    state_raw = unit_props(UNIT).get("ActiveState", "") if is_managed else ""
+    pid = server_pid()
+    cfg = api("/config")
+    now = api("/now") if cfg is not None else None
+
+    if cfg is not None:
+        state = "running"
+    elif is_managed:
+        state = {"active": "loading", "activating": "loading",
+                 "reloading": "loading", "deactivating": "stopping",
+                 "failed": "failed"}.get(state_raw, "off")
+    else:
+        state = "loading" if pid else "off"
+
+    if state in ("off", "failed") or not pid:
+        mode = "off"
+    elif cfg and cfg.get("device"):
+        mode = "gpu" if cfg["device"] == "cuda" else "cpu"
+    else:
+        mode = "cpu" if proc_is_cpu(pid) else "gpu"
+
+    gpu, vram = gpu_info(pid if mode != "off" else None)
+    return {
+        "managed": is_managed,
+        "state": state,
+        "mode": mode,
+        "pid": pid if mode != "off" else None,
+        "uptime": proc_uptime(pid) if pid and mode != "off" else None,
+        "vram_mib": vram,
+        "rss_mib": proc_rss_mib(pid) if pid and mode != "off" else None,
+        "gpu": gpu,
+        "config": cfg,
+        "speaking": bool(now and now.get("active")),
+        "captions": bool(pids("overlay.py")),
+        "root": ROOT,
+    }
+
+
+def kill(pid_list, wait=6.0):
+    for pid in pid_list:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+    deadline = time.monotonic() + wait
+    while time.monotonic() < deadline:
+        if not any(os.path.exists(f"/proc/{p}") for p in pid_list):
+            return
+        time.sleep(0.1)
+    for pid in pid_list:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+
+
+def spawn(args, out_path, err_path=None, env=None):
+    """Detached child, the same contract as tray.py's spawn_hidden."""
+    out = open(out_path, "w")
+    err = open(err_path, "w") if err_path else subprocess.STDOUT
+    subprocess.Popen(args, cwd=ROOT, stdout=out, stderr=err,
+                     stdin=subprocess.DEVNULL, close_fds=True,
+                     start_new_session=True, env=env)
+
+
+def write_dropin(cpu):
+    """CPU mode on/off for the systemd unit. Returns True if it changed."""
+    exists = os.path.exists(DROPIN)
+    if cpu == exists:
+        return False
+    if cpu:
+        os.makedirs(os.path.dirname(DROPIN), exist_ok=True)
+        with open(DROPIN, "w", encoding="utf-8") as f:
+            f.write("# Written by kokoroctl: CPU mode, for this login only\n"
+                    "# ($XDG_RUNTIME_DIR is wiped at logout). An empty\n"
+                    "# CUDA_VISIBLE_DEVICES hides every GPU from torch.\n"
+                    "[Service]\nEnvironment=CUDA_VISIBLE_DEVICES=\n")
+    else:
+        os.remove(DROPIN)
+    systemctl("daemon-reload")
+    return True
+
+
+def set_mode(mode):
+    if mode == "off":
+        if managed():
+            systemctl("stop", UNIT, timeout=60)
+        kill(pids("tts_server.py"))
+        return "off"
+
+    cpu = mode == "cpu"
+    if managed():
+        changed = write_dropin(cpu)
+        pid = server_pid()
+        active = unit_props(UNIT).get("ActiveState") in ("active", "activating")
+        if active and pid and not changed and proc_is_cpu(pid) == cpu:
+            return f"already on {mode}"
+        systemctl("restart", UNIT, timeout=60)
+        return f"starting on {mode}"
+
+    pid_list = pids("tts_server.py")
+    if pid_list and all(proc_is_cpu(p) == cpu for p in pid_list):
+        return f"already on {mode}"
+    kill(pid_list)
+    env = dict(os.environ)
+    if cpu:
+        env["CUDA_VISIBLE_DEVICES"] = ""
+    else:
+        env.pop("CUDA_VISIBLE_DEVICES", None)
+    spawn([PY, os.path.join(ROOT, "tts_server.py")],
+          os.path.join(ROOT, "server.log"), env=env)
+    return f"starting on {mode}"
+
+
+def restart():
+    """Same device as now: systemd keeps the drop-in, and a bare process
+    is respawned with the environment it had."""
+    if managed():
+        systemctl("restart", UNIT, timeout=60)
+        return "restarting"
+    pid = server_pid()
+    cpu = bool(pid) and proc_is_cpu(pid)
+    kill(pids("tts_server.py"))
+    return set_mode("cpu" if cpu else "gpu")
+
+
+def captions(action):
+    running = pids("overlay.py")
+    if action == "toggle":
+        action = "off" if running else "on"
+    if action == "off":
+        if unit_props(OVERLAY_UNIT).get("ActiveState") == "active":
+            systemctl("stop", OVERLAY_UNIT)
+        kill(pids("overlay.py"))
+        return "captions off"
+    if running:
+        return "captions already on"
+    if managed(OVERLAY_UNIT):
+        systemctl("start", OVERLAY_UNIT)
+    else:
+        spawn([PY, os.path.join(ROOT, "overlay.py")],
+              os.path.join(ROOT, "overlay.log"),
+              os.path.join(ROOT, "overlay.err"))
+    return "captions on"
+
+
+def settings():
+    """Focus the panel if it is open, else open one. Hyprland only for the
+    focus; anywhere else a second panel opens, which is harmless."""
+    if shutil.which("hyprctl"):
+        _rc, out = run(["hyprctl", "clients", "-j"])
+        try:
+            clients = json.loads(out or "[]")
+        except ValueError:
+            clients = []
+        addr = next((c.get("address") for c in clients
+                     if c.get("title") == SETTINGS_TITLE), None)
+        if addr:
+            # A Lua config (Hyprland 0.56, Omarchy 4) rejects the old
+            # dispatcher syntax and still exits 0, so check the output --
+            # the same fallback omarchy-launch-or-focus uses.
+            _rc, out = run(["hyprctl", "dispatch",
+                            f'hl.dsp.focus({{ window = "address:{addr}" }})'])
+            if out.strip() != "ok":
+                run(["hyprctl", "dispatch", "focuswindow", f"address:{addr}"])
+            return "focused"
+    spawn([PY, os.path.join(ROOT, "tray.py"), "--settings"], os.devnull)
+    return "opened"
+
+
+def log():
+    path = os.path.join(ROOT, "server.log")
+    if shutil.which("omarchy-launch-tui"):
+        args = ["omarchy-launch-tui", "--app-id=org.omarchy.kokoro-log",
+                "less", "+F", path]
+    else:
+        args = ["xdg-open", path]
+    subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL, start_new_session=True)
+    return "opened " + path
+
+
+def ping_widget():
+    """Tell the bar widget to refresh now rather than on its next poll, so
+    a keybind's change shows at once. Best-effort: no shell, no problem."""
+    if shutil.which("omarchy-shell"):
+        run(["omarchy-shell", "-q", WIDGET_ID, "refresh"], timeout=3)
+
+
+def main(argv):
+    cmd = argv[1] if len(argv) > 1 else "status"
+    if cmd == "status":
+        print(json.dumps(status(), separators=(",", ":")))
+        return 0
+    if cmd in ("gpu", "cpu", "off"):
+        msg = set_mode(cmd)
+    elif cmd == "restart":
+        msg = restart()
+    elif cmd == "stop":
+        msg = "stopped" if api("/stop", payload={}) is not None else "server not running"
+    elif cmd == "clipboard":
+        subprocess.Popen([os.path.join(ROOT, "read_aloud.sh"), "clipboard"],
+                         stdin=subprocess.DEVNULL, start_new_session=True)
+        msg = "reading the clipboard"
+    elif cmd == "captions":
+        msg = captions(argv[2] if len(argv) > 2 else "toggle")
+    elif cmd == "settings":
+        msg = settings()
+    elif cmd == "log":
+        msg = log()
+    else:
+        print("\n\n".join(__doc__.split("\n\n")[1:3]), file=sys.stderr)
+        return 2
+    print(msg)
+    if cmd not in ("settings", "log", "clipboard"):
+        ping_widget()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

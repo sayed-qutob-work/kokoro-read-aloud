@@ -2566,6 +2566,191 @@ as 2026-08-19, carried over unchanged:
   selection, and those reads log as `try=0 stale=0`, the same as the
   keyboard hotkey.
 
+### DEPLOYED 2026-10-07: free the VRAM on demand: `linux/kokoroctl`, CPU mode, and an Omarchy bar widget
+
+User request: the server runs 24/7, and for gaming or local AI work they
+want its VRAM back without editing anything. They asked for a top-bar icon
+like Proton VPN's, with free memory, restart and similar actions, in the
+Omarchy theme. Machine: the 2026-10-06 Omarchy desktop (i5-12400F, RTX 4060
+Ti 8 GB, 16 GB RAM).
+
+**Measured cost of leaving it running** (`nvidia-smi --query-compute-apps`,
+`/proc/<pid>/status`):
+- **1636 MiB VRAM** after ~35 min with a dozen reads;
+- **768 MiB** right after a restart, so the PyTorch caching allocator grows
+  with use;
+- RSS 2.0–2.3 GB on the GPU and 1.5–1.8 GB on the CPU.
+
+A CUDA context lives as long as its process, so the only complete way to
+free that memory is to end the process. `torch.cuda.empty_cache()` after
+each read might keep idle VRAM nearer 768 MiB without a restart.
+**Not measured.** Measure it before building on it.
+
+**CPU mode was measured, then built.** The scratch benchmark ran a separate
+process with `CUDA_VISIBLE_DEVICES=` (empty), no audio, torch at 6 threads.
+`torch.cuda.is_available()` returned False, and the model loaded in 1.4s. It
+synthesized at **4.40–5.19x RT** on 145–204-char texts. A live CPU-mode
+server measured:
+- **5.2–5.3x RT**;
+- START **346 and 494ms**, against 64–99ms on the GPU;
+- **one 380ms GAP**: the opening was a 26-char single clause (1.2s of
+  audio), and chunk 2 (3.6s of audio) synthesized at 3.8x RT. This is the
+  §5 small-first-chunk gap. At 5x RT, CPU mode has little headroom over the
+  1.8x drain for it. The 2-read sample had no other gap.
+
+So CPU mode is viable against the default 1.8x playback, with a slower
+start and occasional gaps. The panel's hint says so.
+
+**`linux/kokoroctl`** (stdlib, system python3, `status` takes ~110ms):
+- `gpu|cpu|off|restart|stop|clipboard|captions|settings|log|status`.
+- **CPU mode is a runtime drop-in**,
+  `$XDG_RUNTIME_DIR/systemd/user/kokoro-server.service.d/50-kokoro-cpu.conf`,
+  with `Environment=CUDA_VISIBLE_DEVICES=`, followed by `daemon-reload` and a
+  restart. `systemctl --user show -p DropInPaths,Environment` confirmed that
+  systemd reads it. The runtime dir is wiped at logout, so the next login is
+  back on the GPU. `off` is `systemctl --user stop`, and the unit stays
+  enabled, so the next login starts it again.
+- Without the unit it kills and spawns `tts_server.py` like `tray.py` does.
+  That fallback is **not exercised here**, since this machine has the unit.
+- Measured: `off` returns in **145ms**, and the Kokoro PID then leaves
+  nvidia-smi entirely. A cold start until `/config` answers takes **~6.06s**
+  on both GPU and CPU (status polled every 250ms).
+- `status` reads the device from `/config`. While the model is still
+  loading, it reads it from `/proc/<pid>/environ` instead.
+
+**Server changes:**
+- `engine.device` (`model.device.type`), with `device` in `GET /config` and
+  in the "warmed up … on cuda" log line.
+- **Calibration is kept per device**, as `{"by_device": {"cuda": …, "cpu": …}}`.
+  One shared value would seed every switch with the other device's speed,
+  since 66x and 5x differ by an order of magnitude. A legacy file with no
+  `by_device` is read as before. A `by_device` file with no entry for the
+  current device seeds the conservative 2.0.
+- Seen once during the switch-over: the CPU session wrote the first
+  `by_device` file, so the next GPU boot had no `cuda` entry and started at
+  2.0. After one read, both entries exist (cpu 5.35, cuda 22.5, still
+  converging up).
+- **`rt_known`** in `/config`. It is False while `rt` is still the 2.0 seed.
+  The widget first showed "2.0× realtime" on a fresh GPU boot, which was the
+  seed and not a measurement. It now hides the figure until it is known.
+
+**Other fixes found on the way:**
+- **`read_aloud.sh`** checks `systemctl --user is-active kokoro-server` when
+  `/speak` fails. `inactive` gives "Kokoro is off … turn it back on from the
+  bar", and `active|activating` gives "still loading". It deliberately
+  **does not start the server**: the mouse macro is a held side button, and
+  games use side buttons, so a held button mid-game would load 0.8–1.6 GB into
+  VRAM. Verified: `NOTE Kokoro is off` in `read_aloud.log`.
+- **`tray.py` lingered after its panel closed on Linux.** With no tray icon,
+  closing destroyed the window and left the Tk root running, invisible, so
+  every launcher click leaked a process. `_close` now quits when
+  `self.tray is None`. Verified: the process exits after a window close.
+- **Hyprland 0.56's Lua config rejects old-style dispatchers.**
+  `hyprctl dispatch focuswindow title:…` prints a Lua parse error, so
+  `kokoroctl settings` claimed "focused" and did nothing. Use
+  `hyprctl dispatch 'hl.dsp.focus({ window = "address:0x…" })'`. It prints
+  `ok`, and kokoroctl falls back to the legacy form on anything else, the
+  same as `omarchy-launch-or-focus`. **Any future Hyprland dispatch from
+  this repo needs the Lua form.**
+
+**The widget** is `linux/omarchy/`, plugin id
+`io.github.sayed-qutob-work.kokoro-read-aloud`:
+- **Files.** `Panel.qml` is the bar button and popup. `Service.qml` holds
+  state, polls `kokoroctl status` (2.5s while open, 15s closed, 0.7s while a
+  switch settles) and polls `/now` by XHR (1s closed, 250ms open; no process
+  spawns). `KokoroIcon.qml` is five rounded bars that dance while reading,
+  sweep while loading, and lie flat as dots when off.
+- **Kit.** It is built from the shell's own components (`Panel`,
+  `KeyboardPanel`, `PanelHero`, `Button`, `PanelSectionHeader`), so it
+  follows the theme.
+- **Panel.** GPU / CPU / Off selector, a memory bar (Kokoro's VRAM over
+  every other process's), RAM, voice/speed/output/uptime, a "now reading"
+  card with the spoken part of the sentence bright, and six actions.
+- **Mouse.** Right click toggles off/on, middle click stops the read.
+- **Install.** `install-omarchy.sh` **copies** the plugin (it builds in a
+  staging dir, runs `omarchy plugin validate`, then swaps it in). It does not
+  symlink, because the validator rejects symlinks. It renders `Paths.js`
+  with the repo root and enables the widget `--after omarchy.tray`.
+- **Logs.** `qs log -p $OMARCHY_PATH/shell` shows QML errors. The many
+  "Handler was registered but will not be used" lines there are normal: one
+  bar per monitor, each registering every widget's IPC target.
+
+**Verified** with grim screenshots of DP-2:
+- the bar icon at rest and as dim dots when off;
+- the panel ready, loading (CPU button spinning, bars sweeping), on CPU
+  (no VRAM, the others' memory only), reading (karaoke text, rotating hero
+  phrase), and off ("OFF · 0.8 GB VRAM FREED" after GPU → off).
+
+Verified by other means:
+- IPC `gpu`/`cpu`/`off`/`status`/`open`/`close`;
+- `wtype` j/j/l moving the cursor to "Read clipboard", and Esc closing the
+  panel. Unlike Hyprland global binds (2026-10-06), wtype keys do reach the
+  focused layer surface;
+- captions on/off through the `kokoro-overlay` unit;
+- the settings panel focus/open path.
+
+**Not hand-tested:** real mouse clicks on the icon. Left, right and middle
+use the same `onPressed(buttonCode)` mapping as the first-party Dropbox
+widget.
+
+**User-confirmed, same evening:** "everything seems to work perfectly". The
+journal shows them switching modes by hand at 21:41, and they left the
+server on CPU. Which clicks they tried was not itemised.
+
+#### Audit pass, same day: what the first round got wrong
+
+- **The shell's plugin hot-reload does not load new QML.** After a
+  re-install, the panel still showed the *old* CPU-hint text, although
+  `cmp` showed the installed `Panel.qml` was new.
+  `omarchy-shell shell rescanPlugins` did not fix it either, and an
+  `omarchy restart shell` did. Cause: `shell.qml`'s reload calls
+  `Qt.clearComponentCache()` only `if (typeof … === "function")`. That
+  global doesn't exist in Quickshell 0.3.1, so the cache is never cleared
+  and the widget is rebuilt from the cached compiled type. "Local plugin
+  changed, reloading" in `qs log` therefore **does not mean** the new code
+  runs.
+  - Correction to the round above: the CPU-hint rewording and the
+    `rt_known` handling in `Service.qml` were not running when the earlier
+    screenshots were taken. They first ran after the shell restart, and the
+    new hint was confirmed by screenshot then.
+  - `install-omarchy.sh` now runs `omarchy restart shell` when the widget is
+    already enabled. A first install doesn't need the restart, because no
+    type is cached yet.
+- **`read_aloud.sh` misreported a missing unit.**
+  `systemctl --user is-active <unit>` prints `inactive` (exit 4) for a unit
+  that **does not exist**. A Linux install without `install-systemd.sh`
+  therefore said "Kokoro is off … VRAM was freed" whenever the server simply
+  wasn't running. It now checks `systemctl --user cat` first.
+- **`install-omarchy.sh` could delete the plugins directory.** `DEST` is
+  `rm -rf`'d, and an empty id from `jq` would have made it
+  `~/.config/omarchy/plugins/`. The id is now validated against the
+  validator's own regex before use.
+- **Known, accepted:** the bar is instantiated once per monitor, so each
+  instance runs its own `Service`. That is two `kokoroctl status` processes
+  per 15 s and two `/now` XHRs per second. The cost is negligible, so
+  nothing was changed.
+
+**README rewritten** for someone landing on the repo:
+- What-you-get first, then install, then a new **Omarchy bar widget**
+  section with two screenshots and the mode-cost table. The screenshots are
+  `docs/img/omarchy-widget.png`, the panel mid-read on GPU, and
+  `docs/img/omarchy-bar-states.png`, the icon ready / reading / off. Both
+  were cropped from grim captures, so the pixels are real and not mocked up.
+  For the shots the server was switched to GPU, then put back on the user's
+  CPU choice.
+- Stale facts fixed:
+  - "nothing autostarts" the caption strip (the `kokoro-overlay` unit does,
+    opt-in);
+  - a "~60ms macro gap" (the 2026-08-19 tap/hold macro reads 10ms after
+    release, and the settle loop covers the rest);
+  - Fedora's package list lacked **`python3-xlib`**, which
+    `linux/xselection.py` has needed on GNOME since mutter 50.5 (2026-09-30).
+    That entry noted it came in with input-remapper, so a fresh install
+    without input-remapper would have fallen back to the stalling `wl-paste`.
+    The package name is **not verified on Fedora** from this machine.
+- The dev-only "restart discipline" note moved out of Settings into
+  Troubleshooting. The process table moved to the end, as "How it works".
+
 ---
 
 ## 9. Accepted trade-offs (settled — reopen only with new information)
