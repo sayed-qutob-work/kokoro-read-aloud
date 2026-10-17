@@ -15,8 +15,9 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 APPS="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 DEST="$APPS/kokoro-settings.desktop"
 
-if [[ ! -x "$ROOT/env/bin/python" ]]; then
-  echo "no venv at $ROOT/env -- create it first (see README)" >&2
+PY="${XDG_DATA_HOME:-$HOME/.local/share}/kokoro-read-aloud/venv/bin/python"
+if [[ ! -x $PY && ! -x "$ROOT/env/bin/python" ]]; then
+  echo "no Python environment for the server -- run linux/kokoroctl setup" >&2
   exit 1
 fi
 

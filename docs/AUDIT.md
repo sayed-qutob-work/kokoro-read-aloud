@@ -3204,6 +3204,69 @@ It ran in the no-network namespace with `CUDA_VISIBLE_DEVICES=` empty:
 
 The throwaway venv was deleted afterwards.
 
+### DEPLOYED 2026-10-17: `kokoroctl setup` (plugin packaging, step 3c)
+
+`linux/kokoro_setup.py` (stdlib, system Python) runs five steps. Each
+writes `setup.json` in the state folder, which `kokoroctl status` returns
+as `setup`, next to an `installed` flag. Steps:
+
+1. **System packages.** Checks Tk for `/usr/bin/python3`, PortAudio,
+   wl-paste, jq, curl, notify-send and a systemd user session; on GNOME,
+   python-xlib too. Setup cannot install anything (no root), so it prints
+   the one `pacman` or `dnf` command for whatever is missing. It also
+   checks free space before a first install: 8 GiB for CUDA, 3 GiB for CPU.
+2. **uv.** The system's uv if it is at least 0.12.10, else 0.12.24 from
+   GitHub into `bin/`, checked against a SHA-256 pinned in the code.
+   - Only the binary is read out of the tarball, under a name we choose.
+   - 0.12.10 is the floor because it is what Arch ships: its `uv lock
+     --locked` passes on this lock, and its `uv sync --frozen --extra cpu`
+     installed exactly the lock's 96 CPU packages.
+3. **Python and packages.** `uv python install 3.12 --no-bin`, then
+   `uv sync --frozen --extra cuda|cpu --compile-bytecode`.
+   - CUDA when `nvidia-smi -L` works, otherwise CPU; `--cpu` and `--cuda`
+     override.
+   - Every uv call gets its own cache (`UV_CACHE_DIR`), its own Python
+     folder, the venv path, only-managed Pythons and `UV_NO_CONFIG`, so a
+     user's `uv.toml` cannot change what is installed.
+   - Progress is completed MiB over announced MiB. uv announces every
+     large download before the first one finishes.
+   - **Then it checks the torch build that actually came out:** `+cu126` or
+     `+cpu`, and with CUDA, whether it sees the GPU.
+4. **Model.** `model_files.verify()`, then `fetch` for anything missing or
+   wrong.
+5. **Services.** The existing installers: systemd units, launcher entry,
+   and the Hyprland hotkeys under Hyprland. A server that was already
+   running is restarted, because it still has the old Python. Then setup
+   waits for `/config`. On GNOME it prints the hotkey commands to bind.
+
+The unit template takes `@PYTHON@`. `paths.SERVER_PYTHON` and both
+installers choose setup's venv, or else a hand-made `env/`.
+
+**Verified on the Omarchy desktop:**
+- **The repair run took 9.2 s.** It downloaded uv, kept Python and the 115
+  packages, and verified the model. It moved the server unit to
+  `~/.local/share/kokoro-read-aloud/venv`. The server's executable is now
+  the uv-managed Python 3.12.15, loading the model by path.
+- **Zero writes to the code folder.** `inotifywait -m -r`, the shell's own
+  mechanism, watched the repo through the whole run and saw nothing.
+- **Failure, then repair.** One voice moved away and HTTPS sent through a
+  dead proxy:
+  - setup stopped at step 4 with "could not download the model from
+    huggingface.co (… Connection refused). Check the connection, then run
+    setup again";
+  - status showed `failed` and `installed: false`;
+  - the running server was untouched.
+
+  The next run fetched only the missing file.
+- **`--background`:**
+  - runs as the transient unit `kokoro-setup`;
+  - a second call answers "setup is already running";
+  - status reported steps 3 → 4 → 5 → done;
+  - systemd collected the unit, and the log went to `setup.log`.
+
+**Not done by setup:** binding GNOME shortcuts (it prints them), and
+installing the bar widget, which `omarchy plugin add` does (step 3d).
+
 ### DEPLOYED 2026-10-17: the model is pinned and loaded by path, and the server runs offline (step 3b)
 
 **`model_files.py` pins 30 files** at revision `f3ff357…`:

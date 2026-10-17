@@ -13,6 +13,9 @@ Usage:  kokoroctl <command>
   captions [on|off|toggle]
   settings             open the settings panel (or focus it)
   log                  follow server.log in a terminal
+  setup [--cpu|--cuda] [--background]
+                       install the server's Python, packages and model
+                       (linux/kokoro_setup.py); run again to repair
 
 Why the modes are process lifecycles (AUDIT 2026-10-07): on this desktop
 the server holds ~1.6 GB of VRAM and ~3 GB of RAM all day, and a game or a
@@ -44,8 +47,10 @@ ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 sys.dont_write_bytecode = True     # no __pycache__ next to the code, see paths.py
 sys.path.insert(0, ROOT)
 import paths                       # noqa: E402
+import model_files                 # noqa: E402
+import kokoro_setup                # noqa: E402  (linux/, next to this file)
 
-PY = os.path.join(ROOT, "env", "bin", "python")
+PY = paths.SERVER_PYTHON
 SERVER = os.environ.get("KOKORO_SERVER", "http://127.0.0.1:5111")
 UNIT = "kokoro-server.service"
 OVERLAY_UNIT = "kokoro-overlay.service"
@@ -209,6 +214,9 @@ def status():
         "speaking": bool(now and now.get("active")),
         "captions": bool(pids("overlay.py")),
         "root": ROOT,
+        # what the widget needs to offer setup, and to show it running
+        "installed": os.path.exists(PY) and model_files.complete(),
+        "setup": kokoro_setup.read_progress(),
     }
 
 
@@ -369,6 +377,17 @@ def main(argv):
     if cmd == "status":
         print(json.dumps(status(), separators=(",", ":")))
         return 0
+    if cmd == "setup":
+        args = argv[2:]
+        bad = [a for a in args if a not in ("--cpu", "--cuda", "--background")]
+        if bad or ("--cpu" in args and "--cuda" in args):
+            print("usage: kokoroctl setup [--cpu | --cuda] [--background]", file=sys.stderr)
+            return 2
+        if "--background" in args:
+            print(kokoro_setup.start_background([a for a in args if a != "--background"]))
+            return 0
+        variant = "cpu" if "--cpu" in args else "cuda" if "--cuda" in args else None
+        return kokoro_setup.run(variant)
     if cmd in ("gpu", "cpu", "off"):
         msg = set_mode(cmd)
     elif cmd == "restart":

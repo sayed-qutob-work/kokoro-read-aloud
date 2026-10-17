@@ -17,15 +17,19 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 UNITS="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 # where paths.py puts the logs; systemd will not create it for us
 STATE="${XDG_STATE_HOME:-$HOME/.local/state}/kokoro-read-aloud"
+# the server's Python, the same choice as paths.SERVER_PYTHON
+PY="${XDG_DATA_HOME:-$HOME/.local/share}/kokoro-read-aloud/venv/bin/python"
+[[ -x $PY ]] || PY="$ROOT/env/bin/python"
 
-if [[ ! -x "$ROOT/env/bin/python" ]]; then
-  echo "no venv at $ROOT/env -- create it first (see README)" >&2
+if [[ ! -x $PY ]]; then
+  echo "no Python environment for the server -- run linux/kokoroctl setup" >&2
   exit 1
 fi
 
 mkdir -p "$UNITS" "$STATE"
 for u in kokoro-server kokoro-overlay; do
-  sed -e "s|@ROOT@|$ROOT|g" -e "s|@STATE@|$STATE|g" "$ROOT/linux/$u.service.in" > "$UNITS/$u.service"
+  sed -e "s|@ROOT@|$ROOT|g" -e "s|@STATE@|$STATE|g" -e "s|@PYTHON@|$PY|g" \
+      "$ROOT/linux/$u.service.in" > "$UNITS/$u.service"
   chmod 644 "$UNITS/$u.service"
   echo "installed $UNITS/$u.service"
 done

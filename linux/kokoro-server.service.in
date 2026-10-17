@@ -9,7 +9,8 @@ Wants=pipewire.service
 [Service]
 Type=simple
 WorkingDirectory=@ROOT@
-ExecStart=@ROOT@/env/bin/python @ROOT@/tts_server.py
+# @PYTHON@ is the venv `kokoroctl setup` made, or a hand-made env/ (paths.py)
+ExecStart=@PYTHON@ @ROOT@/tts_server.py
 # Same contract as start_tts.vbs on Windows: server.log is truncated at each
 # start, and is the first thing to read on any failure. It lives in the state
 # folder (paths.py). install-systemd.sh and kokoroctl create that folder;

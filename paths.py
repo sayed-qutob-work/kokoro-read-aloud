@@ -8,7 +8,8 @@ Linux: the XDG base directories, never the code folder.
 
     ~/.config/kokoro-read-aloud/       settings.json, the user's tuning
     ~/.local/state/kokoro-read-aloud/  logs and calibration.json
-    ~/.local/share/kokoro-read-aloud/  the model files (model_files.py)
+    ~/.local/share/kokoro-read-aloud/  what `kokoroctl setup` installs: the
+                                       server's venv, the model files, uv
 
 On Omarchy the code folder is about to become the plugin folder
 (~/.config/omarchy/plugins/<id>), and the shell watches that folder: any
@@ -50,6 +51,19 @@ OVERLAY_LOG = os.path.join(STATE, "overlay.log")
 OVERLAY_ERR = os.path.join(STATE, "overlay.err")
 TRAY_LOG = os.path.join(STATE, "tray.log")
 TRAY_ERR = os.path.join(STATE, "tray.err")             # the panel's stderr, via kokoroctl
+SETUP_JSON = os.path.join(STATE, "setup.json")         # setup's progress, for the widget
+SETUP_LOG = os.path.join(STATE, "setup.log")
+
+# The server's Python. Linux: the venv `kokoroctl setup` makes with uv, or
+# else an env/ made by hand in the code folder (pip, as the README did
+# before setup existed). Windows: env\, as always.
+VENV = os.path.join(DATA, "venv")
+if IS_WIN:
+    SERVER_PYTHON = os.path.join(ROOT, "env", "Scripts", "python.exe")
+else:
+    SERVER_PYTHON = os.path.join(VENV, "bin", "python")
+    if not os.path.exists(SERVER_PYTHON):
+        SERVER_PYTHON = os.path.join(ROOT, "env", "bin", "python")
 
 # The settings panel and the caption strip are Tk windows, and stdlib +
 # tkinter only, so any Python 3 runs them; only the server needs the 3.12
