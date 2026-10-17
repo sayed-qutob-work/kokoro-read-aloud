@@ -18,6 +18,8 @@ highlighter.err
 highlighter.out
 tray.log
 read_aloud.log
+overlay.log
+overlay.err
 tray.err
 tray.out
 __pycache__/
