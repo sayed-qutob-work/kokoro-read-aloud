@@ -3467,6 +3467,57 @@ widget runs the plugin folder's `kokoroctl`, so it points the units and
 hotkeys at the plugin folder. That is right for users. On this desktop
 `linux/kokoroctl setup` from the repo pointed them back.
 
+### DOCUMENTED 2026-10-17: install, update and remove instructions in the README (step 3e)
+
+The README's Install section now follows the setup path.
+
+**Omarchy:**
+- `sudo pacman -S --needed tk portaudio wl-clipboard jq curl libnotify`;
+- then `omarchy plugin add <repo> --enable`;
+- then **Set up** in the bar, or `kokoroctl setup` from the plugin folder.
+
+`base-devel`, mise and the compiled Python are gone.
+
+**Fedora:** the dnf line, `git clone`, `linux/kokoroctl setup`, and the
+GNOME shortcuts by hand. The dnf line drops `python3.12*` and `espeak-ng`;
+§7 showed misaki never used the system eSpeak. The README says plainly
+that setup has not run on Fedora yet.
+
+A shared **"What setup does"** section gives:
+- the five steps;
+- download and disk sizes: NVIDIA about 3.9 GB to download and 7 GB on
+  disk, CPU about 0.7 GB and 2 GB;
+- the measured 1 min 46 s fresh NVIDIA install;
+- the three XDG folders.
+
+**Windows keeps pip.** The notes that apply only to pip moved there: Python
+3.12 exactly, one requirements file, and `model_files.py fetch` for offline
+use (untested on Windows).
+
+**New sections:**
+- **Updating** per platform. On Omarchy it is `omarchy plugin update`, then
+  `omarchy restart shell` (the shell caches compiled QML), then `kokoroctl
+  setup` (new packages and a server restart).
+- **Removing** per platform:
+  - Omarchy: `kokoroctl uninstall`, then `omarchy plugin remove`.
+  - Windows: `hf cache rm model/hexgrad/Kokoro-82M` first. Deleting the
+    model's folder in the HF cache would leave the data behind in the
+    shared `hub/blobs/`.
+
+**Credits:**
+- added uv (MIT or Apache-2.0) and CPython from python-build-standalone
+  (PSF-2.0 plus its bundled libraries; the build scripts themselves are
+  MPL-2.0);
+- PyTorch comes from its own index;
+- `en_core_web_sm` comes from spaCy's GitHub releases.
+
+**Checked:**
+- all 11 in-page anchor links resolve;
+- the setup notification the README promises was observed on D-Bus: app
+  "Kokoro read aloud", summary "Kokoro is ready";
+- `omarchy plugin add` from a local clone of the repo was tested in step
+  3d. The GitHub URL in the README works once `main` is pushed.
+
 ### DEPLOYED 2026-10-17: the model is pinned and loaded by path, and the server runs offline (step 3b)
 
 **`model_files.py` pins 30 files** at revision `f3ff357…`:

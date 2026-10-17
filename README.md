@@ -41,38 +41,119 @@ Hyprland, both on Wayland.
 
 ## Install
 
-There is one download for every platform. The scripts locate themselves, so any
-folder works, and the code detects which desktop it is on. Only the install steps
-differ:
-
-| Platform | Desktop | Section |
+| Platform | Desktop | How |
 |---|---|---|
-| Windows 11 | | [Windows](#windows) |
-| Fedora 44 | GNOME on Wayland | [Linux: Fedora (GNOME)](#linux-fedora-gnome) |
-| Omarchy 4 (Arch) | Hyprland | [Linux: Omarchy (Hyprland)](#linux-omarchy-hyprland) |
+| Omarchy 4 (Arch) | Hyprland | Add it as a plugin, then press **Set up** in the bar. See [Omarchy](#linux-omarchy-hyprland) |
+| Fedora 44 | GNOME on Wayland | Clone it, then `linux/kokoroctl setup`. See [Fedora](#linux-fedora-gnome) |
+| Windows 11 | | Clone it and install with pip. See [Windows](#windows) |
 
-Two things apply everywhere:
+On Linux, one command does the install, [`kokoroctl setup`](#what-setup-does).
+It needs a few system packages first, because it runs without root.
 
-- **Python 3.12 exactly.** `kokoro` declares `Requires-Python >=3.10,<3.13`.
-  On 3.13 or newer, pip filters out every usable wheel and reports a missing
-  package instead (see [Troubleshooting](#troubleshooting)). A newer Python
-  can be installed alongside, as long as the venv is not built from it.
-- **One requirements file.** Install `requirements-cuda.txt` if you have an
-  NVIDIA GPU, otherwise `requirements.txt`. Never install both: Kokoro uses
-  whichever torch build is present. Both pin every package to the version
-  and SHA-256 in `uv.lock`, so pip installs the tested set.
+### Linux: Omarchy (Hyprland)
 
-The first run downloads the ~330 MB Kokoro-82M model. After that, the
-server still checks Hugging Face for updates at every start. To stop it,
-download the pinned model files once:
+Tested on Omarchy 4.0.4 (Arch, Hyprland 0.56.2) with an NVIDIA GPU.
 
 ```bash
-python3 model_files.py fetch     # 326 MiB, each file checked against its SHA-256
+sudo pacman -S --needed tk portaudio wl-clipboard jq curl libnotify
+omarchy plugin add https://github.com/sayed-qutob-work/kokoro-read-aloud --enable
 ```
 
-The server then loads them from `~/.local/share/kokoro-read-aloud/models/`
-(on Windows, `models\` next to the code) and makes no network connections at
-all. This was tested on Linux.
+A Kokoro icon appears in the bar, as five dim dots. Click it and press **Set
+up**. The panel shows each step, and a notification says when it is ready.
+From a terminal, run this instead:
+
+```bash
+~/.config/omarchy/plugins/io.github.sayed-qutob-work.kokoro-read-aloud/linux/kokoroctl setup
+```
+
+Setup also writes the Hyprland hotkeys: Ctrl+Alt+R, T and S. They live in
+`~/.config/hypr/kokoro.lua`, loaded by one `dofile(...)` line that setup adds
+to `~/.config/hypr/hyprland.lua` after backing that file up. If you had
+already bound `read_aloud.sh` by hand, setup lists where. Remove those binds,
+or every press fires twice.
+
+Notes:
+
+- **Caption strip monitors** come from `hyprctl monitors`. Hyprland has no
+  primary monitor, so "Primary monitor" in Settings means the first one it
+  lists. Pick a connector such as `DP-3` to be explicit.
+- **`sudo` needs a terminal** for its password prompt. In a shell without
+  one, such as a script, an AI agent or Claude Code's `!` prefix, use
+  `pkexec`. Omarchy's shell shows the password dialog.
+
+### Linux: Fedora (GNOME)
+
+Fedora 44 runs Kokoro Read-Aloud, installed the earlier, manual way.
+`kokoroctl setup` does the same steps there as on Omarchy, but has not been
+run on Fedora yet.
+
+```bash
+sudo dnf install python3-tkinter python3-xlib portaudio wl-clipboard jq curl libnotify
+git clone https://github.com/sayed-qutob-work/kokoro-read-aloud.git
+cd kokoro-read-aloud
+linux/kokoroctl setup
+```
+
+`python3-xlib` is for the system Python. GNOME 50.5 stopped giving
+`wl-paste` the focus it needs to read the selection, so `read_aloud.sh`
+reads it through Xwayland instead (`linux/xselection.py`). Without the
+package it falls back to `wl-paste`, and reads stall for seconds.
+
+Setup cannot bind GNOME shortcuts, so it prints the commands. Bind them in
+Settings > Keyboard > View and Customize Shortcuts > Custom Shortcuts:
+
+| Shortcut | Command |
+|---|---|
+| Ctrl+Alt+R | `/path/to/kokoro-read-aloud/read_aloud.sh selection` |
+| Ctrl+Alt+T | `/path/to/kokoro-read-aloud/read_aloud.sh clipboard` |
+| Ctrl+Alt+S | `/path/to/kokoro-read-aloud/read_aloud.sh stop` |
+
+`read_aloud.sh` reads the PRIMARY selection instead of copying. Wayland
+gives a background process no way to send Ctrl+C to another app, and this way
+the clipboard is never touched.
+
+There is no tray icon on GNOME. GNOME removed the notification area, and an
+indicator would need the third-party AppIndicator extension. The settings
+panel opens from the app grid ("Kokoro Settings"), or with
+`linux/kokoroctl settings`.
+
+### What setup does
+
+`kokoroctl setup` installs everything outside the code folder, so that folder
+is never written to. The steps:
+
+1. **Checks the system packages** listed above. If any are missing, it stops
+   and prints the `pacman` or `dnf` command that installs them.
+2. **Gets uv.** It uses your own if it is 0.12.10 or newer. Otherwise it
+   downloads uv 0.12.24 and checks it against a pinned SHA-256.
+3. **Installs Python 3.12 and the server's packages** from `uv.lock`, at the
+   exact versions they were tested with. It picks the CUDA build when
+   `nvidia-smi` finds a GPU, and the CPU build otherwise. `--cpu` and
+   `--cuda` override the choice.
+4. **Downloads the voice model.** That is 326 MiB from Hugging Face, each file
+   checked against its pinned SHA-256. From then on the server loads it from
+   disk and makes no network connections.
+5. **Installs the services:** autostart for the server, the hotkeys on
+   Hyprland, and a "Kokoro Settings" launcher entry. Then it starts the
+   server.
+
+| | NVIDIA GPU | No NVIDIA GPU |
+|---|---|---|
+| Download | about 3.9 GB | about 0.7 GB |
+| On disk | about 7 GB | about 2 GB |
+
+A fresh NVIDIA install took 1 min 46 s on the test machine's connection.
+
+Everything goes to three folders:
+
+- `~/.local/share/kokoro-read-aloud/` holds uv and its own cache, Python,
+  the venv and the model.
+- `~/.config/kokoro-read-aloud/` holds your settings.
+- `~/.local/state/kokoro-read-aloud/` holds the logs.
+
+Running setup again repairs a broken or half-finished install, and keeps
+what is already there. `kokoroctl log setup` shows the last run.
 
 ### Windows
 
@@ -102,131 +183,70 @@ To start everything at login, put a shortcut to `start_tts.vbs` in
 `shell:startup`. It launches the server, hotkeys, highlighter and tray icon,
 all hidden, and logs the server to `server.log`.
 
-PowerShell traps: use `py -3.12 -m venv`, not `python -m venv`. Use
-`env\Scripts\python.exe -m pip`, never bare `pip`. Quote version specs
-(`"kokoro>=0.9.4"`), because `>` is a redirect in PowerShell.
+- **Python 3.12 exactly.** `kokoro` declares `Requires-Python >=3.10,<3.13`.
+  On 3.13 or newer, pip filters out every usable wheel and reports a missing
+  package instead (see [Troubleshooting](#troubleshooting)). A newer Python
+  can be installed alongside, as long as the venv is not built from it.
+- **One requirements file.** Install `requirements-cuda.txt` if you have an
+  NVIDIA GPU, otherwise `requirements.txt`. Never install both: Kokoro uses
+  whichever torch build is present. Both pin every package to the version
+  and SHA-256 in `uv.lock`, so pip installs the tested set.
+- **The model** downloads on the first run, about 330 MB, and the server
+  then checks Hugging Face for updates at every start. To stop that, run
+  `env\Scripts\python.exe model_files.py fetch` once. The server then loads
+  the pinned files from `models\` and makes no network connections. This was
+  tested on Linux, not yet on Windows.
+- **PowerShell traps:** use `py -3.12 -m venv`, not `python -m venv`. Use
+  `env\Scripts\python.exe -m pip`, never bare `pip`.
 
-### Linux: Fedora (GNOME)
+### Updating
 
-Tested on Fedora 44. Other distributions should work but have not been tried.
+- **Omarchy:**
 
-```bash
-sudo dnf install python3.12 python3.12-devel python3.12-tkinter python3-tkinter \
-                 python3-xlib portaudio espeak-ng wl-clipboard jq curl
+  ```bash
+  omarchy plugin update io.github.sayed-qutob-work.kokoro-read-aloud
+  omarchy restart shell
+  ~/.config/omarchy/plugins/io.github.sayed-qutob-work.kokoro-read-aloud/linux/kokoroctl setup
+  ```
 
-git clone https://github.com/sayed-qutob-work/kokoro-read-aloud.git
-cd kokoro-read-aloud
-python3.12 -m venv env
-env/bin/python -V                  # must print 3.12.x
+  The shell restart loads the new widget code; the shell keeps the old
+  compiled code until then. Setup installs any new packages and restarts
+  the server on the new code.
+- **Fedora:** `git pull`, then `linux/kokoroctl setup`.
+- **Windows:** `git pull`, run the same `pip install -r` again, then restart
+  the server.
 
-# NVIDIA GPU (needs the RPM Fusion akmod-nvidia driver):
-env/bin/python -m pip install -r requirements-cuda.txt
-# otherwise:
-env/bin/python -m pip install -r requirements.txt
+### Removing
 
-env/bin/python tts_server.py       # first run downloads the models; Ctrl+C once it says ready
-```
+- **Omarchy:**
 
-`python3-xlib` is for the system Python, not the venv. GNOME 50.5 stopped
-giving `wl-paste` the focus it needs to read the selection, so `read_aloud.sh`
-reads it through Xwayland instead (`linux/xselection.py`). Without the package
-it falls back to `wl-paste`, and reads stall for seconds.
+  ```bash
+  ~/.config/omarchy/plugins/io.github.sayed-qutob-work.kokoro-read-aloud/linux/kokoroctl uninstall
+  omarchy plugin remove io.github.sayed-qutob-work.kokoro-read-aloud
+  ```
+- **Fedora:** `linux/kokoroctl uninstall`, delete the hotkeys you bound in
+  GNOME Settings, then delete the folder.
+- **Windows:** first remove the model from Hugging Face's cache, which is
+  shared with other apps and so is not inside the folder:
+  `env\Scripts\hf.exe cache rm model/hexgrad/Kokoro-82M -y`. Then delete the
+  shortcut in `shell:startup`, and the folder.
 
-Then the installers. Each one is per-user and needs no root. Re-run them after
-moving the folder, because they bake in the paths.
+`kokoroctl uninstall` asks before doing anything. It removes:
 
-```bash
-linux/install-systemd.sh     # autostart: kokoro-server enabled, caption strip opt-in
-linux/install-desktop.sh     # "Kokoro Settings" in the app grid
-```
+- the services and the hotkeys;
+- the launcher entry;
+- the `~/.local/share/kokoro-read-aloud/` and
+  `~/.local/state/kokoro-read-aloud/` folders.
 
-Bind the hotkeys in Settings > Keyboard > View and Customize Shortcuts > Custom
-Shortcuts, with absolute paths:
-
-| Shortcut | Command |
-|---|---|
-| Ctrl+Alt+R | `/path/to/kokoro-read-aloud/read_aloud.sh selection` |
-| Ctrl+Alt+T | `/path/to/kokoro-read-aloud/read_aloud.sh clipboard` |
-| Ctrl+Alt+S | `/path/to/kokoro-read-aloud/read_aloud.sh stop` |
-
-`read_aloud.sh` reads the PRIMARY selection instead of copying. Wayland
-gives a background process no way to send Ctrl+C to another app, and this way
-the clipboard is never touched.
-
-There is no tray icon on GNOME. GNOME removed the notification area, and an
-indicator would need the third-party AppIndicator extension. The settings
-panel opens from the app grid, or with `linux/kokoroctl settings`.
-
-### Linux: Omarchy (Hyprland)
-
-Tested on Omarchy 4.0.4 (Arch, Hyprland 0.56.2) with an NVIDIA GPU. The Linux
-scripts are the same as on Fedora. Three things differ:
-
-- **Python 3.12 is compiled with mise.** Arch ships only 3.14, and kokoro
-  needs 3.12 or older. Only the server runs on it: the settings panel and
-  caption strip run on Arch's own Python and `tk`. A prebuilt 3.12 should
-  therefore work too, but only the compiled one has been tested. Compiling
-  takes about a minute.
-- **The hotkeys are Hyprland binds**, written by `linux/install-hyprland.sh`.
-- **Fewer packages.** There is no `espeak-ng`, because `espeakng-loader`
-  ships a working library in the venv. There is no `python-xlib`, because
-  Hyprland gives `wl-paste` the selection directly (`read_aloud.log` shows
-  `via=wl`).
-
-```bash
-sudo pacman -S --needed base-devel tk portaudio wl-clipboard jq curl libnotify
-
-# If mise already has a prebuilt 3.12, `mise uninstall python@3.12` first.
-MISE_PYTHON_COMPILE=1 mise install python@3.12
-
-git clone https://github.com/sayed-qutob-work/kokoro-read-aloud.git
-cd kokoro-read-aloud
-"$(mise where python@3.12)/bin/python3.12" -m venv env
-env/bin/python -V                  # must print 3.12.x
-
-# NVIDIA GPU:
-env/bin/python -m pip install -r requirements-cuda.txt
-# otherwise:
-env/bin/python -m pip install -r requirements.txt
-
-env/bin/python tts_server.py       # first run downloads the models; Ctrl+C once it says ready
-```
-
-Don't remove that Python with mise later. The venv links to it, so
-`mise uninstall` or `mise prune` would break it.
-
-Then the installers. Each one is per-user and needs no root. Re-run them after
-moving the folder.
-
-```bash
-linux/install-systemd.sh     # autostart: kokoro-server enabled, caption strip opt-in
-linux/install-desktop.sh     # "Kokoro Settings" in the app launcher (Super+Space)
-linux/install-hyprland.sh    # Ctrl+Alt+R / T / S, plus a rule that centres the settings panel
-linux/install-omarchy.sh     # the bar icon, see the next section
-```
-
-`install-hyprland.sh` writes `~/.config/hypr/kokoro.lua` and adds one
-`dofile(...)` line for it to `~/.config/hypr/hyprland.lua`, after backing that
-file up. Then it reloads Hyprland and stops if Hyprland reports config errors.
-If you already bound `read_aloud.sh` by hand, it lists where. Remove those
-binds, or every press fires twice. To undo it, delete the `dofile` line and
-`kokoro.lua`.
-
-Notes:
-
-- **Caption strip monitors** come from `hyprctl monitors`. Hyprland has no
-  primary monitor, so "Primary monitor" in Settings means the first one it
-  lists. Pick a connector such as `DP-3` to be explicit.
-- **`sudo` needs a terminal** for its password prompt. In a shell without
-  one, such as a script, an AI agent or Claude Code's `!` prefix, use
-  `pkexec`. Omarchy's shell shows the password dialog.
+It keeps your settings in `~/.config/kokoro-read-aloud/` unless you pass
+`--purge`, and it never touches the code folder.
 
 ## Omarchy bar widget
 
 <img src="docs/img/omarchy-widget.png" width="385" alt="The Kokoro panel open under its bar icon, reading on the GPU: the sentence being spoken with the read part highlighted, the GPU / CPU / Off switch, Kokoro's share of GPU memory, the live voice and speed, and six action buttons">
 
-On Omarchy, `linux/install-omarchy.sh` puts a Kokoro icon next to the system
-tray. It is built from the shell's own components, so it follows your theme
+On Omarchy, the plugin puts a Kokoro icon in the bar. It is built from the
+shell's own components, so it follows your theme
 and keyboard conventions like the built-in panels do. The main reason it exists
 is to give the GPU back: the server keeps the model loaded all day, and a game or
 a local LLM may need that VRAM.
@@ -269,21 +289,15 @@ than the first one takes to play. CPU mode lasts until you log out, and the
 next login starts on the GPU again. A hotkey pressed while Kokoro is off shows a
 notification and does not start the model, so a game keeps its VRAM.
 
-To update the widget after a `git pull`, re-run `linux/install-omarchy.sh`. If
-the widget is already loaded, the installer restarts the Omarchy shell. The
-shell's hot-reload keeps the old compiled code, so the restart is what makes
-changes show. To remove it:
-
-```bash
-omarchy plugin disable io.github.sayed-qutob-work.kokoro-read-aloud
-rm -r ~/.config/omarchy/plugins/io.github.sayed-qutob-work.kokoro-read-aloud
-```
+Before setup has run, the icon shows five dim dots and the panel offers **Set
+up** instead. To update or remove the widget, see [Updating](#updating) and
+[Removing](#removing).
 
 ### From a terminal or a keybind
 
-The widget runs everything through `linux/kokoroctl`. The script also works on
-its own, on any Linux system with the `kokoro-server` unit from
-`install-systemd.sh`:
+The widget runs everything through `linux/kokoroctl`, which also works on its
+own. On Omarchy it is in
+`~/.config/omarchy/plugins/io.github.sayed-qutob-work.kokoro-read-aloud/linux/`:
 
 ```bash
 linux/kokoroctl off       # stop the server: VRAM and RAM freed, hotkeys go quiet
@@ -293,8 +307,8 @@ linux/kokoroctl restart   # same device as now
 linux/kokoroctl status    # JSON: state, device, VRAM/RAM, live config
 ```
 
-It also takes `stop`, `clipboard`, `captions [on|off|toggle]`, `settings` and
-`log`.
+It also takes `stop`, `clipboard`, `captions [on|off|toggle]`, `settings`,
+`log [setup]`, `setup` and `uninstall`.
 
 ## Showing where you are
 
@@ -510,7 +524,8 @@ Editing `tts_server.py` does nothing to a server that is already running. A
 second copy dies silently with "address in use" while the old one keeps
 serving. Restart it instead: on Linux with `linux/kokoroctl restart` (or
 `systemctl --user restart kokoro-server`), on Windows as described in
-`docs/AUDIT.md` §7. For the Omarchy widget, re-run `linux/install-omarchy.sh`.
+`docs/AUDIT.md` §7. For the Omarchy widget, run `omarchy restart shell`: the
+shell keeps the old compiled widget code until it restarts.
 
 ### Highlighting is wrong or missing
 
@@ -547,24 +562,26 @@ changing anything.
 ## Credits & third-party licenses
 
 The code in this repository is MIT-licensed (see [LICENSE](LICENSE)). It
-builds on the work below, and redistributes none of it: pip installs the
-libraries from PyPI, the model downloads from Hugging Face on first run, and
-the programs come from your own system.
+builds on the work below, and redistributes none of it: uv or pip installs
+the libraries from PyPI and PyTorch's index, the model downloads from Hugging
+Face, and the programs come from your own system.
 
 **Not affiliated with hexgrad or the Kokoro project.** "Kokoro" in the name
 says which model this uses, not who made it.
 
 | Component | License | Used for | How it gets to you |
 |---|---|---|---|
-| [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M), weights and voices | Apache-2.0 | The voice | Hugging Face, first run |
+| [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M), weights and voices | Apache-2.0 | The voice | Hugging Face, during setup (on Windows, on the first run) |
 | [kokoro](https://github.com/hexgrad/kokoro) and [misaki](https://github.com/hexgrad/misaki), by hexgrad | Apache-2.0 | Running the model, turning text into phonemes | PyPI |
 | [eSpeak NG](https://github.com/espeak-ng/espeak-ng) | GPL-3.0 | Phonemes for words misaki's dictionary doesn't know | PyPI, as a library inside `espeakng-loader`. misaki always loads that copy, never a system install |
 | [phonemizer-fork](https://pypi.org/project/phonemizer-fork/) | GPL-3.0+ | misaki's interface to eSpeak NG | PyPI |
-| [PyTorch](https://pytorch.org) | BSD-3-Clause | Running the model | PyPI |
-| NVIDIA CUDA libraries | NVIDIA proprietary | GPU support, `requirements-cuda.txt` only | PyPI, pulled in by the CUDA build of PyTorch |
-| [spaCy](https://spacy.io) and `en_core_web_sm` | MIT | English text analysis inside misaki | PyPI. misaki downloads the model on first run |
+| [PyTorch](https://pytorch.org) | BSD-3-Clause | Running the model | PyTorch's own index, download.pytorch.org |
+| NVIDIA CUDA libraries | NVIDIA proprietary | GPU support, CUDA installs only | PyPI, pulled in by the CUDA build of PyTorch |
+| [spaCy](https://spacy.io) and `en_core_web_sm` | MIT | English text analysis inside misaki | spaCy from PyPI, `en_core_web_sm` from spaCy's GitHub releases, pinned with its hash |
 | [num2words](https://github.com/savoirfairelinux/num2words) | LGPL-2.1 | Reading numbers as words | PyPI |
 | Flask, NumPy, sounddevice (with PortAudio), transformers, huggingface_hub, comtypes | BSD-3-Clause, MIT, Apache-2.0 | Server, audio output, model download, Windows UI Automation | PyPI |
+| [uv](https://github.com/astral-sh/uv) | MIT or Apache-2.0 | Installs Python and the packages on Linux | Your distribution, or a pinned release from GitHub that setup downloads |
+| CPython 3.12, built by [python-build-standalone](https://github.com/astral-sh/python-build-standalone) | PSF-2.0, plus the licenses of the libraries it bundles | Runs the server on Linux | GitHub, downloaded by uv during setup |
 | Tcl/Tk, through Python's tkinter | TCL (BSD-style) | Settings panel and caption strip | Your Python or your distribution |
 | [AutoHotkey v2](https://www.autohotkey.com/) | GPL-2.0 | Windows hotkeys | You install it |
 | wl-clipboard, jq, curl, notify-send (libnotify), python-xlib | GPL-3.0+, MIT, curl, LGPL-2.1+, LGPL-2.1+ | Linux hotkey script | Your distribution |
