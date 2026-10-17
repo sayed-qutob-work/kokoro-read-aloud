@@ -313,7 +313,7 @@ def captions(action):
     if managed(OVERLAY_UNIT):
         systemctl("start", OVERLAY_UNIT)
     else:
-        spawn([PY, os.path.join(ROOT, "overlay.py")],
+        spawn([paths.GUI_PYTHON, os.path.join(ROOT, "overlay.py")],
               paths.OVERLAY_LOG, paths.OVERLAY_ERR)
     return "captions on"
 
@@ -338,7 +338,9 @@ def settings():
             if out.strip() != "ok":
                 run(["hyprctl", "dispatch", "focuswindow", f"address:{addr}"])
             return "focused"
-    spawn([PY, os.path.join(ROOT, "tray.py"), "--settings"], os.devnull)
+    # tray.err catches what tray.py cannot log itself, e.g. a missing tkinter
+    spawn([paths.GUI_PYTHON, os.path.join(ROOT, "tray.py"), "--settings"],
+          paths.TRAY_ERR)
     return "opened"
 
 

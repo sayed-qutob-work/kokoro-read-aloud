@@ -2497,7 +2497,9 @@ panel both rendered in a tiny bitmap font. The fix was
 `MISE_PYTHON_COMPILE=1 mise install python@3.12.15`. The result reports
 fontsystem `xft` and 596 families. The venv is built from that interpreter
 and symlinks into its mise install dir, so `mise uninstall`/`prune` of
-3.12.15 breaks it.
+3.12.15 breaks it. **Superseded 2026-10-17:** the panel and the strip now
+run on the system Python, so the venv's Tk no longer matters (§8,
+2026-10-17).
 
 **GPU and eSpeak.** `requirements-cuda.txt` installed unchanged, and the
 cu126 wheels run on the 610 driver. `measured_rt` was 21.77 on the first
@@ -2973,6 +2975,51 @@ full of symlinks.
   it under both 3.12 and 3.14.
 - **The code folder stays clean.** After the stale logs and `__pycache__`
   were removed, `git status --ignored` lists only `env/`.
+
+### DEPLOYED 2026-10-17: on Linux the settings panel and caption strip run on the system Python (step 3a)
+
+**Why.** The uv-based setup planned for step 3 gets Python 3.12 from uv,
+which uses python-build-standalone, the same family of prebuilt builds as
+mise's 3.12. Measured with one script on this desktop, counting distinct
+`font families`:
+
+| Interpreter | Tk | `fontsystem` | Font families |
+|---|---|---|---|
+| uv 0.13.1's Python 3.12.15 | 9.0.4, bundled | `x11` | 1 (`fixed`) |
+| `env/` (mise-compiled 3.12.15) | 8.6.16, Arch's | `xft` | 267 |
+| System Python 3.14.7 | 8.6.16, Arch's | `xft` | 267 |
+
+uv's 3.12 has the same Tk problem that made 2026-10-06 compile Python.
+`tray.py` and `overlay.py`, however, import only the stdlib and tkinter,
+so any Python 3 runs them. Only the server needs 3.12.
+
+**What changed:**
+- **`paths.GUI_PYTHON` is `/usr/bin/python3` on Linux** and the venv's
+  `python.exe` on Windows, as before. It is not `python3` from PATH: under
+  systemd here, PATH puts mise's shims ahead of `/usr/bin`.
+- **Everything that starts a window uses it:**
+  - `kokoroctl settings` and `captions`;
+  - `tray.py`'s strip restart;
+  - the `kokoro-overlay` unit;
+  - the desktop entry.
+- **`kokoroctl settings` sends the panel's output to `tray.err`** in the
+  state folder. Before, it went to `/dev/null`, which would have hidden a
+  missing tkinter.
+- **`install-desktop.sh` refuses to install without a system tkinter.**
+  - Arch: `tk`, already in the README's pacman line.
+  - Fedora: `python3-tkinter`, already in the dnf line.
+
+**Verified on the Omarchy desktop:**
+- `kokoroctl captions on` started the strip as `/usr/bin/python3.14`.
+  It stayed up with an empty `overlay.err`, and `kokoroctl status`
+  reported `captions: true`.
+- `kokoroctl settings` opened the panel as `/usr/bin/python3`.
+- Tk reports the same screen under both interpreters (4480×1440, the two
+  monitors' bounding box) and the same scaling (1.334).
+
+**Supersedes:** the 2026-10-06 reason for compiling Python. The venv's Tk
+no longer matters, so a prebuilt 3.12 should run the server. The uv setup
+(step 3b/3c) will be the test of that.
 
 ---
 

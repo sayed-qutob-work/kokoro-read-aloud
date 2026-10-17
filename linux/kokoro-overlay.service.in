@@ -9,7 +9,8 @@ PartOf=graphical-session.target
 [Service]
 Type=simple
 WorkingDirectory=@ROOT@
-ExecStart=@ROOT@/env/bin/python @ROOT@/overlay.py
+# The system Python, not the venv: its Tk renders real fonts (paths.py).
+ExecStart=/usr/bin/python3 @ROOT@/overlay.py
 StandardOutput=truncate:@STATE@/overlay.log
 StandardError=truncate:@STATE@/overlay.err
 Restart=on-failure

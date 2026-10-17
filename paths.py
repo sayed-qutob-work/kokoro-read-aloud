@@ -1,4 +1,5 @@
-"""Where Kokoro read-aloud keeps the files it writes while it runs.
+"""Where Kokoro read-aloud keeps the files it writes while it runs, and
+which Python runs its windows.
 
 Windows: next to the code, as always -- start_tts.vbs, the tray menu's
 "open folder" and the Windows README all point there.
@@ -46,6 +47,19 @@ SERVER_LOG = os.path.join(STATE, "server.log")
 OVERLAY_LOG = os.path.join(STATE, "overlay.log")
 OVERLAY_ERR = os.path.join(STATE, "overlay.err")
 TRAY_LOG = os.path.join(STATE, "tray.log")
+TRAY_ERR = os.path.join(STATE, "tray.err")             # the panel's stderr, via kokoroctl
+
+# The settings panel and the caption strip are Tk windows, and stdlib +
+# tkinter only, so any Python 3 runs them; only the server needs the 3.12
+# venv. On Linux they run on the system Python, whose Tk is the
+# distribution's: a prebuilt 3.12 (mise's, uv's) bundles a Tk built
+# without Xft that has one bitmap font, and both windows rendered in tiny
+# text (AUDIT 2026-10-06, 2026-10-17). Not "python3" from PATH, which can
+# be a venv or a mise shim. Windows keeps the venv, as always.
+if IS_WIN:
+    GUI_PYTHON = os.path.join(ROOT, "env", "Scripts", "python.exe")
+else:
+    GUI_PYTHON = "/usr/bin/python3"
 
 
 def prepare():

@@ -2,9 +2,9 @@
 # Install the "Kokoro Settings" launcher into the user's app grid.
 #
 # GNOME has no notification-area tray (an icon there needs the third-party
-# AppIndicator extension AND PyGObject, which Fedora builds only for the
-# system Python while this venv must be 3.12), so the settings panel is
-# reached from the app grid and the command line instead of a tray icon.
+# AppIndicator extension), so the settings panel is reached from the app
+# grid and the command line instead of a tray icon. It runs on the system
+# Python, not the venv (paths.py), so that Python needs its tkinter.
 #
 # Per-user, no root needed. Re-run after moving the folder: the paths are
 # baked in at install time from wherever this script lives.
@@ -20,6 +20,11 @@ if [[ ! -x "$ROOT/env/bin/python" ]]; then
   exit 1
 fi
 
+if ! /usr/bin/python3 -c "import tkinter" 2>/dev/null; then
+  echo "/usr/bin/python3 has no tkinter -- install tk (Arch) or python3-tkinter (Fedora)" >&2
+  exit 1
+fi
+
 mkdir -p "$APPS"
 sed "s|@ROOT@|$ROOT|g" "$ROOT/linux/kokoro-settings.desktop.in" > "$DEST"
 chmod 644 "$DEST"
@@ -31,4 +36,4 @@ command -v update-desktop-database >/dev/null &&
 echo "installed $DEST"
 echo
 echo "  app grid : search for \"Kokoro Settings\""
-echo "  terminal : $ROOT/env/bin/python $ROOT/tray.py --settings"
+echo "  terminal : $ROOT/linux/kokoroctl settings"

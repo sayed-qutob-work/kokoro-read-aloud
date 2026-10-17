@@ -143,22 +143,20 @@ Shortcuts, with absolute paths:
 gives a background process no way to send Ctrl+C to another app, and this way
 the clipboard is never touched.
 
-There is no tray icon on GNOME. GNOME removed the notification area. An
-indicator would need the AppIndicator extension plus PyGObject, and Fedora
-builds PyGObject only for its system Python (3.14), while this venv must be 3.12.
-The settings panel opens from the app grid, or with
-`env/bin/python tray.py --settings`.
+There is no tray icon on GNOME. GNOME removed the notification area, and an
+indicator would need the third-party AppIndicator extension. The settings
+panel opens from the app grid, or with `linux/kokoroctl settings`.
 
 ### Linux: Omarchy (Hyprland)
 
 Tested on Omarchy 4.0.4 (Arch, Hyprland 0.56.2) with an NVIDIA GPU. The Linux
 scripts are the same as on Fedora. Three things differ:
 
-- **Python 3.12 has to be compiled, not downloaded.** Arch ships only 3.14.
-  mise's prebuilt 3.12 installs fine, but its bundled Tk has no Xft and sees
-  exactly one bitmap font, so the settings panel and caption strip render in
-  tiny text. A 3.12 built against Arch's own `tk` avoids this, and takes
-  about a minute to build.
+- **Python 3.12 is compiled with mise.** Arch ships only 3.14, and kokoro
+  needs 3.12 or older. Only the server runs on it: the settings panel and
+  caption strip run on Arch's own Python and `tk`. A prebuilt 3.12 should
+  therefore work too, but only the compiled one has been tested. Compiling
+  takes about a minute.
 - **The hotkeys are Hyprland binds**, written by `linux/install-hyprland.sh`.
 - **Fewer packages.** There is no `espeak-ng`, because `espeakng-loader`
   ships a working library in the venv. There is no `python-xlib`, because
@@ -175,8 +173,6 @@ git clone https://github.com/sayed-qutob-work/kokoro-read-aloud.git
 cd kokoro-read-aloud
 "$(mise where python@3.12)/bin/python3.12" -m venv env
 env/bin/python -V                  # must print 3.12.x
-env/bin/python -c "import tkinter as t; r = t.Tk(); r.withdraw(); print(r.tk.call('::tk::pkgconfig', 'get', 'fontsystem'))"
-                                   # must print xft
 
 # NVIDIA GPU:
 env/bin/python -m pip install -r requirements-cuda.txt
@@ -502,6 +498,9 @@ the highlighter is healthy.
 | `extension/` | both | Chromium in-page highlighter, loaded unpacked |
 | `linux/kokoroctl` | Linux | Off / CPU / GPU / restart / status, for the bar widget, keybinds and terminals |
 | `linux/omarchy/` | Omarchy | The bar widget (a Quickshell plugin) |
+
+On Linux, `tray.py` and `overlay.py` run on the system Python and its Tk.
+Only the server needs the Python 3.12 venv.
 
 Everything talks to the server over localhost. The server never knows the
 highlighter, caption strip or widget exist, so closing any of them affects

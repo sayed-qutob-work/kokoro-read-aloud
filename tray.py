@@ -302,7 +302,7 @@ def restart_overlay():
     at startup, so changing either only takes effect through here."""
     kill_script("overlay.py")
     time.sleep(0.4)
-    ok = spawn_hidden([PY, "overlay.py"], paths.OVERLAY_ERR)
+    ok = spawn_hidden([paths.GUI_PYTHON, "overlay.py"], paths.OVERLAY_ERR)
     log(f"overlay restart spawned={ok}")
     return ok
 
@@ -314,13 +314,12 @@ def make_tray(app):
 
     Windows gets the Shell_NotifyIcon implementation in tray_win32.py.
     GNOME removed the legacy tray: an icon there needs the third-party
-    AppIndicator shell extension AND PyGObject, and Fedora builds `gi`
-    only for the system Python while this venv must be 3.12 (kokoro
-    requires <3.13), so the venv cannot import it at all. Rather than
-    depend on a source build plus an extension the user must keep
-    enabled, Linux has no icon and reaches the panel through the
-    desktop entry / `tray.py --settings` instead (RELEASE_PLAN 4.4's
-    planned fallback)."""
+    AppIndicator shell extension, plus PyGObject. Rather than depend on
+    an extension the user must keep enabled, Linux has no icon and
+    reaches the panel through the desktop entry / `tray.py --settings`
+    instead (RELEASE_PLAN 4.4's planned fallback). This was decided
+    while the panel ran on the venv's 3.12, which cannot import
+    Fedora's `gi` at all; it runs on the system Python now (paths.py)."""
     if not IS_WIN:
         return None
     try:
