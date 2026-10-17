@@ -3174,6 +3174,17 @@ Unseeded, two runs differ by up to 0.23 in sample value, run to run. That
 is the vocoder's random noise, not the environment, so audio comparisons
 need a seed.
 
+**The CPU variant, installed as well.** `uv sync --frozen --extra cpu
+--compile-bytecode` went into a throwaway venv:
+- 96 packages in 10 s, with no NVIDIA package;
+- 1.4 GB on disk, against 6.6 GB for CUDA.
+
+It ran in the no-network namespace with `CUDA_VISIBLE_DEVICES=` empty:
+- `torch 2.13.0+cpu` on the `cpu` device, model loaded by path in 3.2 s;
+- a 3.8 s sentence synthesized at 3.4x realtime, with word timestamps.
+
+The throwaway venv was deleted afterwards.
+
 ### DEPLOYED 2026-10-17: the model is pinned and loaded by path, and the server runs offline (step 3b)
 
 **`model_files.py` pins 30 files** at revision `f3ff357…`:
