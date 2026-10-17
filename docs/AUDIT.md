@@ -3400,6 +3400,73 @@ Linux and Windows.
 
 **Not tested:** an actual install on Windows.
 
+### DEPLOYED 2026-10-17: the repo is the Omarchy plugin, with a first-run "Set up" view (step 3d)
+
+**The plugin layout:**
+- `manifest.json` moved from `linux/omarchy/` to the repo root, now
+  version 0.2.0, with entry point `linux/omarchy/Panel.qml`. `omarchy
+  plugin validate .` passes on the working tree:
+  - subfolder entry points are allowed;
+  - the repo holds no symlinks now that `env/` is gone.
+- `Paths.js` is gone. The shell builds an entry point's URL as
+  `file://<plugin folder>/<entryPoint>` (`PluginRegistry.entryPointUrl`),
+  so `Service.qml` finds the CLI with `Qt.resolvedUrl("../kokoroctl")`.
+- `linux/install-omarchy.sh` is now a developer deploy. It copies the
+  working tree's tracked and new, non-ignored files into the plugin folder,
+  validates them in a staging folder and swaps them in. Users run
+  `omarchy plugin add`.
+
+**The first-run view.** `Service.qml` reads `installed` and `setup` from
+`kokoroctl status`. While `installed` is false, or a setup is running,
+the panel shows a setup column instead of the usual one. It has three
+states:
+- **Not set up:** what gets installed and where, the size for the GPU that
+  was found, and **Set up**. The sizes are measured: CUDA is 3,524 MiB of
+  packages, matching uv's announced 3,523, plus the model, Python and uv,
+  about 3.9 GB in all; CPU is about 0.7 GB.
+- **Running:** the step's title, one bar for the whole run (finished steps
+  plus the current step's fraction), and uv's or the model's latest line.
+- **Failed:** the error in the urgent colour, **Try again**, and **Copy
+  install command** when the error names a `pacman` or `dnf` command.
+
+**Behaviour around it:**
+- While set-up is needed, a right-click opens the panel instead of toggling
+  the model, and Enter starts setup.
+- IPC `setup` calls the same `runSetup()` as the button.
+- A setup killed mid-run left `setup.json` saying "running" for good. It is
+  now reported as interrupted once nobody holds `setup.lock` and the file
+  has been quiet for 15 s.
+- A background setup sends a desktop notification when it ends, success or
+  failure.
+- `kokoroctl log setup` opens the setup log.
+
+**Verified on the Omarchy desktop:**
+- **Install:** the widget deployed into the new layout loaded with no QML
+  errors.
+- **Not-set-up and running views:** with the model folder moved aside,
+  the panel showed the not-set-up view. IPC `setup` then ran the whole
+  install; frames showed "SETTING UP · STEP 4 OF 5", "Downloading the
+  model" and "kokoro-v1_0.pth: 109 of 326 MiB". It ended `done` with
+  `installed: true`.
+- **Failed view:** shown from a staged `setup.json` with a missing-packages
+  error. The regex extracts `sudo pacman -S --needed tk portaudio` and
+  `sudo dnf install jq`, and nothing from a network error.
+- **The panel sometimes closed during a run, and setup is not the cause.**
+  - With the panel open, `systemctl daemon-reload`,
+    `update-desktop-database`, `hyprctl reload`, each probe of step 1 and
+    `uv sync` each left it open.
+  - So did 20 fake progress updates, in two runs.
+  - A control run, with no setup at all, closed after 0.6 s. The user was
+    at the machine, and the panel closes on outside input like any
+    first-party one.
+
+  The notification covers the case where nobody is watching the panel.
+
+**Side effect, and the fix for development.** Setup started from the
+widget runs the plugin folder's `kokoroctl`, so it points the units and
+hotkeys at the plugin folder. That is right for users. On this desktop
+`linux/kokoroctl setup` from the repo pointed them back.
+
 ### DEPLOYED 2026-10-17: the model is pinned and loaded by path, and the server runs offline (step 3b)
 
 **`model_files.py` pins 30 files** at revision `f3ff357…`:

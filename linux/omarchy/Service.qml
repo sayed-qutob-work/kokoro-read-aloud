@@ -1,7 +1,7 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
-import "Paths.js" as Paths
+import qs.Commons
 
 // State and actions for the Kokoro widget. Everything that touches the
 // server goes through linux/kokoroctl in the repo, so the bar, a keybind and
@@ -15,7 +15,10 @@ Item {
   property var settings: ({})
   property bool panelOpen: false
 
-  readonly property string ctl: Paths.root + "/linux/kokoroctl"
+  // The repo is the plugin folder, and the shell loads this file from it by
+  // file:// URL, so kokoroctl sits at ../kokoroctl from here.
+  readonly property string ctl: decodeURIComponent(
+    Qt.resolvedUrl("../kokoroctl").toString().replace(/^file:\/\//, ""))
   readonly property string server: "http://127.0.0.1:5111"
 
   // ---- from `kokoroctl status`
@@ -29,6 +32,9 @@ Item {
   property var gpu: null               // { name, used_mib, total_mib } or null
   property var config: null            // the server's GET /config
   property bool captions: false
+  // false until `kokoroctl setup` has installed the venv and the model
+  property bool installed: true
+  property var setup: null             // setup.json: state, step, steps, title, detail, fraction, error
   // what the model held the last time it was on the GPU, so "off" can say
   // how much it gave back
   property int lastVramMib: 0
@@ -47,10 +53,23 @@ Item {
   property string lastError: ""
 
   readonly property bool hasGpu: gpu !== null
+  readonly property bool setupRunning: setup !== null && setup.state === "running"
+  readonly property bool needsSetup: known && !installed
+  // the first-run view, also while a repair run is going
+  readonly property bool showSetup: needsSetup || setupRunning
+  // the whole run as one fraction: finished steps plus the current one's share
+  readonly property real setupProgress: {
+    if (!setup || !setup.steps) return 0
+    var step = Math.max(0, Number(setup.step || 0) - 1)
+    var within = setup.fraction === null || setup.fraction === undefined ? 0 : Number(setup.fraction)
+    return Math.max(0, Math.min(1, (step + within) / Number(setup.steps)))
+  }
   readonly property string shownMode: pendingMode !== "" ? pendingMode : mode
   readonly property bool transitioning: pendingMode !== "" || serverState === "loading" || serverState === "stopping"
   readonly property bool busy: controlProcess.running
   readonly property string activity: {
+    if (setupRunning) return "loading"
+    if (needsSetup) return "off"
     if (serverState === "failed") return "off"
     if (shownMode === "off") return "off"
     if (transitioning) return "loading"
@@ -68,6 +87,8 @@ Item {
 
   readonly property string statusLine: {
     if (!known) return "Checking…"
+    if (setupRunning) return "Setting up · step " + Number(setup.step || 0) + " of " + Number(setup.steps || 5)
+    if (needsSetup) return setup && setup.state === "failed" ? "Setup failed" : "Not set up yet"
     if (pendingMode === "off" || serverState === "stopping") return "Stopping"
     if (pendingMode !== "") return "Loading on " + pendingMode.toUpperCase()
     if (serverState === "failed") return "Server crashed"
@@ -81,6 +102,8 @@ Item {
 
   readonly property string tooltip: {
     var head = "Kokoro read-aloud · "
+    if (setupRunning) return head + "setting up"
+    if (needsSetup) return head + "not set up yet: click to set up"
     if (serverState === "failed") return head + "crashed (see server log)"
     if (shownMode === "off") return head + "off, VRAM free"
     if (transitioning) return head + "loading"
@@ -116,6 +139,8 @@ Item {
     gpu = s.gpu || null
     config = s.config || null
     captions = s.captions === true
+    installed = s.installed !== false
+    setup = s.setup || null
     if (vramMib > 0) lastVramMib = vramMib
     if (serverState !== "running") speaking = false
     // the server caught up with what was asked
@@ -204,6 +229,22 @@ Item {
     post("/stop")
   }
 
+  // Setup runs as its own systemd unit, so closing the panel, or the shell
+  // reloading, does not stop it; this only starts it and then polls.
+  function runSetup() {
+    if (busy || setupRunning) return
+    lastError = ""
+    setup = { state: "running", step: 0, steps: 5, title: "Starting", detail: "", fraction: null }
+    runControl(["setup", "--background"])
+  }
+
+  function openSetupLog() { Quickshell.execDetached([ctl, "log", "setup"]) }
+
+  // the same way first-party panels copy: wl-copy, quoted by the shell's Util
+  function copyText(value) {
+    if (value) Quickshell.execDetached(["bash", "-c", "printf %s " + Util.shellQuote(value) + " | wl-copy"])
+  }
+
   function readClipboard() { Quickshell.execDetached([ctl, "clipboard"]) }
   function openSettings() { Quickshell.execDetached([ctl, "settings"]) }
   function openLog() { Quickshell.execDetached([ctl, "log"]) }
@@ -223,7 +264,8 @@ Item {
 
   Timer {
     // fast while open or while something is changing, lazy otherwise
-    interval: root.transitioning ? 700 : (root.panelOpen ? 2500 : root.refreshIntervalSec * 1000)
+    interval: root.setupRunning ? 1000 : root.transitioning ? 700
+      : (root.panelOpen ? 2500 : root.refreshIntervalSec * 1000)
     repeat: true
     running: true
     triggeredOnStart: true

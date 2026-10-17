@@ -2,15 +2,15 @@
   "schemaVersion": 1,
   "id": "io.github.sayed-qutob-work.kokoro-read-aloud",
   "name": "Kokoro read-aloud",
-  "version": "1.0.0",
+  "version": "0.2.0",
   "author": "Sayed Qutob",
   "license": "MIT",
-  "description": "Status and control for the Kokoro read-aloud server: free its VRAM, switch between GPU and CPU, restart it, and see what it is reading.",
+  "description": "Select text anywhere, press a hotkey, hear it read aloud with Kokoro TTS, locally. The bar widget sets it up on first use, frees the model's VRAM, switches between GPU and CPU, and shows the sentence being read.",
   "kinds": [
     "bar-widget"
   ],
   "entryPoints": {
-    "barWidget": "Panel.qml"
+    "barWidget": "linux/omarchy/Panel.qml"
   },
   "barWidget": {
     "displayName": "Kokoro read-aloud",

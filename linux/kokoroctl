@@ -12,7 +12,7 @@ Usage:  kokoroctl <command>
   clipboard            read the clipboard aloud
   captions [on|off|toggle]
   settings             open the settings panel (or focus it)
-  log                  follow server.log in a terminal
+  log [setup]          follow server.log (or setup.log) in a terminal
   setup [--cpu|--cuda] [--background]
                        install the server's Python, packages and model
                        (linux/kokoro_setup.py); run again to repair
@@ -355,8 +355,8 @@ def settings():
     return "opened"
 
 
-def log():
-    path = paths.SERVER_LOG
+def log(which="server"):
+    path = paths.SETUP_LOG if which == "setup" else paths.SERVER_LOG
     if shutil.which("omarchy-launch-tui"):
         args = ["omarchy-launch-tui", "--app-id=org.omarchy.kokoro-log",
                 "less", "+F", path]
@@ -390,7 +390,11 @@ def main(argv):
             print("usage: kokoroctl setup [--cpu | --cuda] [--background]", file=sys.stderr)
             return 2
         if "--background" in args:
-            print(kokoro_setup.start_background([a for a in args if a != "--background"]))
+            try:
+                print(kokoro_setup.start_background([a for a in args if a != "--background"]))
+            except kokoro_setup.SetupError as e:
+                print(e, file=sys.stderr)
+                return 1
             return 0
         variant = "cpu" if "--cpu" in args else "cuda" if "--cuda" in args else None
         return kokoro_setup.run(variant)
@@ -415,7 +419,7 @@ def main(argv):
     elif cmd == "settings":
         msg = settings()
     elif cmd == "log":
-        msg = log()
+        msg = log(argv[2] if len(argv) > 2 else "server")
     else:
         print("\n\n".join(__doc__.split("\n\n")[1:3]), file=sys.stderr)
         return 2

@@ -403,6 +403,13 @@ def install_services(progress):
 
 # ------------------------------------------------------------------- driver
 
+def _notify(title, body):
+    """A desktop notification, for a background run: nobody may be watching
+    the panel by the time it ends."""
+    if os.environ.get("KOKORO_SETUP_BACKGROUND") and shutil.which("notify-send"):
+        subprocess.run(["notify-send", "-a", "Kokoro read aloud", title, body[:300]],
+                       capture_output=True, timeout=10)
+
 def run(variant=None):
     """Foreground setup. Returns the exit status."""
     paths.prepare()
@@ -425,16 +432,15 @@ def run(variant=None):
         fetch_model(progress)
         progress.step(5)
         msg = install_services(progress)
-    except SetupError as e:
-        progress.finish("failed", error=str(e))
-        print(f"\nSetup failed: {e}", file=sys.stderr)
-        return 1
-    except Exception as e:      # network, disk: still report it to the widget
-        progress.finish("failed", error=f"{type(e).__name__}: {e}")
-        print(f"\nSetup failed: {type(e).__name__}: {e}", file=sys.stderr)
+    except Exception as e:      # SetupError, but network and disk too: report it
+        err = str(e) if isinstance(e, SetupError) else f"{type(e).__name__}: {e}"
+        progress.finish("failed", error=err)
+        print(f"\nSetup failed: {err}", file=sys.stderr)
+        _notify("Kokoro setup failed", err)
         return 1
     progress.finish("done", detail=msg)
     print(f"\n{msg}", flush=True)
+    _notify("Kokoro is ready", msg)
     return 0
 
 
@@ -454,6 +460,7 @@ def start_background(args):
     os.replace(paths.SETUP_JSON + ".tmp", paths.SETUP_JSON)
     r = subprocess.run(
         ["systemd-run", "--user", "--unit", UNIT, "--collect", "--quiet",
+         "--setenv=KOKORO_SETUP_BACKGROUND=1",
          "-p", f"StandardOutput=truncate:{paths.SETUP_LOG}",
          "-p", "StandardError=inherit",
          "/usr/bin/python3", os.path.join(ROOT, "linux", "kokoroctl"), "setup", *args],
@@ -464,11 +471,26 @@ def start_background(args):
 
 
 def read_progress():
+    """setup.json, for `kokoroctl status`. A setup that was killed (logout,
+    OOM) leaves "running" behind for good; it is reported as failed once
+    no setup holds the lock and the file has been quiet for 15 s -- the
+    grace covers --background's own write before its unit takes the lock."""
     try:
         with open(paths.SETUP_JSON, encoding="utf-8") as f:
-            return json.load(f)
+            d = json.load(f)
     except (OSError, ValueError):
         return None
+    if d.get("state") == "running" and time.time() - (d.get("updated") or 0) > 15:
+        try:
+            with open(os.path.join(paths.STATE, "setup.lock"), "a") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)   # free: nobody runs
+            d.update(state="failed", error="Setup was interrupted. Run it again: "
+                     "it keeps what it already has.")
+        except BlockingIOError:
+            pass                        # held: it is running, just quiet
+        except OSError:
+            pass
+    return d
 
 
 # ---------------------------------------------------------------- uninstall

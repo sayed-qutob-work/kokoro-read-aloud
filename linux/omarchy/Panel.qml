@@ -27,6 +27,7 @@ Panel {
   readonly property color dim: Qt.darker(foreground, 1.55)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property bool isOff: kokoro.shownMode === "off" || kokoro.serverState === "failed"
+    || kokoro.needsSetup
   readonly property color barIconColor: kokoro.serverState === "failed" ? urgent
     : (isOff ? Qt.darker(barForeground, 1.55) : barForeground)
 
@@ -175,6 +176,7 @@ Panel {
     function off(): string { kokoro.setMode("off"); return "ok" }
     function stop(): string { kokoro.stopSpeaking(); return "ok" }
     function status(): string { return kokoro.tooltip }
+    function setup(): string { kokoro.runSetup(); return "ok" }
   }
 
   BarIconButton {
@@ -195,7 +197,8 @@ Panel {
       }
     }
     onPressed: function(buttonCode) {
-      if (buttonCode === Qt.RightButton) kokoro.toggleOn()
+      // nothing to turn on before setup: show the panel that offers it
+      if (buttonCode === Qt.RightButton) { if (kokoro.needsSetup) root.toggle(); else kokoro.toggleOn() }
       else if (buttonCode === Qt.MiddleButton) kokoro.stopSpeaking()
       else root.toggle()
     }
@@ -218,10 +221,14 @@ Panel {
         if (!root.cursorActive) { root.cursorActive = true; return }
         root.moveCursor(dx, dy)
       }
-      onActivateRequested: if (root.cursorActive) root.activateCursor()
+      onActivateRequested: {
+        if (kokoro.showSetup) kokoro.runSetup()
+        else if (root.cursorActive) root.activateCursor()
+      }
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(t) {
+        if (kokoro.showSetup) return
         var k = t.toLowerCase()
         if (k === "g") kokoro.setMode("gpu")
         else if (k === "c") kokoro.setMode("cpu")
@@ -252,7 +259,7 @@ Panel {
             width: parent.width
             title: "Kokoro"
             meta: root.heroMeta
-            detail: root.isOff ? "" : kokoro.shownMode.toUpperCase()
+            detail: root.isOff || kokoro.showSetup ? "" : kokoro.shownMode.toUpperCase()
             foreground: root.foreground
             fontFamily: root.fontFamily
             iconComponent: Component {
@@ -282,251 +289,424 @@ Panel {
             wrapMode: Text.WordWrap
           }
 
-          // ---------- the sentence being read, spoken part bright ----------
-          Rectangle {
-            id: nowCard
-            visible: kokoro.speaking
-            width: parent.width
-            implicitHeight: nowRow.implicitHeight + Style.space(20)
-            radius: Style.cornerRadius
-            color: Style.normalFillFor(root.foreground, Color.accent)
-            border.width: 1
-            border.color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.12)
-
-            RowLayout {
-              id: nowRow
-              anchors.left: parent.left
-              anchors.right: parent.right
-              anchors.verticalCenter: parent.verticalCenter
-              anchors.leftMargin: Style.space(12)
-              anchors.rightMargin: Style.space(8)
-              spacing: Style.space(10)
-
-              Text {
-                Layout.fillWidth: true
-                textFormat: Text.StyledText
-                text: kokoro.speaking ? root.karaoke() : ""
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.body
-                wrapMode: Text.WordWrap
-                maximumLineCount: 4
-                elide: Text.ElideRight
-                lineHeight: 1.15
-              }
-
-              PanelActionButton {
-                iconText: root.glyph(0xF04DB)
-                tooltipText: "Stop reading"
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-                Layout.alignment: Qt.AlignVCenter
-                onClicked: kokoro.stopSpeaking()
-              }
-            }
-          }
-
-          PanelSeparator { foreground: root.foreground }
-
-          // ---------- model: where it runs, or not at all ----------
+          // ---------- first run: install the venv and the model ----------
           Column {
+            id: setupView
+            visible: kokoro.showSetup
             width: parent.width
-            spacing: Style.space(10)
+            spacing: Style.space(12)
 
-            PanelSectionHeader {
-              text: "MODEL"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
+            readonly property bool failed: !kokoro.setupRunning && kokoro.setup !== null
+              && kokoro.setup.state === "failed"
+            readonly property string error: failed ? String(kokoro.setup.error || "") : ""
+            // setup names the one command that installs missing system packages
+            readonly property string installCommand: {
+              var m = error.match(/Install them with: (sudo (?:pacman|dnf) .*?) -- then/)
+              return m ? m[1] : ""
             }
+            readonly property real halfWidth: (width - Style.space(6)) / 2
 
-            Row {
-              id: modeRow
-              width: parent.width
-              spacing: Style.space(6)
-              readonly property real cellWidth: (width - spacing * (root.modes.length - 1)) / root.modes.length
-
-              Repeater {
-                model: root.modes
-                Button {
-                  required property var modelData
-                  required property int index
-                  readonly property bool current: kokoro.shownMode === modelData.key
-                  width: modeRow.cellWidth
-                  iconText: root.glyph(modelData.icon)
-                  iconSize: Style.font.title
-                  iconSpinning: current && kokoro.transitioning && modelData.key !== "off"
-                  text: modelData.label
-                  fontSize: Style.font.bodySmall
-                  foreground: root.foreground
-                  fontFamily: root.fontFamily
-                  horizontalPadding: Style.spacing.controlPaddingX
-                  verticalPadding: Style.spacing.controlPaddingY + Style.space(2)
-                  bordered: true
-                  active: current
-                  enabled: modelData.key !== "gpu" || kokoro.hasGpu
-                  opacity: enabled ? 1.0 : 0.4
-                  tooltipText: modelData.key === "gpu" && !kokoro.hasGpu ? "No NVIDIA GPU found" : ""
-                  hasCursor: root.cursorActive && root.cursorRow === 0 && root.cursorCol === index
-                  onClicked: kokoro.setMode(modelData.key)
-                  onHovered: function(h) { if (h) root.hoverCursor(0, index) }
-                }
-              }
-            }
+            PanelSeparator { foreground: root.foreground }
 
             Text {
+              visible: !kokoro.setupRunning
               textFormat: Text.PlainText
               width: parent.width
-              text: root.modeHint(kokoro.shownMode)
+              text: "Kokoro needs a one-time setup before it can read. It installs Python 3.12, "
+                + "the speech packages and the voice model into ~/.local/share/kokoro-read-aloud, "
+                + "plus the Ctrl+Alt+R hotkeys. Nothing is written into this plugin's folder."
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              wrapMode: Text.WordWrap
+              lineHeight: 1.1
+            }
+
+            // measured 2026-10-17: uv announced 3,523 MiB of CUDA packages
+            Text {
+              visible: !kokoro.setupRunning
+              textFormat: Text.PlainText
+              width: parent.width
+              text: kokoro.hasGpu
+                ? "An NVIDIA GPU was found, so it installs the CUDA build: about 3.9 GB to download, 7 GB on disk."
+                : "No NVIDIA GPU was found, so it installs the CPU build: about 0.7 GB to download, 2 GB on disk."
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
               wrapMode: Text.WordWrap
             }
-          }
 
-          // ---------- memory: what Kokoro holds, against the whole GPU ----------
-          Column {
-            width: parent.width
-            spacing: Style.spacing.labelGap + Style.space(2)
-
-            Item {
-              visible: kokoro.hasGpu
+            Column {
+              visible: kokoro.setupRunning
               width: parent.width
-              implicitHeight: Style.space(8)
+              spacing: Style.spacing.labelGap + Style.space(4)
 
-              readonly property real total: kokoro.gpu ? Math.max(1, kokoro.gpu.total_mib) : 1
-              readonly property real mine: kokoro.mode === "gpu" ? kokoro.vramMib : 0
-              readonly property real others: kokoro.gpu ? Math.max(0, kokoro.gpu.used_mib - mine) : 0
-
-              Rectangle {
-                id: track
-                anchors.fill: parent
-                radius: height / 2
-                color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.12)
-              }
-
-              // everyone else on the GPU, drawn first so Kokoro's share sits
-              // on top of its left end
-              Rectangle {
-                anchors.left: track.left
-                anchors.verticalCenter: track.verticalCenter
-                height: track.height
-                radius: track.radius
-                width: Math.min(track.width, track.width * (parent.mine + parent.others) / parent.total)
-                visible: width > 0
-                color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.35)
-                Behavior on width { NumberAnimation { duration: 320; easing.type: Easing.OutCubic } }
-              }
-
-              Rectangle {
-                anchors.left: track.left
-                anchors.verticalCenter: track.verticalCenter
-                height: track.height
-                radius: track.radius
-                width: parent.mine > 0 ? Math.max(track.height, track.width * parent.mine / parent.total) : 0
-                visible: width > 0
+              Text {
+                textFormat: Text.PlainText
+                width: parent.width
+                text: kokoro.setup ? String(kokoro.setup.title || "Starting") : ""
                 color: root.foreground
-                Behavior on width { NumberAnimation { duration: 320; easing.type: Easing.OutCubic } }
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+              }
+
+              Item {
+                width: parent.width
+                implicitHeight: Style.space(8)
+
+                Rectangle {
+                  id: setupTrack
+                  anchors.fill: parent
+                  radius: height / 2
+                  color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.12)
+                }
+
+                Rectangle {
+                  anchors.left: setupTrack.left
+                  anchors.verticalCenter: setupTrack.verticalCenter
+                  height: setupTrack.height
+                  radius: setupTrack.radius
+                  width: Math.max(height, setupTrack.width * kokoro.setupProgress)
+                  color: root.foreground
+                  Behavior on width { NumberAnimation { duration: 320; easing.type: Easing.OutCubic } }
+                }
+              }
+
+              Text {
+                textFormat: Text.PlainText
+                width: parent.width
+                text: kokoro.setup ? String(kokoro.setup.detail || "") : ""
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                wrapMode: Text.WordWrap
+                maximumLineCount: 3
+                elide: Text.ElideRight
               }
             }
 
-            InfoPair {
-              label: "Kokoro"
-              value: {
-                if (kokoro.mode === "off" || kokoro.serverState === "off") return "nothing loaded"
-                var ram = kokoro.rssMib > 0 ? kokoro.gb(kokoro.rssMib) + " RAM" : ""
-                var vram = kokoro.mode === "gpu"
-                  ? (kokoro.vramMib > 0 ? kokoro.gb(kokoro.vramMib) + " VRAM" : "loading")
-                  : "no VRAM"
-                return ram ? vram + " · " + ram : vram
-              }
-            }
-            InfoPair {
-              visible: kokoro.hasGpu
-              label: "GPU"
-              value: kokoro.gpu
-                ? kokoro.gb(kokoro.gpu.used_mib) + " of " + kokoro.gb(kokoro.gpu.total_mib) + " in use"
-                : ""
-            }
-          }
-
-          PanelSeparator {
-            visible: kokoro.config !== null
-            foreground: root.foreground
-          }
-
-          // ---------- the live config ----------
-          Row {
-            visible: kokoro.config !== null
-            width: parent.width
-            spacing: Style.space(20)
-
-            Column {
-              width: (parent.width - parent.spacing) / 2
-              spacing: Style.spacing.labelGap
-              InfoPair { label: "Voice"; value: kokoro.config ? String(kokoro.config.voice || "") : "" }
-              InfoPair {
-                label: "Speed"
-                value: kokoro.config ? Number(kokoro.config.effective_speed || 0).toFixed(2) + "×" : ""
-              }
+            Text {
+              visible: setupView.failed
+              textFormat: Text.PlainText
+              width: parent.width
+              text: setupView.error
+              color: root.urgent
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              wrapMode: Text.WordWrap
             }
 
-            Column {
-              width: (parent.width - parent.spacing) / 2
-              spacing: Style.spacing.labelGap
-              InfoPair {
-                label: "Output"
-                value: kokoro.config ? String(kokoro.config.output_device_name || "default") : ""
-              }
-              InfoPair { label: "Up"; value: root.uptimeText(kokoro.uptime) }
-            }
-          }
-
-          PanelSeparator { foreground: root.foreground }
-
-          // ---------- actions ----------
-          Column {
-            width: parent.width
-            spacing: Style.space(10)
-
-            PanelSectionHeader {
-              text: "ACTIONS"
+            Button {
+              visible: !kokoro.setupRunning
+              width: parent.width
+              iconText: root.glyph(setupView.failed ? 0xF0450 : 0xF01DA)   // md-refresh, md-download
+              iconSize: Style.font.title
+              text: setupView.failed ? "Try again" : "Set up"
+              fontSize: Style.font.bodySmall
               foreground: root.foreground
               fontFamily: root.fontFamily
+              horizontalPadding: Style.spacing.controlPaddingX
+              verticalPadding: Style.spacing.controlPaddingY + Style.space(2)
+              bordered: true
+              enabled: !kokoro.busy
+              hasCursor: root.cursorActive
+              onClicked: kokoro.runSetup()
+              onHovered: function(h) { if (h) root.cursorActive = true }
             }
 
-            Grid {
-              id: actionGrid
+            Row {
+              visible: setupView.installCommand !== "" || kokoro.setup !== null
               width: parent.width
-              columns: 2
-              columnSpacing: Style.space(6)
-              rowSpacing: Style.space(6)
-              readonly property real cellWidth: (width - columnSpacing) / 2
+              spacing: Style.space(6)
 
-              Repeater {
-                model: root.actions
-                Button {
-                  required property var modelData
-                  required property int index
-                  readonly property bool on: modelData.key === "captions" && kokoro.captions
-                  width: actionGrid.cellWidth
-                  iconText: root.glyph(on ? 0xF0A16 : modelData.icon)   // md-subtitles when on
-                  iconSize: Style.font.title
-                  iconSpinning: modelData.key === "restart" && kokoro.message === "Restarting…" && kokoro.transitioning
-                  text: modelData.label
-                  fontSize: Style.font.bodySmall
+              Button {
+                visible: setupView.installCommand !== ""
+                width: setupView.halfWidth
+                iconText: root.glyph(0xF018F)   // md-content_copy
+                iconSize: Style.font.title
+                text: "Copy install command"
+                fontSize: Style.font.bodySmall
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                leftAlign: true
+                horizontalPadding: Style.spacing.controlPaddingX
+                verticalPadding: Style.spacing.controlPaddingY + Style.space(2)
+                bordered: true
+                tooltipText: setupView.installCommand
+                onClicked: kokoro.copyText(setupView.installCommand)
+              }
+
+              Button {
+                visible: kokoro.setup !== null
+                width: setupView.halfWidth
+                iconText: root.glyph(0xF018D)   // md-console
+                iconSize: Style.font.title
+                text: "Setup log"
+                fontSize: Style.font.bodySmall
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                leftAlign: true
+                horizontalPadding: Style.spacing.controlPaddingX
+                verticalPadding: Style.spacing.controlPaddingY + Style.space(2)
+                bordered: true
+                onClicked: { kokoro.openSetupLog(); root.close() }
+              }
+            }
+          }
+
+          // ---------- everything else, once Kokoro is set up ----------
+          Column {
+            id: mainView
+            visible: !kokoro.showSetup
+            width: parent.width
+            spacing: Style.space(14)
+
+            // ---------- the sentence being read, spoken part bright ----------
+            Rectangle {
+              id: nowCard
+              visible: kokoro.speaking
+              width: parent.width
+              implicitHeight: nowRow.implicitHeight + Style.space(20)
+              radius: Style.cornerRadius
+              color: Style.normalFillFor(root.foreground, Color.accent)
+              border.width: 1
+              border.color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.12)
+
+              RowLayout {
+                id: nowRow
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: Style.space(12)
+                anchors.rightMargin: Style.space(8)
+                spacing: Style.space(10)
+
+                Text {
+                  Layout.fillWidth: true
+                  textFormat: Text.StyledText
+                  text: kokoro.speaking ? root.karaoke() : ""
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.body
+                  wrapMode: Text.WordWrap
+                  maximumLineCount: 4
+                  elide: Text.ElideRight
+                  lineHeight: 1.15
+                }
+
+                PanelActionButton {
+                  iconText: root.glyph(0xF04DB)
+                  tooltipText: "Stop reading"
                   foreground: root.foreground
                   fontFamily: root.fontFamily
-                  leftAlign: true
-                  horizontalPadding: Style.spacing.controlPaddingX
-                  verticalPadding: Style.spacing.controlPaddingY + Style.space(2)
-                  bordered: true
-                  active: on
-                  enabled: root.actionEnabled(modelData.key)
-                  opacity: enabled ? 1.0 : 0.4
-                  hasCursor: root.cursorActive && root.cursorRow === 1 + Math.floor(index / 2)
-                    && root.cursorCol === index % 2
-                  onClicked: root.runAction(modelData.key)
-                  onHovered: function(h) { if (h) root.hoverCursor(1 + Math.floor(index / 2), index % 2) }
+                  Layout.alignment: Qt.AlignVCenter
+                  onClicked: kokoro.stopSpeaking()
+                }
+              }
+            }
+
+            PanelSeparator { foreground: root.foreground }
+
+            // ---------- model: where it runs, or not at all ----------
+            Column {
+              width: parent.width
+              spacing: Style.space(10)
+
+              PanelSectionHeader {
+                text: "MODEL"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+              }
+
+              Row {
+                id: modeRow
+                width: parent.width
+                spacing: Style.space(6)
+                readonly property real cellWidth: (width - spacing * (root.modes.length - 1)) / root.modes.length
+
+                Repeater {
+                  model: root.modes
+                  Button {
+                    required property var modelData
+                    required property int index
+                    readonly property bool current: kokoro.shownMode === modelData.key
+                    width: modeRow.cellWidth
+                    iconText: root.glyph(modelData.icon)
+                    iconSize: Style.font.title
+                    iconSpinning: current && kokoro.transitioning && modelData.key !== "off"
+                    text: modelData.label
+                    fontSize: Style.font.bodySmall
+                    foreground: root.foreground
+                    fontFamily: root.fontFamily
+                    horizontalPadding: Style.spacing.controlPaddingX
+                    verticalPadding: Style.spacing.controlPaddingY + Style.space(2)
+                    bordered: true
+                    active: current
+                    enabled: modelData.key !== "gpu" || kokoro.hasGpu
+                    opacity: enabled ? 1.0 : 0.4
+                    tooltipText: modelData.key === "gpu" && !kokoro.hasGpu ? "No NVIDIA GPU found" : ""
+                    hasCursor: root.cursorActive && root.cursorRow === 0 && root.cursorCol === index
+                    onClicked: kokoro.setMode(modelData.key)
+                    onHovered: function(h) { if (h) root.hoverCursor(0, index) }
+                  }
+                }
+              }
+
+              Text {
+                textFormat: Text.PlainText
+                width: parent.width
+                text: root.modeHint(kokoro.shownMode)
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                wrapMode: Text.WordWrap
+              }
+            }
+
+            // ---------- memory: what Kokoro holds, against the whole GPU ----------
+            Column {
+              width: parent.width
+              spacing: Style.spacing.labelGap + Style.space(2)
+
+              Item {
+                visible: kokoro.hasGpu
+                width: parent.width
+                implicitHeight: Style.space(8)
+
+                readonly property real total: kokoro.gpu ? Math.max(1, kokoro.gpu.total_mib) : 1
+                readonly property real mine: kokoro.mode === "gpu" ? kokoro.vramMib : 0
+                readonly property real others: kokoro.gpu ? Math.max(0, kokoro.gpu.used_mib - mine) : 0
+
+                Rectangle {
+                  id: track
+                  anchors.fill: parent
+                  radius: height / 2
+                  color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.12)
+                }
+
+                // everyone else on the GPU, drawn first so Kokoro's share sits
+                // on top of its left end
+                Rectangle {
+                  anchors.left: track.left
+                  anchors.verticalCenter: track.verticalCenter
+                  height: track.height
+                  radius: track.radius
+                  width: Math.min(track.width, track.width * (parent.mine + parent.others) / parent.total)
+                  visible: width > 0
+                  color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.35)
+                  Behavior on width { NumberAnimation { duration: 320; easing.type: Easing.OutCubic } }
+                }
+
+                Rectangle {
+                  anchors.left: track.left
+                  anchors.verticalCenter: track.verticalCenter
+                  height: track.height
+                  radius: track.radius
+                  width: parent.mine > 0 ? Math.max(track.height, track.width * parent.mine / parent.total) : 0
+                  visible: width > 0
+                  color: root.foreground
+                  Behavior on width { NumberAnimation { duration: 320; easing.type: Easing.OutCubic } }
+                }
+              }
+
+              InfoPair {
+                label: "Kokoro"
+                value: {
+                  if (kokoro.mode === "off" || kokoro.serverState === "off") return "nothing loaded"
+                  var ram = kokoro.rssMib > 0 ? kokoro.gb(kokoro.rssMib) + " RAM" : ""
+                  var vram = kokoro.mode === "gpu"
+                    ? (kokoro.vramMib > 0 ? kokoro.gb(kokoro.vramMib) + " VRAM" : "loading")
+                    : "no VRAM"
+                  return ram ? vram + " · " + ram : vram
+                }
+              }
+              InfoPair {
+                visible: kokoro.hasGpu
+                label: "GPU"
+                value: kokoro.gpu
+                  ? kokoro.gb(kokoro.gpu.used_mib) + " of " + kokoro.gb(kokoro.gpu.total_mib) + " in use"
+                  : ""
+              }
+            }
+
+            PanelSeparator {
+              visible: kokoro.config !== null
+              foreground: root.foreground
+            }
+
+            // ---------- the live config ----------
+            Row {
+              visible: kokoro.config !== null
+              width: parent.width
+              spacing: Style.space(20)
+
+              Column {
+                width: (parent.width - parent.spacing) / 2
+                spacing: Style.spacing.labelGap
+                InfoPair { label: "Voice"; value: kokoro.config ? String(kokoro.config.voice || "") : "" }
+                InfoPair {
+                  label: "Speed"
+                  value: kokoro.config ? Number(kokoro.config.effective_speed || 0).toFixed(2) + "×" : ""
+                }
+              }
+
+              Column {
+                width: (parent.width - parent.spacing) / 2
+                spacing: Style.spacing.labelGap
+                InfoPair {
+                  label: "Output"
+                  value: kokoro.config ? String(kokoro.config.output_device_name || "default") : ""
+                }
+                InfoPair { label: "Up"; value: root.uptimeText(kokoro.uptime) }
+              }
+            }
+
+            PanelSeparator { foreground: root.foreground }
+
+            // ---------- actions ----------
+            Column {
+              width: parent.width
+              spacing: Style.space(10)
+
+              PanelSectionHeader {
+                text: "ACTIONS"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+              }
+
+              Grid {
+                id: actionGrid
+                width: parent.width
+                columns: 2
+                columnSpacing: Style.space(6)
+                rowSpacing: Style.space(6)
+                readonly property real cellWidth: (width - columnSpacing) / 2
+
+                Repeater {
+                  model: root.actions
+                  Button {
+                    required property var modelData
+                    required property int index
+                    readonly property bool on: modelData.key === "captions" && kokoro.captions
+                    width: actionGrid.cellWidth
+                    iconText: root.glyph(on ? 0xF0A16 : modelData.icon)   // md-subtitles when on
+                    iconSize: Style.font.title
+                    iconSpinning: modelData.key === "restart" && kokoro.message === "Restarting…" && kokoro.transitioning
+                    text: modelData.label
+                    fontSize: Style.font.bodySmall
+                    foreground: root.foreground
+                    fontFamily: root.fontFamily
+                    leftAlign: true
+                    horizontalPadding: Style.spacing.controlPaddingX
+                    verticalPadding: Style.spacing.controlPaddingY + Style.space(2)
+                    bordered: true
+                    active: on
+                    enabled: root.actionEnabled(modelData.key)
+                    opacity: enabled ? 1.0 : 0.4
+                    hasCursor: root.cursorActive && root.cursorRow === 1 + Math.floor(index / 2)
+                      && root.cursorCol === index % 2
+                    onClicked: root.runAction(modelData.key)
+                    onHovered: function(h) { if (h) root.hoverCursor(1 + Math.floor(index / 2), index % 2) }
+                  }
                 }
               }
             }
