@@ -1716,6 +1716,16 @@ Fedora system packages — no DLL-bundling step like Windows'
 — the location-independence work in Phase 1 (`v0.1.0-beta` hygiene) paid
 off exactly as intended.
 
+**Correction 2026-10-17: misaki never used the system `espeak-ng`.** On
+import, `misaki/espeak.py:8-10` (misaki 0.9.4) points phonemizer at
+`espeakng_loader.get_library_path()` and `get_data_path()`, and both return
+the copy inside the wheel on every OS. So this Fedora install ran the
+bundled library, like Windows and Omarchy. That copy links only
+`libstdc++`, `libm`, `libgcc_s` and `libc` (`ldd`, on Omarchy), and the
+Omarchy desktop has no system eSpeak package installed. The `espeak-ng` in
+the README's Fedora `dnf` line is therefore unused. It stays until a
+Fedora clean install confirms it can go.
+
 `sudo` has no TTY in this environment (agent-run shell); `pkexec <cmd>`
 worked instead, popping a graphical polkit prompt — use that for any
 future package install here rather than assuming `sudo` works.
