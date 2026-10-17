@@ -3267,6 +3267,77 @@ installers choose setup's venv, or else a hand-made `env/`.
 **Not done by setup:** binding GNOME shortcuts (it prints them), and
 installing the bar widget, which `omarchy plugin add` does (step 3d).
 
+### DEPLOYED 2026-10-17: `kokoroctl uninstall`, and a full uninstall → setup round trip
+
+`kokoroctl uninstall [--yes] [--purge]` undoes setup, in this order:
+1. Stops a running setup, then disables and stops the server and the
+   caption strip.
+2. Removes the unit files, but only ones whose text contains "Kokoro
+   read-aloud", and the CPU-mode drop-in. Then `daemon-reload`.
+3. Ends any server, caption strip or panel process started from this code
+   folder.
+4. Removes the launcher entry.
+5. Removes `kokoro.lua` and what `install-hyprland.sh` added to
+   `hyprland.lua`, after backing that file up, then reloads Hyprland.
+6. Deletes the data folder (venv, Python, model, uv and its cache) and
+   the state folder (logs, calibration).
+
+**Settings are kept** unless you answer yes, or pass `--purge`. It asks
+before doing anything; without a terminal it needs `--yes`. **Never
+touched:** the code folder, and the shared Hugging Face cache, which it
+only reports.
+
+**`kokoroctl status` no longer runs `paths.prepare()`.** The widget polls
+it, so it would have recreated the folders right after an uninstall.
+
+**Removing the Hyprland lines.** They are matched as whole lines: the
+comment, the `dofile` line, and the blank line before them if it is still
+there. Tested in a sandbox (`XDG_CONFIG_HOME` pointing at a copy) on three
+layouts, each restored byte for byte:
+- the installer's own output;
+- the user's own lines after the block;
+- the blank line removed by hand.
+
+The first version replaced an optional newline with `\n`. It returned one
+byte too many, and with the blank line removed it would have joined two of
+the user's lines.
+
+**Round trip on the Omarchy desktop:**
+- **`uninstall --yes`, 1.4 s.**
+  - Units, processes and port 5111 were gone; Hyprland reported no config
+    errors.
+  - `hyprland.lua` differed only by the three Kokoro lines.
+  - Data and state were gone; `settings.json` was unchanged
+    (SHA-256 checked).
+  - The code folder saw zero inotify events.
+- **Fresh `setup`, 1 min 46 s.**
+  - It downloaded uv, Python, and 3,523 MiB of CUDA packages
+    ("Prepared 115 packages in 58.02s") into its own cache, then the
+    326 MiB model.
+  - The server was back on the new venv with the user's settings.
+  - Zero inotify events again.
+- **Disk use:** `btrfs filesystem du` reports the data folder as 13.15 GiB
+  in total but 4.74 GiB shared, about 5.4 GiB on disk. uv reflinks the
+  venv from its own cache.
+
+**Correction to a check made during the round trip.** "No hotkeys bound"
+had been checked with `hyprctl binds -j | grep read_aloud`. That could
+never match: Lua binds list as dispatcher `__lua` with an index. Re-checked
+by bind description against the live Hyprland:
+- three "…aloud" binds before;
+- none after `_unhook_hyprland`, with no config errors;
+- three again after `install-hyprland.sh`.
+
+**Hugging Face cache layout.** huggingface_hub 1.33 keeps a model's files
+as symlinks, from both `snapshots/` and `blobs/`, into a shared
+`hub/blobs/`. A size that follows the links must count each file once.
+Kokoro's entry is 315 MiB, and the server no longer reads it.
+
+**What a round trip changes in `hyprland.lua`.** The Kokoro block comes
+back at the end of the file. When the user had added lines after it, the
+content is the same in a different order. For the test, the original file
+was restored and the three backups the test made were deleted.
+
 ### DEPLOYED 2026-10-17: the model is pinned and loaded by path, and the server runs offline (step 3b)
 
 **`model_files.py` pins 30 files** at revision `f3ff357…`:

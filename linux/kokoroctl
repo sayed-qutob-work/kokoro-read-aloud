@@ -16,6 +16,9 @@ Usage:  kokoroctl <command>
   setup [--cpu|--cuda] [--background]
                        install the server's Python, packages and model
                        (linux/kokoro_setup.py); run again to repair
+  uninstall [--yes] [--purge]
+                       remove all of that, the services and the hotkeys;
+                       --purge also deletes your settings
 
 Why the modes are process lifecycles (AUDIT 2026-10-07): on this desktop
 the server holds ~1.6 GB of VRAM and ~3 GB of RAM all day, and a game or a
@@ -372,8 +375,11 @@ def ping_widget():
 
 
 def main(argv):
-    paths.prepare()      # the units' log files need the state folder
     cmd = argv[1] if len(argv) > 1 else "status"
+    # The units' log files need the state folder. Not for status, which the
+    # bar widget polls: it would bring the folders back after an uninstall.
+    if cmd not in ("status", "uninstall"):
+        paths.prepare()
     if cmd == "status":
         print(json.dumps(status(), separators=(",", ":")))
         return 0
@@ -388,6 +394,12 @@ def main(argv):
             return 0
         variant = "cpu" if "--cpu" in args else "cuda" if "--cuda" in args else None
         return kokoro_setup.run(variant)
+    if cmd == "uninstall":
+        args = argv[2:]
+        if [a for a in args if a not in ("--yes", "--purge")]:
+            print("usage: kokoroctl uninstall [--yes] [--purge]", file=sys.stderr)
+            return 2
+        return kokoro_setup.uninstall("--yes" in args, "--purge" in args)
     if cmd in ("gpu", "cpu", "off"):
         msg = set_mode(cmd)
     elif cmd == "restart":
