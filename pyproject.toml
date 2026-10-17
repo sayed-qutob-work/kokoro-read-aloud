@@ -1,0 +1,86 @@
+# The server's dependencies, for uv. Install one variant:
+#
+#   uv sync --extra cuda    NVIDIA GPU (torch built for CUDA 12.6)
+#   uv sync --extra cpu     everything else
+#
+# Always pass one. kokoro itself requires torch, so a bare `uv sync` still
+# installs one: an untested build from PyPI. uv cannot point that case at
+# the CPU index too ("conflicting indexes for package torch").
+#
+# uv.lock pins every package, with hashes, to the set measured in
+# docs/AUDIT.md. Only the server uses this environment: the settings panel
+# and the caption strip run on the system Python (paths.py).
+#
+# requirements*.txt still describe the same set for pip.
+
+[project]
+name = "kokoro-read-aloud"
+version = "0.2.0"
+description = "Select text anywhere, press a hotkey, hear it read aloud. Local Kokoro TTS."
+license = "MIT"
+# kokoro 0.9.4 needs >=3.10,<3.13; every measurement is on 3.12.
+requires-python = "==3.12.*"
+dependencies = [
+    "kokoro==0.9.4",
+    # kokoro asks for misaki[en]>=0.9.4 with no upper bound; the G2P is
+    # what turns text into speech, so it is pinned to what was measured.
+    "misaki[en]==0.9.4",
+    # misaki installs this spaCy model with pip on first use, and a uv venv
+    # has no pip, so it is a dependency instead. Must match spaCy's 3.8.
+    "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
+    "flask==3.1.3",
+    "sounddevice==0.5.5",
+    "numpy==2.5.1",
+    "comtypes==1.4.16; sys_platform == 'win32'",
+]
+
+[project.optional-dependencies]
+cpu = ["torch==2.13.0"]
+cuda = ["torch==2.13.0"]
+
+[tool.uv]
+package = false             # an application: nothing to build or install
+conflicts = [[{ extra = "cpu" }, { extra = "cuda" }]]
+# Indirect dependencies held at the versions in the venv every AUDIT
+# number was measured with (built 2026-10-06). Left free, uv picks newer
+# ones, including huggingface-hub 2.x; a date cut-off (exclude-newer) was
+# worse, dropping transformers back to 4.12.
+constraint-dependencies = [
+    "csvw==4.1.0",
+    "cuda-bindings==12.9.9",
+    "filelock==4.0.12",
+    "hf-xet==1.6.0",
+    "huggingface-hub==1.33.0",
+    "pycparser==3.0",
+    "pydantic==2.13.5",
+    "pydantic-core==2.46.5",
+    "smart-open==8.0.2",
+    "tokenizers==0.23.2",
+    "transformers==5.18.0",
+    "typer==0.27.2",
+    "wrapt==2.5.0",
+]
+# The platforms this is tested on. Without this uv also resolves macOS and
+# ARM, where the CUDA build does not exist.
+environments = [
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "sys_platform == 'win32' and platform_machine == 'AMD64'",
+]
+
+# Both torch variants come from PyTorch's own indexes. PyPI's Linux torch
+# is not a CPU build: it pulls in the CUDA 13 libraries (AUDIT 2026-10-17).
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cu126", extra = "cuda" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true

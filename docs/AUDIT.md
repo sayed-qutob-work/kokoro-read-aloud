@@ -3122,6 +3122,58 @@ character, without the model:
   - `donʼt` written with U+02BC is spelled out;
   - a zero-width space adds a stray phoneme.
 
+### BUILT 2026-10-17: `pyproject.toml` + `uv.lock` (plugin packaging, step 3b)
+
+**The tool.** uv 0.12.24: the version Fedora 44 ships, verified against
+Astral's published SHA-256. 0.13.x was under ten days old. Python is
+CPython 3.12.15 from uv (python-build-standalone):
+- installed with `--install-dir ~/.local/share/kokoro-read-aloud/python
+  --no-bin`, so nothing went to `~/.local/bin` (checked);
+- found by uv through `UV_PYTHON_PREFERENCE=only-managed` with downloads
+  off.
+
+**Variants.** Two extras that conflict with each other, `cpu` and `cuda`.
+Each maps torch to PyTorch's own index (`whl/cpu`, `whl/cu126`):
+- CPU: `torch 2.13.0+cpu`, with no NVIDIA or CUDA package;
+- CUDA: `torch 2.13.0+cu126` plus 18 NVIDIA/CUDA packages, the set
+  `requirements-cuda.txt` installs.
+
+Both variants are resolved for Linux x86_64 and Windows AMD64; the
+`environments` setting excludes macOS and ARM. **Trap:** kokoro itself
+requires torch, so a bare `uv sync` installs a PyPI torch (2.9.1 on Linux,
+2.14.1 on Windows). uv rejects a CPU-index fallback for that case
+("conflicting indexes for package torch"). So setup always passes an
+extra, and `pyproject.toml` says so.
+
+**Reproducing `env/`.** Left free, the lock differed from the measured
+venv on 13 packages:
+- notably `huggingface-hub` 1.33.0 → 2.2.0, a major version;
+- and `transformers` 5.18.0 → 5.20.1.
+
+`exclude-newer` set to the venv's build date was worse. uv took the newest
+hub from before that date (2.1.1) and dropped transformers to 4.12.2 to
+satisfy it. Instead, the 13 are held at the venv's versions in
+`constraint-dependencies`. The Linux CUDA export now equals
+`pip freeze` of `env/`: **115/115 packages, same versions.**
+
+**Install.** `uv sync --frozen --extra cuda --compile-bytecode` into
+`~/.local/share/kokoro-read-aloud/venv` took 69 s.
+- `--compile-bytecode` is required, because the server writes none.
+- Real disk use:
+  - `du` says venv 6.6 GB plus uv cache 6.4 GB, but on btrfs uv reflinks
+    from its cache; `btrfs filesystem du` shows 5.05 GiB shared;
+  - so the real total is about 5.3 GiB, plus 111 MB for the Python.
+- **For step 3c:** give uv its own cache inside the data folder, so
+  uninstall can remove it without touching other uv projects.
+
+**Same behaviour as `env/`.** The engine was run in both venvs with the
+torch seed fixed. The audio of an American and a British sentence was
+**bit-identical**, and so was the uv venv against itself.
+
+Unseeded, two runs differ by up to 0.23 in sample value, run to run. That
+is the vocoder's random noise, not the environment, so audio comparisons
+need a seed.
+
 ---
 
 ## 9. Accepted trade-offs (settled — reopen only with new information)
