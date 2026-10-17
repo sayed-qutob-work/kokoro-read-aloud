@@ -127,9 +127,9 @@ fi
 
 # jq -Rs handles the JSON escaping that hand-rolled quoting always gets wrong
 # on text containing quotes, newlines or backslashes.
-if ! printf '%s' "$text" | jq -Rs '{text: .}' |
+if ! resp=$(printf '%s' "$text" | jq -Rs '{text: .}' |
      curl -sf -m 10 -X POST "$SERVER/speak" \
-          -H 'Content-Type: application/json' --data-binary @- >/dev/null; then
+          -H 'Content-Type: application/json' --data-binary @-); then
   # Off on purpose (kokoroctl off / the bar widget freeing VRAM) is not a
   # failure, and must not wake the GPU behind a game's back either. is-active
   # says "inactive" for a unit that does not exist too, hence the cat first.
@@ -143,6 +143,13 @@ if ! printf '%s' "$text" | jq -Rs '{text: .}' |
     *)          note 'Kokoro' 'server not running (start tts_server.py)' ;;
   esac
   exit 1
+fi
+
+# The server skips scripts it would only spell out (Japanese, Cyrillic, ...),
+# and says so with atoms=0. Without this the hotkey would just do nothing.
+if [[ $(jq -r '.atoms // empty' <<<"$resp" 2>/dev/null) == 0 ]]; then
+  note 'Kokoro' 'Nothing it can read. It reads Latin-script text (English) only.'
+  exit 0
 fi
 
 # Remember what we spoke, so the next selection read can tell a stale PRIMARY

@@ -17,6 +17,7 @@ import sys
 import time
 import queue
 import threading
+import unicodedata
 from collections import deque
 
 import numpy as np
@@ -271,6 +272,80 @@ def cut_point(text, limit):
     return cut
 
 
+_NON_ASCII = re.compile(r"[^\x00-\x7F]+")
+# CJK and fullwidth punctuation and the ideographic space. misaki is silent
+# on all of it (measured), so dropping it changes no audio; left behind by
+# the letters it punctuated, it would make a chunk of nothing.
+_CJK_PUNCT = re.compile("[\u3000-\u303F\u30FB\uFF01-\uFF0F\uFF1A-\uFF20"
+                        "\uFF3B-\uFF40\uFF5B-\uFF65]+")
+
+
+def _script(ch):
+    """The script a letter is read as: "latin", or the first word of its
+    Unicode name ("GREEK", "CYRILLIC", "CJK", "HIRAGANA"...). Judged on the
+    NFKC form, so styled maths letters, ligatures and fullwidth Latin count
+    as Latin, and misaki does read those as plain text. The spacing
+    modifiers (U+02B0-02FF: ʼ ʻ ˈ) count as Latin too."""
+    nf = unicodedata.normalize("NFKC", ch)
+    if nf.isascii() or "\u02B0" <= ch <= "\u02FF":
+        return "latin"
+    name = unicodedata.name(nf[0], "")
+    return "latin" if "LATIN" in name else name.split(" ")[0]
+
+
+def skip_unreadable(text):
+    """Drop what the English pipeline would spell out instead of reading.
+
+    Every text goes through the American English pipeline, which reads
+    other scripts letter by letter: Unicode names ("hebrew shin hebrew
+    lamed"), "Japanese letter" per kana, or eSpeak's language markers spoken
+    aloud for Hindi and Korean (AUDIT 2026-10-17). So the letters of every
+    script but Latin are skipped, with their combining marks, generalizing
+    the Arabic rule of 2026-10-11 (a Piper Arabic voice was tried and
+    rejected by ear). So is the punctuation of a script that was skipped:
+    "DEVANAGARI DANDA" is read as "danda", "HEBREW PUNCTUATION MAQAF" as
+    "hebrew makaf". Digits stay: misaki reads Arabic-Indic ones as numbers.
+
+    A lone Greek letter stays. It is read as its name ("alpha", "pi",
+    "delta"), which in English text is what it means; Greek words go.
+    Per-language pipelines that read these properly are planned for v0.3.0.
+    """
+    dropped = set()
+
+    def letters(m):
+        groups = []                     # [script, chars, letter count]
+        for ch in m.group():
+            cat = unicodedata.category(ch)
+            if cat[0] == "M" and groups:
+                groups[-1][1] += ch     # a mark goes with its letter
+                continue
+            script = _script(ch) if cat[0] == "L" else None
+            if groups and groups[-1][0] == script:
+                groups[-1][1] += ch
+                groups[-1][2] += 1
+            else:
+                groups.append([script, ch, 1])
+        out = []
+        for script, chars, n in groups:
+            if script in (None, "latin") or (script == "GREEK" and n == 1):
+                out.append(chars)
+            else:
+                dropped.add(script)
+                out.append(" ")
+        return "".join(out)
+
+    def punctuation(m):
+        return "".join(
+            " " if unicodedata.category(ch)[0] in "PS"
+            and unicodedata.name(ch, "").split(" ")[0] in dropped else ch
+            for ch in m.group())
+
+    text = _NON_ASCII.sub(letters, text)
+    if dropped:
+        text = _NON_ASCII.sub(punctuation, text)
+    return _CJK_PUNCT.sub(" ", text)
+
+
 def sanitize(text):
     """Strip markdown/TUI noise before synthesis. Inline **bold** and `code`
     are inert to Kokoro (measured - identical audio), but list markers add
@@ -279,13 +354,17 @@ def sanitize(text):
     text = re.sub(r"^#{1,6}\s+", " ", text, flags=re.M)             # md headers
     text = re.sub(r"[*_`~|]+", " ", text)                           # inline md, table pipes
     text = re.sub(r"[─-▟→←↑↓✔✖✅❌]", " ", text)           # box drawing, arrows
-    # Arabic script: Kokoro has no Arabic and spells each letter's Unicode
-    # name ("arabic dal arabic fa ..."), so it is skipped. A Piper Arabic
-    # voice was tried and rejected by ear (AUDIT 2026-10-11).
-    text = re.sub("[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF"
-                  "\uFB50-\uFDFF\uFE70-\uFEFF]+", " ", text)
+    text = skip_unreadable(text)
     text = re.sub(r"\(\s*\)|\[\s*\]|«\s*»", " ", text)              # brackets it emptied
     return text
+
+
+def _says_something(atom):
+    """False for an atom of bare punctuation, which is all a skipped script
+    leaves of a clause ("Привет, мир" -> ","). Symbols count: ©, €, + and
+    emoji are read aloud."""
+    return any(ch.isalnum() or unicodedata.category(ch)[0] == "S"
+               for ch in atom)
 
 
 def split_atoms(text):
@@ -311,7 +390,7 @@ def split_atoms(text):
                 c = c[cut:].strip()
             if c:
                 atoms.append(c)
-    return atoms
+    return [a for a in atoms if _says_something(a)]
 
 
 def trim_silence(x, sr, thresh=0.01, keep_ms=50):
@@ -635,7 +714,12 @@ class Player:
                 return
 
     def speak(self, text):
+        """Queue `text`, replacing whatever is playing. Returns the number of
+        atoms queued: 0 when nothing in it is readable (skip_unreadable)."""
         atoms = split_atoms(text)
+        if not atoms:
+            print(f"nothing readable in {len(text)} chars -- skipped",
+                  flush=True)
         with self.lock:
             self.gen += 1
             gen = self.gen
@@ -653,6 +737,7 @@ class Player:
                 self.pending.append((gen, a))
             self.play_until = 0.0
             self.cv.notify_all()
+        return len(atoms)
 
     def stop(self):
         with self.lock:
@@ -824,8 +909,8 @@ def speak():
     text = (request.get_json(force=True, silent=True) or {}).get("text", "")
     if not text.strip():
         return jsonify(ok=False, error="empty"), 400
-    player.speak(text)
-    return jsonify(ok=True, chars=len(text))
+    atoms = player.speak(text)
+    return jsonify(ok=True, chars=len(text), atoms=atoms)
 
 
 @app.post("/stop")

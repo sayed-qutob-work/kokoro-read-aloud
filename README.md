@@ -419,6 +419,21 @@ still run on the CPU when you want the VRAM back, see
   The macro and the reasons behind it are in `docs/AUDIT.md` (2026-08-19).
   Solaar cannot remap a G Pro Wireless (`docs/AUDIT.md` §6).
 
+## Languages
+
+Kokoro read-aloud reads English. Other languages written in the Latin
+alphabet, such as French, Spanish or German, are read with English
+pronunciation.
+
+Other scripts are skipped rather than spelled out letter by letter. That
+covers Japanese, Chinese, Korean, Cyrillic, Greek, Hebrew, Arabic, Hindi and
+the rest. In mixed text the English is still read. A lone Greek letter such
+as π or Δ is read by its name. On Linux, a selection with nothing readable
+in it shows a notification.
+
+Reading the other languages Kokoro supports, each with its own
+pronunciation, is planned for v0.3.0.
+
 ## Known issues
 
 These are all in the Windows in-place highlighter. None of them affect audio.

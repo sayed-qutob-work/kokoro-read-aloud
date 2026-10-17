@@ -3058,6 +3058,70 @@ and Windows keep the call.
 - Whether it follows a change of that default while playing is not
   measured, so the label does not claim it.
 
+### DEPLOYED 2026-10-17: v0.2.0 skips what the English pipeline would spell out
+
+The decision of the language entry above, option (c), built and measured.
+`skip_unreadable()` in `sanitize()` replaces the Arabic-only regex.
+
+**Measured first.** misaki's English G2P was run on each kind of
+character, without the model:
+- **Read as spelling or noise:**
+  - words in Greek, Cyrillic, Hebrew or Thai come out as letter names;
+  - kana and Han come out as "Japanese letter" and "Chinese letter";
+  - Korean and Hindi come out with eSpeak's `(kɔ)` and `(hi)…(An-us)`
+    markers spoken;
+  - so does some punctuation: `।` "danda", `॥`, `־` "hebrew makaf", and
+    the Armenian full stop.
+- **Read well:**
+  - a lone Greek letter: "alpha", "pie", "delta-t", "mew";
+  - accented Latin, ß, Æø and fullwidth Latin;
+  - styled maths letters (𝗯𝗼𝗹𝗱) and ligatures (ﬁ);
+  - letter-like symbols (Ω, ℓ, the Kelvin sign);
+  - © ™ °C € ½ x²;
+  - Arabic-Indic digits, read as numbers.
+- **Silent:** Arabic punctuation, and all CJK and fullwidth punctuation.
+- **Read as names: emoji** ("red heart", "grinning face"). They are not a
+  script, so they are left alone pending a decision.
+
+**The rule:**
+- **Letters of every script but Latin are dropped,** with their combining
+  marks.
+  - Latin is judged on the NFKC form, so 𝗯𝗼𝗹𝗱, ﬁ and ＡＢＣ stay. The
+    spacing modifiers U+02B0–02FF count as Latin.
+  - **A lone Greek letter stays;** Greek words go.
+- **Punctuation of a script that was dropped goes too,** matched on the
+  first word of its Unicode name.
+- **CJK and fullwidth punctuation always goes.** It is silent, but would be
+  left as chunks of nothing.
+- **`split_atoms()` drops atoms of bare punctuation.** All-Cyrillic text
+  uses ASCII commas and would otherwise leave `,`. Symbols such as ©, € and
+  emoji still count as readable.
+
+**Measured after:**
+- every all-foreign sample comes out as 0 atoms: Greek, Cyrillic, Hebrew,
+  Thai, Korean, Japanese, Chinese, Hindi with dandas, Arabic;
+- mixed text keeps its English: "Tokyo (東京) is the capital." → "Tokyo is
+  the capital.";
+- the 25 test cases with nothing to drop give identical phonemes before
+  and after: Latin, symbols, lone Greek letters, digits and silent
+  punctuation;
+- 2.2 ms for 53 KB of text.
+
+**Behaviour:**
+- `POST /speak` returns `atoms`. At 0 the server logs `nothing readable in
+  N chars -- skipped` and plays nothing.
+- A new request still stops the current read.
+- `read_aloud.sh` notifies "Nothing it can read". Tested end to end through
+  the clipboard path, with the clipboard restored afterwards.
+- AutoHotkey ignores the reply, so Windows stays silent.
+
+**Accepted edge cases:**
+- A danda or maqaf with no letters of its script around it is still read.
+- ℏ is read as "letter 210F": its NFKC form is Latin.
+- Seen in passing, both already the case before this change:
+  - `donʼt` written with U+02BC is spelled out;
+  - a zero-width space adds a stray phoneme.
+
 ---
 
 ## 9. Accepted trade-offs (settled — reopen only with new information)
