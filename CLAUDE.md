@@ -10,17 +10,19 @@ Speechify-style in-place word highlighting.
 anything. In particular:
 
 - **§4 Measured facts** — measured numbers, but **measured on the ORIGINAL
-  desktop (i5-12400F), which is no longer the machine.** The hardware changed
-  ~2026-08-09 to an i7-11370H laptop + GTX 1650, and the throughput,
-  synthesis-cost, START and thread-count rows do NOT transfer — see the
-  2026-08-11 entry in §8 for the current values. Rows about *Kokoro's
-  behaviour* (silence padding, markdown inertness, cut lengthening, per-word
-  timestamps) are model-level and still hold. Every unmeasured estimate made
-  in past sessions was wrong, always optimistically.
+  desktop's CPU under Windows (i5-12400F, CPU build of torch)**, a setup no
+  longer in use. Its throughput, synthesis-cost, START and thread-count rows
+  do NOT transfer. Each machine since has its own values in §8: the
+  i7-11370H + GTX 1650 laptop in 2026-08-11 (Windows) and 2026-08-18
+  (Fedora), and the i5-12400F + RTX 4060 Ti desktop running Omarchy in
+  2026-10-06/07 (GPU, and CPU mode); the AUDIT header lists all three. Rows
+  about *Kokoro's behaviour* (silence padding, markdown inertness, cut
+  lengthening, per-word timestamps) are model-level and still hold. Every
+  unmeasured estimate made in past sessions was wrong, always optimistically.
 - **§6 Rejected options** — do not re-propose Piper, kokoro-onnx,
   MODEL_SPEED > 1.3, torch thread tuning, or in-place terminal highlighting
   (proven impossible). **GPU is no longer on that list** — it was adopted
-  2026-08-11 and measured at 25.03x RT vs 1.77x on this laptop's CPU.
+  2026-08-11 and measured at 25.03x RT vs 1.77x on the GTX 1650 laptop's CPU.
 - **Speed is bounded by hardware, not taste.** Playback drains
   `PLAYBACK_SPEED` audio-seconds per second; synthesis produces `rt`
   (`GET /config → measured_rt`). Reads stall unless `rt > PLAYBACK_SPEED`.

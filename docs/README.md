@@ -17,17 +17,20 @@ logs record both.
 ## Two things to know before reading
 
 **The measurements are tied to specific hardware, and that hardware changed.**
-Numbers in AUDIT §4 were taken on the original desktop (i5-12400F). The machine
-became an i7-11370H laptop with a GTX 1650 on 2026-08-09, and the throughput,
-synthesis-cost and latency rows do **not** transfer — the 2026-08-11 entry in §8
-carries the current values. Machine specs are named throughout on purpose: a
-throughput number without the machine that produced it is worse than no number,
-because it invites exactly the false confidence these documents exist to
-prevent.
+Numbers in AUDIT §4 were taken on the original desktop's CPU, under Windows
+(i5-12400F). Since then the project has run on an i7-11370H laptop with a
+GTX 1650 (Windows, then Fedora, from 2026-08-09) and on an i5-12400F + RTX 4060
+Ti desktop running Omarchy (from 2026-10-06), both on the GPU. The throughput,
+synthesis-cost and latency rows in §4 do **not** transfer to either. Each
+machine's own values are in §8: 2026-08-11 and 2026-08-18 for the laptop,
+2026-10-06/07 for the Omarchy desktop. Machine specs are named throughout on
+purpose: a throughput number without the machine that produced it is worse
+than no number, because it invites exactly the false confidence these
+documents exist to prevent.
 
 **Some entries are wrong on purpose.** Superseded conclusions are marked and
 kept rather than deleted, along with what replaced them. The GPU section in §6
 is the clearest example: it argues against using a GPU, is preserved because
 that verdict was correct *for the machine it was written about*, and is topped
-with the 2026-08-11 measurement that reversed it on the current one. Read the
+with the 2026-08-11 measurement that reversed it on the laptop. Read the
 dates.

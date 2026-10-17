@@ -17,12 +17,22 @@ audio-budgeted first chunk + speech-weighted chars + boot warmup; boundary stall
 killed via silence trimming + CUT_PAUSE; markdown/TUI sanitizing; terminal reading via
 clipboard path (window-aware Ctrl+Alt+R, new Ctrl+Alt+T); VS Code `copyOnSelection`
 enabled.
-**Machine (ORIGINAL, through 2026-08-08):** Windows 11, Intel i5-12400F
-(6 P-cores), RTX 4060 Ti 8GB, 16GB DDR4.
-**Machine (CURRENT, since ~2026-08-09):** Windows 11, Intel **i7-11370H
-(4 cores / 8 threads)**, **GTX 1650 4GB** + Intel Iris Xe, 16GB.
-**Every number in §4 was fitted on the ORIGINAL machine and most of them do
-not transfer** — see the 2026-08-11 entry in §8 before trusting any of them.
+
+**Machines, in order** (a number is only valid for the machine it was measured on):
+- **ORIGINAL desktop, through 2026-08-08:** Windows 11, Intel i5-12400F
+  (6 P-cores), RTX 4060 Ti 8GB, 16GB DDR4, with Kokoro on the **CPU**.
+  §4 was fitted here.
+- **Laptop, from ~2026-08-09:** Intel **i7-11370H (4 cores / 8 threads)**,
+  **GTX 1650 4GB** + Intel Iris Xe, 16GB. Windows 11, on the GPU from
+  2026-08-11; dual-booted into Fedora 44 (GNOME) from 2026-08-18.
+- **Omarchy desktop, from 2026-10-06:** Omarchy 4.0.4 (Arch, Hyprland) on
+  an i5-12400F + RTX 4060 Ti 8GB + 16GB, the ORIGINAL desktop's CPU and
+  GPU, with Kokoro on the **GPU** (CPU mode on demand). The entries from
+  2026-10-06 on were measured here.
+
+**Most numbers in §4 do not transfer to either later machine** — each one's
+values are in §8: 2026-08-11 (laptop, Windows), 2026-08-18 (laptop, Fedora),
+2026-10-06/07 (Omarchy desktop).
 **Root:** `C:\kokoro\`
 
 ---
@@ -136,13 +146,15 @@ All fitted from this machine's own logs. **Every estimate made without measuring
 this session was wrong, and always optimistic.** Trust only these.
 
 > ⚠️ **SCOPE, added 2026-08-11: this table is a property of the ORIGINAL
-> desktop, not of the project.** The laptop this now runs on synthesizes at
-> **~1.7x realtime, not 4.03x**, and that single difference invalidates the
+> desktop, not of the project.** The laptop it moved to on 2026-08-09
+> synthesizes on its CPU at **~1.7x realtime, not 4.03x**, and that single
+> difference invalidates the
 > throughput row, the gap-constraint row, the synthesis-cost fit, the START
 > figures and the thread count. The rule "measure, don't estimate" was always
 > the point; what this section got wrong was implying the *results* were
 > portable. **Numbers below marked (ORIGINAL) have been superseded — the
-> current machine's values are in the 2026-08-11 §8 entry.** Anything
+> laptop's values are in the 2026-08-11 §8 entry, the Omarchy desktop's in
+> 2026-10-06/07.** Anything
 > describing Kokoro's *behaviour* rather than this hardware's *speed*
 > (silence padding, markdown inertness, cut lengthening, per-word timestamps)
 > is model-level and does still transfer.
@@ -288,9 +300,9 @@ ramp gapped *every* time.
 | **In-place highlighting in a terminal, via the terminal's OWN TextPattern** | **Impossible — proven 2026-07-18, still true** | xterm.js (VS Code's integrated terminal) paints text to a canvas and exposes it to accessibility through a hidden off-screen DOM mirror. Probed live: terminal text reports rects at `x=-11571` and `x=-14907`, height `58557`, for a window occupying `x=-1928..8`. UIA gives the text but no usable geometry and nothing bridges the two. Reading terminal text still works (that is `copyOnSelection`, unrelated). **Narrowed 2026-07-21** — the *ancestor* path is a different story, see §8. |
 | **Solaar for remapping the Logitech G Pro Wireless's buttons (Linux)** | **Tested, rejected — 2026-08-18** | Solaar's button remapping needs the HID++ `REPROG CONTROLS` feature (`0x1B00`/`0x1B04`). The G Pro Wireless exposes `MOUSE BUTTON SPY` (`0x8110`) and `ONBOARD PROFILES` (`0x8100`) instead — it's a gaming mouse, profile-programmed via G HUB's protocol on Windows, not the productivity-line reprogrammable-controls feature MX-series mice expose. `solaar show` confirms the feature is simply absent. Used `input-remapper` (evdev/uinput-level, Wayland-safe) instead — see 2026-08-18 §8 entry. |
 
-### GPU — **TESTED AND ADOPTED 2026-08-11 on the current laptop.** See the
+### GPU — **TESTED AND ADOPTED 2026-08-11 on the GTX 1650 laptop.** See the
 ### 2026-08-11 entry in §8 for the measurements. Result: **25.03x RT** (from
-### 1.77x on this laptop's CPU), **348MB VRAM** — not the 1–2GB estimated
+### 1.77x on the laptop's CPU), **348MB VRAM** — not the 1–2GB estimated
 ### below. The rest of this section is the ORIGINAL desktop's reasoning and
 ### is kept because that verdict was correct *for that machine*; both of its
 ### quantitative claims (VRAM cost, and the CPU-bound 104ms floor, actually
