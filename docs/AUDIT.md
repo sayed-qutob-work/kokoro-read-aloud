@@ -2774,6 +2774,124 @@ server on CPU. Which clicks they tried was not itemised.
 - The dev-only "restart discipline" note moved out of Settings into
   Troubleshooting. The process table moved to the end, as "How it works".
 
+### MEASURED 2026-10-17: every language is read through the American English pipeline. v0.2.0 skips what it cannot read; per-language routing is planned for v0.3.0
+
+Question, before advertising multilingual support: which pipeline does
+the server use for non-English text, and what would the right one
+produce? Machine: the Omarchy desktop, on the RTX 4060 Ti.
+
+**Method.** A scratch script imported `tts_server` and drove the server's
+own `KokoroEngine` and `split_atoms()`, so "today" is the shipped code
+path, not an imitation of it. Each language got one sentence with the same
+meaning ("Good morning, my name is … and I live in a small town near the
+sea"), run three ways:
+- **today:** the engine's voice `af_heart`, lang_code `a`;
+- **today with the native voice:** what a user who set e.g. `ff_siwis`
+  through `/config` gets;
+- **own pipeline:** `KPipeline(<lang>)` sharing the engine's model, with
+  the native voice.
+
+The phonemes were compared and raw WAVs written for listening. Nothing was
+played, and nothing was installed into `env/`. The Japanese and Chinese
+extras went into a scratch directory.
+
+**Today every language goes through the American English G2P.**
+`_pipe_for()` picks `b` for a `b…` voice and `a` for anything else
+(`tts_server.py:413`), and the Settings panel lists only `a`/`b` voices.
+The native voice changes the timbre only: its phonemes were identical to
+`af_heart`'s for all seven non-English languages.
+
+| Language | Today (`a` pipeline) | Audio today | Own pipeline | Audio | Extra packages |
+|---|---|---|---|---|---|
+| Spanish, French, Italian, Portuguese | English rules: French *je* → `ʤˈi`, Portuguese *é* → `ˌiəkjˈut` ("e acute") | 4.9–5.2 s | correct | 3.9–4.5 s | none; eSpeak NG's own rules, bundled |
+| Hindi | eSpeak switches to Hindi by itself, but its `(hi)…(An-us)` switch markers stay in the phonemes and are spoken around every word | 14.45 s | correct | 6.1 s | none |
+| Japanese | Kana read as "Japanese letter" (`ʤˈæpənizlˌɛTəɹ`, 19×), kanji as "Chinese letter" (8×) | 23.7 s | correct | 5.5 s | `misaki[ja]`, see below |
+| Mandarin | "Chinese letter" (`ʧˈInizlˌɛTəɹ`), 18× | 15.0 s | correct | 5.0 s | `misaki[zh]`: 155 MB, pure Python, 17 s install |
+
+Scripts with no Kokoro language fail the same way through the `a`
+pipeline (G2P only, no audio). Russian, Greek, Hebrew and Thai come out as
+letter names ("kappa alpha lambda…", "hebrew shin…", "Thai letter…").
+Korean gets Hindi's spoken markers (`(kɔ)…(An-us)`). German gets English
+rules. Until now only Arabic was handled (§6, `sanitize()`).
+
+**Other measurements:**
+- **Word timestamps exist only for English.** `join_timestamps` runs only
+  in the `lang_code in 'ab'` branch (`kokoro/pipeline.py:374`), and every
+  other pipeline returned 0 timed tokens. With no words, `/now` keeps
+  `word` at −1, `within` is 0 and `cursor` sits at the chunk head. So the
+  caption strip's highlight and scroll would freeze for the length of
+  every non-English chunk.
+- **Speed does not depend on the language.** All nine own pipelines
+  synthesized their sentence at 89–103x RT (median of three warm runs).
+- **VRAM: share the model.** `KPipeline(lang, model=<KModel>)` added
+  0 MiB. A pipeline with its own model added 326 MiB (process 476 →
+  802 MiB, torch allocated 318 → 636 MiB). The server already pays this:
+  `_pipe_for()` builds `KPipeline(lang_code=code)` with the default
+  `model=True`, so switching between an American and a British voice loads
+  a second model and keeps it until a restart.
+- **Audio per character depends on the script** (untrimmed audio over
+  characters, this sentence): 0.056–0.059 s for the Latin-script
+  languages, 0.085 s Hindi, 0.182 s Japanese, 0.238 s Mandarin. `wlen()`
+  weights none of these, so the chunk planner's density would be ~3–4x off
+  on Chinese and Japanese.
+- **Japanese needs no compiler.** misaki's `ja.py` imports `pyopenjtalk`
+  at module level, and pyopenjtalk 0.4.1 is source-only on PyPI. The
+  Japanese install, which builds it, took 58 s here: pip's build isolation
+  fetched cmake, but a C/C++ compiler is required, which on Windows means
+  MSVC Build Tools. Kokoro
+  builds `ja.JAG2P()` with the default `version='cutlet'`, which never
+  calls it. `ja.py:278` is the only call, on the `pyopenjtalk` path. With
+  a four-line stub module in its place, six test sentences gave identical
+  phonemes. fugashi and mojimoji have cp312 wheels for Linux and Windows,
+  and jaconv is pure Python.
+- **Japanese dictionary: `unidic-lite`, not `unidic`.** `misaki[ja]`
+  names `unidic`, whose dictionary is a separate `python -m unidic
+  download`: a 526 MB zip that unpacks to 775 MB. `unidic-lite` installs
+  from pip alone: 249 MB, an sdist with no compiled code.
+  - Over six sentences, five were identical apart from punctuation.
+  - Full UniDic reads 十七日 better (*jūshichi-nichi*, not *jūnana-nichi*).
+  - But it **drops 、 and 。 from the phonemes**, so Japanese loses its
+    pauses: 5.1 s against 5.47 s on the test sentence.
+  - Both read 私 as *watakushi*.
+- **Chinese:** jieba builds its prefix dictionary on first use (0.44 s)
+  and caches it in `/tmp/jieba.cache`.
+- **Kokoro's own voice grades** (`VOICES.md`, revision `f3ff357`) are
+  lower outside English:
+  - `af_heart` A, `ff_siwis` B-, `jf_alpha` C+;
+  - Hindi and Italian C, every Mandarin voice D;
+  - Spanish and Portuguese ungraded.
+
+  `ff_siwis` and four of the Japanese voices were trained on CC BY data
+  (SIWIS, koniwa). Credit them if they become defaults.
+- **misaki is not pinned.** `kokoro==0.9.4` requires
+  `misaki[en]>=0.9.4`, so a later misaki would reach fresh installs. 0.9.4
+  is still the latest. Pin it, all the more if the Japanese stub ships,
+  because the stub depends on misaki 0.9.4's code.
+
+**Decision (user, 2026-10-17).**
+- **v0.2.0: skip instead of spelling out.** `sanitize()` drops every
+  script the English pipeline cannot read, generalizing the Arabic rule.
+  Latin-script languages keep today's English reading.
+- **v0.3.0: route each sentence to its own pipeline.**
+  1. Detect per sentence, not per clause or chunk. A language change
+     forces a chunk boundary, which always falls at a sentence end.
+  2. Detect the script first: kana → `j`, Han → `z`, Devanagari → `h`,
+     and no Kokoro language → skip. Latin script goes through a detector
+     limited to en/es/fr/it/pt that falls back to English unless it is
+     confident. Gate: measure `lingua` and `py3langid` on sentence-length
+     samples before choosing.
+  3. One shared `KModel`, which also fixes the a↔b double model.
+  4. A voice per language. English keeps the user's voice.
+  5. Approximate word times for non-English chunks, spreading the speech
+     over the words (characters for CJK), so the caption strip keeps
+     moving.
+  6. Weight CJK characters in `wlen()`.
+  7. Packages: Spanish, French, Italian, Portuguese and Hindi need nothing
+     new. Chinese and Japanese become opt-in extras. Japanese is fugashi,
+     jaconv, mojimoji, unidic-lite and the stub.
+  8. Not solved: Arabic stays silent (§6), a sentence mixing two languages
+     takes one of them, and the speaker changes between languages.
+
 ---
 
 ## 9. Accepted trade-offs (settled — reopen only with new information)
