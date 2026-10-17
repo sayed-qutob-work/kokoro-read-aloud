@@ -3050,8 +3050,13 @@ and Windows keep the call.
   then;
 - a screenshot showed Xft-rendered text on the system Python.
 
-**Not fixed, seen in the same screenshot:** the output device's default
-entry says "Default (follow Windows)" on Linux too.
+**Seen in the same screenshot:** the output device's default entry said
+"Default (follow Windows)" on Linux too.
+- Fixed the same day: Linux now says "System default".
+- It is PortAudio's ALSA `default` device, so it plays to the sound
+  server's default output.
+- Whether it follows a change of that default while playing is not
+  measured, so the label does not claim it.
 
 ---
 

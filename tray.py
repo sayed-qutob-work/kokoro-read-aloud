@@ -82,8 +82,9 @@ MODEL_SPEED_CAP = 1.3
 # (measured 1.3x-1.9x RT on this machine depending on chunk size).
 SUSTAIN_MARGIN = 0.85
 
-# Shown for output_device = None, i.e. "whatever Windows is using right now".
-DEVICE_DEFAULT_LABEL = "Default (follow Windows)"
+# Shown for output_device = None: whatever Windows is using right now, or on
+# Linux the sound server's default output (PortAudio's ALSA "default").
+DEVICE_DEFAULT_LABEL = "Default (follow Windows)" if IS_WIN else "System default"
 
 DEFAULTS = {
     "voice": "af_heart",
