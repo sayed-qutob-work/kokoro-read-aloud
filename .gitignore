@@ -1,6 +1,10 @@
 # virtualenv - rebuilt from requirements.txt (see README)
 env/
 
+# The model files on Windows (model_files.py; on Linux they are in
+# ~/.local/share/kokoro-read-aloud/)
+models/
+
 # runtime output. These are written by the running processes and HELD OPEN by
 # them, so tracking them breaks any git command that rewrites the working tree:
 # `git stash` died mid-reset on 2026-08-11 with "unable to unlink old

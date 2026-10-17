@@ -8,6 +8,7 @@ Linux: the XDG base directories, never the code folder.
 
     ~/.config/kokoro-read-aloud/       settings.json, the user's tuning
     ~/.local/state/kokoro-read-aloud/  logs and calibration.json
+    ~/.local/share/kokoro-read-aloud/  the model files (model_files.py)
 
 On Omarchy the code folder is about to become the plugin folder
 (~/.config/omarchy/plugins/<id>), and the shell watches that folder: any
@@ -36,10 +37,11 @@ def _xdg(var, default):
 
 
 if IS_WIN:
-    CONFIG = STATE = ROOT
+    CONFIG = STATE = DATA = ROOT
 else:
     CONFIG = _xdg("XDG_CONFIG_HOME", "~/.config")
     STATE = _xdg("XDG_STATE_HOME", "~/.local/state")
+    DATA = _xdg("XDG_DATA_HOME", "~/.local/share")
 
 SETTINGS = os.path.join(CONFIG, "settings.json")       # written by tray.py
 CALIBRATION = os.path.join(STATE, "calibration.json")  # written by the server

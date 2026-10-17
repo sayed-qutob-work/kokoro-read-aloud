@@ -3,8 +3,8 @@
 Select text anywhere, press **Ctrl+Alt+R**, and it is read aloud in a natural
 voice. Everything runs on your own machine. A small local server keeps the
 [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) model loaded and starts
-speaking while the rest of the text is still being synthesized. Nothing leaves
-the machine, and the clipboard is never polled.
+speaking while the rest of the text is still being synthesized. Your text never
+leaves the machine, and the clipboard is never polled.
 
 It runs on Windows 11 and on Linux: Fedora with GNOME, and Omarchy with
 Hyprland, both on Wayland.
@@ -62,7 +62,17 @@ Two things apply everywhere:
   whichever torch build is present.
 
 The first run downloads the ~330 MB Kokoro-82M model, plus a ~13 MB spaCy
-model that `misaki` fetches the first time it phonemizes.
+model that `misaki` fetches the first time it phonemizes. After that, the
+server still checks Hugging Face for updates at every start. To stop it,
+download the pinned model files once:
+
+```bash
+python3 model_files.py fetch     # 326 MiB, each file checked against its SHA-256
+```
+
+The server then loads them from `~/.local/share/kokoro-read-aloud/models/`
+(on Windows, `models\` next to the code) and makes no network connections at
+all. This was tested on Linux.
 
 ### Windows
 

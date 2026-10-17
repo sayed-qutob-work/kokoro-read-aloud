@@ -3174,6 +3174,63 @@ Unseeded, two runs differ by up to 0.23 in sample value, run to run. That
 is the vocoder's random noise, not the environment, so audio comparisons
 need a seed.
 
+### DEPLOYED 2026-10-17: the model is pinned and loaded by path, and the server runs offline (step 3b)
+
+**`model_files.py` pins 30 files** at revision `f3ff357…`:
+- `config.json`, `kokoro-v1_0.pth` and the 28 English voices, 341,870,408
+  bytes (326 MiB);
+- the sizes and SHA-256 come from the Hugging Face API at that revision.
+
+The pins were checked two ways:
+- `config.json` is not in LFS, so its SHA-256 was computed from a
+  download. That download hashes to the API's git object ID, `14a726ed`.
+- The 7 files already in the HF cache match.
+
+The module is stdlib only, so setup can run it on the system Python
+before the venv exists.
+
+**Download and checks:**
+- `fetch` downloaded all 30 in 33.5 s. A download goes to `<name>.part`
+  and is renamed only once its size and SHA-256 match.
+- A file corrupted on disk at the same size is reported by `verify` and
+  re-fetched on its own.
+- A pin that cannot match raises an error and leaves nothing under the real
+  name.
+- `complete()` checks sizes only, because it runs at every server start;
+  the hashes are checked when files are fetched or verified.
+
+**The server** (`KokoroEngine`):
+- **When the files are complete,** it builds one `KModel` from
+  `config.json` and the `.pth` by path, and loads voices by `.pt` path.
+- **`HF_HUB_OFFLINE=1`** is set before kokoro is imported, because
+  huggingface_hub reads it only once.
+- **Without the files,** it does what it did before: the HF cache, which
+  is checked online at each start.
+- **Either way, all pipelines share that one model.** `KPipeline(model=True)`
+  had loaded a second copy on an American ↔ British switch.
+
+**Verified on the Omarchy desktop:**
+- **With no network at all,** in an `unshare -rn` namespace that has only
+  a loopback that is down, both venvs (uv and `env/`):
+  - load in 3.6–3.7 s;
+  - synthesize on CUDA with word timestamps.
+- **The British switch now shares the model:** torch's allocation went
+  from 555 to 557 MiB, against +326 MiB before.
+- **The deployed server, still on `env/`:**
+  - its log shows the model's path and no Hugging Face lines (before: "You
+    are sending unauthenticated requests to the HF Hub" and "Defaulting
+    repo_id");
+  - its only socket is the 127.0.0.1:5111 listener.
+
+**So the start-up check measured earlier today is gone** once the files
+are fetched. That check was one DNS lookup and one connection to
+huggingface.co per start. The README's "Nothing leaves the machine"
+was false before this and now reads "Your text never leaves the
+machine".
+
+**Windows:** `paths.DATA` is the code folder, so the files go to
+`models\Kokoro-82M` (gitignored). Untested.
+
 ---
 
 ## 9. Accepted trade-offs (settled — reopen only with new information)

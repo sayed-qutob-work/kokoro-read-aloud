@@ -26,6 +26,7 @@ from flask import Flask, request, jsonify
 
 sys.dont_write_bytecode = True     # no __pycache__ next to the code, see paths.py
 import paths                       # noqa: E402
+import model_files                 # noqa: E402
 
 _ROOT = os.path.dirname(os.path.abspath(__file__))
 
@@ -488,23 +489,50 @@ class KokoroEngine:
         self.pipes = {}
         self.voice = KOKORO_VOICE
         self.model_speed = MODEL_SPEED
-        # "cuda" or "cpu" -- whatever KPipeline auto-picked. An empty
+        # With model_files.py's verified files all in place, the model and
+        # the voices load by path, and HF_HUB_OFFLINE stops anything else
+        # reaching the network. huggingface_hub reads it once, on import,
+        # so it is set before kokoro is imported. Without the files, kokoro
+        # downloads into the Hugging Face cache as it always has.
+        self.offline = model_files.complete()
+        if self.offline:
+            os.environ["HF_HUB_OFFLINE"] = "1"
+        import torch
+        from kokoro import KModel
+        # "cuda" when torch sees a GPU, as KPipeline decided it. An empty
         # CUDA_VISIBLE_DEVICES (kokoroctl's CPU mode) is what makes it cpu.
-        self.device = self._pipe_for(self.voice).model.device.type
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        files = {}
+        if self.offline:
+            files = {"config": model_files.path("config.json"),
+                     "model": model_files.path("kokoro-v1_0.pth")}
+        # One model for every pipeline. KPipeline(model=True) built its own,
+        # so a switch between an American and a British voice loaded a second
+        # copy (+326 MiB of VRAM, AUDIT 2026-10-17).
+        self.model = KModel(repo_id=model_files.REPO, **files).to(self.device).eval()
+        print("[kokoro] model: " + (model_files.DIR if self.offline else
+                                    "Hugging Face cache (online)"), flush=True)
+        self._pipe_for(self.voice)
 
     def _pipe_for(self, voice):
         code = "b" if voice.startswith("b") else "a"
         if code not in self.pipes:
             from kokoro import KPipeline
-            self.pipes[code] = KPipeline(lang_code=code)
+            self.pipes[code] = KPipeline(lang_code=code, repo_id=model_files.REPO,
+                                         model=self.model)
         return self.pipes[code]
+
+    def _voice_ref(self):
+        """The voice by path when its file is here, else by name, which
+        kokoro looks up on Hugging Face."""
+        return (self.offline and model_files.voice(self.voice)) or self.voice
 
     def synth(self, sentence):
         """Returns (audio, sr, words); words carry per-word timestamps
         (text, n_phonemes, start_ts, end_ts) in raw-synthesis time."""
         pipe = self._pipe_for(self.voice)
         parts, words, offset = [], [], 0.0
-        for r in pipe(sentence, voice=self.voice, speed=self.model_speed):
+        for r in pipe(sentence, voice=self._voice_ref(), speed=self.model_speed):
             if r.audio is None:
                 continue
             a = np.asarray(r.audio, dtype=np.float32)
