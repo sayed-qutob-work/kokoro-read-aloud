@@ -14,5 +14,10 @@
 #
 # On CPU, lower the reading speed in the tray's Settings panel until the
 # "sustainable speed" warning clears -- see README, "CPU or GPU".
+#
+# torch comes from PyTorch's CPU index, as in pyproject.toml. PyPI's
+# torch 2.13.0 is a CPU build on Windows but not on Linux, where it pulls
+# in the CUDA 13 libraries (AUDIT.md, 2026-10-17).
 -r requirements-base.txt
-torch==2.13.0
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.13.0+cpu

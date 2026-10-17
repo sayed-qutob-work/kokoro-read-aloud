@@ -3338,6 +3338,26 @@ back at the end of the file. When the user had added lines after it, the
 content is the same in a different order. For the test, the original file
 was restored and the three backups the test made were deleted.
 
+### FIXED 2026-10-17: `requirements.txt` installs a CPU torch on Linux too
+
+PyPI's torch 2.13.0 for Linux is a CUDA 13 build: it pulled in the CUDA 13
+libraries, about 6 GB. So `requirements.txt`, the "CPU install", was not
+one on Linux. It now takes `torch==2.13.0+cpu` from
+`download.pytorch.org/whl/cpu`, as `requirements-cuda.txt` does with
+cu126. That index has the cp312 wheel for Linux x86_64 and for Windows.
+
+**Checked** with `pip install --dry-run --report` in a throwaway 3.12 venv:
+98 packages, `torch 2.13.0+cpu`, and no NVIDIA or CUDA package.
+
+**Open.** pip resolves indirect dependencies freely. It picks
+huggingface-hub 2.2.0, transformers 5.20.1, tokenizers 0.23.3 and pydantic
+2.14.1, where the measured venv has 1.33.0, 5.18.0, 0.23.2 and 2.13.5.
+`uv.lock` holds the measured set.
+
+The lock's pins cannot simply be copied into `requirements-base.txt`:
+`cuda-bindings` exists only for Linux CUDA. The fix is the uv-based Windows
+setup planned after v0.2.0, or a few platform-neutral pins.
+
 ### DEPLOYED 2026-10-17: the model is pinned and loaded by path, and the server runs offline (step 3b)
 
 **`model_files.py` pins 30 files** at revision `f3ff357…`:
