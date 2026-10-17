@@ -3021,6 +3021,38 @@ so any Python 3 runs them. Only the server needs 3.12.
 no longer matters, so a prebuilt 3.12 should run the server. The uv setup
 (step 3b/3c) will be the test of that.
 
+### FIXED 2026-10-17: under Hyprland the settings panel opened off-screen on a two-monitor desk
+
+**Found while verifying step 3a.** This desktop has two monitors: DP-2
+(1920×1080 at 0,0) and DP-3 (2560×1440 at 1920,0).
+- **`kokoroctl settings` opened the panel at x=-594.** It was 568 px wide,
+  so it sat wholly left of DP-2 and could not be seen.
+- **It predates 3a.** The venv's Python put it at the same `[-594, 480]`.
+
+**Cause.** After mapping, `tray.py` positioned the panel itself, at
+`winfo_screenwidth()/2 - width/2` across and `winfo_screenheight()/3`
+down. Under Xwayland, Tk's screen is the bounding box of both monitors
+(4480×1440), so it asked for `+1956+480`. The window rule had already
+floated the window on the focused monitor, and Hyprland then placed it at
+x=-594.
+
+**Test.** A bare Tk window with the panel's title and size:
+- with that call, it landed at `[-604, 480]`;
+- without it, it landed at `[676, 101]`, centred in DP-2's work area by the
+  `center` rule.
+
+**Fix.** Skip the call when `HYPRLAND_INSTANCE_SIGNATURE` is set. Both the
+systemd user environment and the bar shell's environment carry it. GNOME
+and Windows keep the call.
+
+**After the fix:**
+- the panel opened at `[2926, 281]`, centred on DP-3, which had focus by
+  then;
+- a screenshot showed Xft-rendered text on the system Python.
+
+**Not fixed, seen in the same screenshot:** the output device's default
+entry says "Default (follow Windows)" on Linux too.
+
 ---
 
 ## 9. Accepted trade-offs (settled — reopen only with new information)

@@ -645,8 +645,14 @@ class App:
         self._load_devices()
         self._refresh_sustain()
         w.update_idletasks()
-        w.geometry(f"+{w.winfo_screenwidth() // 2 - w.winfo_width() // 2}"
-                   f"+{w.winfo_screenheight() // 3}")
+        # Under Hyprland its window rule (linux/kokoro-hyprland.lua.in)
+        # centres the panel on the focused monitor. Placing it here fights
+        # that: Tk sees one screen spanning every monitor (4480 px wide on a
+        # 1920 + 2560 desk), and the request put the panel off-screen at
+        # x=-594 (AUDIT 2026-10-17).
+        if not os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"):
+            w.geometry(f"+{w.winfo_screenwidth() // 2 - w.winfo_width() // 2}"
+                       f"+{w.winfo_screenheight() // 3}")
 
     # ---- panel helpers
     def _split(self, effective, model):
