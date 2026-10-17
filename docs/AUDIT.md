@@ -280,6 +280,7 @@ ramp gapped *every* time.
 | Option | Verdict | Why |
 |---|---|---|
 | **Piper TTS** | Rejected | Quality ceiling. VITS optimized for Raspberry Pi realtime; espeak-ng phonemizes *everything*. Kokoro uses espeak only as OOD fallback. |
+| **Speaking Arabic (Piper `ar_JO-kareem`, MMS-TTS `mms-tts-ara`)** | **Tried, rejected by ear — 2026-10-11** | Kokoro 0.9.4 has no Arabic: its English G2P spells each letter's Unicode name (`دفا` → "arabic dal, arabic fa, arabic alif", measured). Both engines were fast enough (Piper 5.9 s audio in 144 ms on CPU; MMS 6.8 s in 55 ms, 246 MiB VRAM), and Piper was wired in for Arabic runs inside English text. The user judged the result unusable and asked for it reverted. **Shipped instead:** `sanitize()` strips Arabic script (and any `()`/`[]`/`«»` left empty), so it is silent; an all-Arabic selection says nothing. |
 | **kokoro-onnx** | **Tested, rejected** | 3.89x vs torch's 4.03x. Worse on both the marginal rate (+3.8%) and fixed cost (130ms vs 104ms). Model files deleted 2026-07-17; the `ENGINE="onnx"` code path remains but needs `pip install kokoro-onnx` + re-downloading the files. |
 | **torch thread tuning** | No headroom | Already 6/6 P-cores. |
 | **`MODEL_SPEED` > 1.3** | Rejected | Garbles onsets/endings. Use `PLAYBACK_SPEED` instead. |

@@ -275,6 +275,12 @@ def sanitize(text):
     text = re.sub(r"^#{1,6}\s+", " ", text, flags=re.M)             # md headers
     text = re.sub(r"[*_`~|]+", " ", text)                           # inline md, table pipes
     text = re.sub(r"[─-▟→←↑↓✔✖✅❌]", " ", text)           # box drawing, arrows
+    # Arabic script: Kokoro has no Arabic and spells each letter's Unicode
+    # name ("arabic dal arabic fa ..."), so it is skipped. A Piper Arabic
+    # voice was tried and rejected by ear (AUDIT 2026-10-11).
+    text = re.sub("[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF"
+                  "\uFB50-\uFDFF\uFE70-\uFEFF]+", " ", text)
+    text = re.sub(r"\(\s*\)|\[\s*\]|«\s*»", " ", text)              # brackets it emptied
     return text
 
 
