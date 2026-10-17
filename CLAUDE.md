@@ -113,8 +113,8 @@ UIA `FindText` returns ranges at the wrong position). `.md` reads happen in
 
 - `POST /speak {"text":...}`, `POST /stop`. `/speak` returns `atoms`, the
   chunks queued: **0 means nothing was readable**. `skip_unreadable()` drops
-  every script but Latin (a lone Greek letter stays), and `read_aloud.sh`
-  notifies on 0 (AUDIT 2026-10-17)
+  every script but Latin (a lone Greek letter stays), `skip_emoji()` drops
+  emoji (© ® ™ stay), and `read_aloud.sh` notifies on 0 (AUDIT 2026-10-17)
 - `GET/POST /config` — live tuning; the tray persists it to `settings.json`,
   which the server loads at startup (`voice`, `model_speed`, `playback_speed`,
   `pause`, `first_chunk_audio`, `output_device`). GET also reports `device`

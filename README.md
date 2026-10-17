@@ -429,17 +429,26 @@ still run on the CPU when you want the VRAM back, see
   The macro and the reasons behind it are in `docs/AUDIT.md` (2026-08-19).
   Solaar cannot remap a G Pro Wireless (`docs/AUDIT.md` §6).
 
-## Languages
+## What gets read
 
 Kokoro read-aloud reads English. Other languages written in the Latin
 alphabet, such as French, Spanish or German, are read with English
 pronunciation.
 
-Other scripts are skipped rather than spelled out letter by letter. That
-covers Japanese, Chinese, Korean, Cyrillic, Greek, Hebrew, Arabic, Hindi and
-the rest. In mixed text the English is still read. A lone Greek letter such
-as π or Δ is read by its name. On Linux, a selection with nothing readable
-in it shows a notification.
+These are skipped rather than spelled out:
+
+- **Other scripts:** Japanese, Chinese, Korean, Cyrillic, Greek, Hebrew,
+  Arabic, Hindi and the rest. In mixed text the English is still read.
+- **Emoji,** with their skin tones and flags. Kokoro would read their names,
+  such as "grinning face".
+
+These are kept:
+
+- Symbols with a spoken name, such as ©, ™, °C, €, ½, x² and ≈.
+- A lone Greek letter such as π or Δ, which is read by its name.
+- The digit in a keycap emoji: 1️⃣ is read as "one".
+
+On Linux, a selection with nothing readable in it shows a notification.
 
 Reading the other languages Kokoro supports, each with its own
 pronunciation, is planned for v0.3.0.

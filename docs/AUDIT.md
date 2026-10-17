@@ -3122,6 +3122,25 @@ character, without the model:
   - `donʼt` written with U+02BC is spelled out;
   - a zero-width space adds a stray phoneme.
 
+**Emoji: decided the same day to skip them,** with no setting.
+`skip_emoji()` runs after `skip_unreadable()`. Python has no Emoji
+property, so it drops by range:
+- the emoji blocks: U+1F000–1FAFF, Misc Symbols, Dingbats, and
+  U+2B00–2BFF;
+- the emoji scattered elsewhere (⌚ ⏰ ▶ ‼ ⁉ …);
+- any other non-ASCII symbol followed by U+FE0F.
+
+© ® ™ are exempt from that last rule, so "©️" stays "©". The leftovers go
+too:
+- U+FE0F, the keycap frame and flag tags are removed outright, so "1️⃣"
+  reads "one";
+- U+200D becomes a space, which is how misaki already read it. Removing it
+  joined "and‍joiner" into one word, a regression this check caught.
+
+Against the committed `sanitize()`, 13 of 53 cases change: the 11 emoji
+cases (one sentence appears twice) and the joiner case. "π ≈ 3.14 and x² ½
+°C €5 © ™" is unchanged.
+
 ### BUILT 2026-10-17: `pyproject.toml` + `uv.lock` (plugin packaging, step 3b)
 
 **The tool.** uv 0.12.24: the version Fedora 44 ships, verified against

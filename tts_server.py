@@ -347,6 +347,27 @@ def skip_unreadable(text):
     return _CJK_PUNCT.sub(" ", text)
 
 
+# Emoji are read by name ("red heart", "grinning face"), so they are skipped
+# too. Python has no Emoji property, so: the emoji blocks (pictographs,
+# emoticons, flags, Misc Symbols, Dingbats, arrows and stars), the emoji
+# scattered elsewhere, and any other non-ASCII symbol that U+FE0F turns into
+# an emoji -- except (c) (r) (tm), which stay read as words, like degrees,
+# fractions and lone Greek letters.
+_EMOJI = re.compile("[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF"
+                    "\u231A\u231B\u2328\u23CF\u23E9-\u23F3\u23F8-\u23FA"
+                    "\u24C2\u25AA\u25AB\u25B6\u25C0\u25FB-\u25FE"
+                    "\u2934\u2935\u203C\u2049\u3297\u3299]"
+                    "|[^\x00-\x7F\u00A9\u00AE\u2122]\uFE0F")
+# What is left of an emoji sequence: presentation selector, keycap frame and
+# flag tags, removed outright so the 1 of a keycap 1 still reads; and the
+# zero-width joiner, which becomes a space, as misaki already read it.
+_EMOJI_GLUE = re.compile("[\uFE0F\u20E3\U000E0020-\U000E007F]")
+
+
+def skip_emoji(text):
+    return _EMOJI_GLUE.sub("", _EMOJI.sub(" ", text)).replace("\u200d", " ")
+
+
 def sanitize(text):
     """Strip markdown/TUI noise before synthesis. Inline **bold** and `code`
     are inert to Kokoro (measured - identical audio), but list markers add
@@ -356,14 +377,15 @@ def sanitize(text):
     text = re.sub(r"[*_`~|]+", " ", text)                           # inline md, table pipes
     text = re.sub(r"[─-▟→←↑↓✔✖✅❌]", " ", text)           # box drawing, arrows
     text = skip_unreadable(text)
+    text = skip_emoji(text)
     text = re.sub(r"\(\s*\)|\[\s*\]|«\s*»", " ", text)              # brackets it emptied
     return text
 
 
 def _says_something(atom):
     """False for an atom of bare punctuation, which is all a skipped script
-    leaves of a clause ("Привет, мир" -> ","). Symbols count: ©, €, + and
-    emoji are read aloud."""
+    leaves of a clause ("Привет, мир" -> ","). Symbols count: ©, € and +
+    are read aloud."""
     return any(ch.isalnum() or unicodedata.category(ch)[0] == "S"
                for ch in atom)
 
