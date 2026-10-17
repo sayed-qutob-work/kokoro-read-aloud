@@ -11,9 +11,8 @@
 # docs/AUDIT.md. Only the server uses this environment: the settings panel
 # and the caption strip run on the system Python (paths.py).
 #
-# requirements*.txt give pip the same direct pins and torch builds, but not
-# the lock's indirect ones: a pip install today gets huggingface-hub 2.x
-# (AUDIT 2026-10-17).
+# requirements*.txt are this lock exported for pip (Windows), by
+# tools/export-requirements.sh. Re-run it after every change to uv.lock.
 
 [project]
 name = "kokoro-read-aloud"

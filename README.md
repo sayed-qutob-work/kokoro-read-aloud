@@ -59,10 +59,10 @@ Two things apply everywhere:
   can be installed alongside, as long as the venv is not built from it.
 - **One requirements file.** Install `requirements-cuda.txt` if you have an
   NVIDIA GPU, otherwise `requirements.txt`. Never install both: Kokoro uses
-  whichever torch build is present.
+  whichever torch build is present. Both pin every package to the version
+  and SHA-256 in `uv.lock`, so pip installs the tested set.
 
-The first run downloads the ~330 MB Kokoro-82M model, plus a ~13 MB spaCy
-model that `misaki` fetches the first time it phonemizes. After that, the
+The first run downloads the ~330 MB Kokoro-82M model. After that, the
 server still checks Hugging Face for updates at every start. To stop it,
 download the pinned model files once:
 
@@ -489,8 +489,8 @@ The venv is on Python 3.13 or newer. The `Ignored the following versions` line
 is the real message: pip filtered out every 0.8.x/0.9.x wheel because of
 `Requires-Python`, which left only the 0.7.x line. Rebuild the venv on 3.12.
 Don't relax the pin to a 0.7.x `kokoro`: that is a different model and voice
-API, and every number in `docs/AUDIT.md` was measured on the pins in
-`requirements-base.txt`.
+API, and every number in `docs/AUDIT.md` was measured on the versions pinned in
+`uv.lock`.
 
 ### Reads stall or stutter partway through
 

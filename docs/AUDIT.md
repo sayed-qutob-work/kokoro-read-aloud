@@ -3358,6 +3358,48 @@ The lock's pins cannot simply be copied into `requirements-base.txt`:
 `cuda-bindings` exists only for Linux CUDA. The fix is the uv-based Windows
 setup planned after v0.2.0, or a few platform-neutral pins.
 
+### FIXED 2026-10-17: the pip files are exported from `uv.lock`, pinned and hash-checked
+
+This closes the "Open" item above. `tools/export-requirements.sh` writes
+`requirements.txt` (`--extra cpu`) and `requirements-cuda.txt`
+(`--extra cuda`) with `uv export`. Every package carries its locked version
+and SHA-256, so pip runs in hash-checking mode. `requirements-base.txt` is
+gone. Each line keeps its platform marker, so the same file is valid on
+Linux and Windows.
+
+**Two traps found by testing:**
+1. **The PyTorch index line.** `uv export --emit-index-url` writes only
+   PyPI's URL: `pyproject.toml` ties the PyTorch index to torch alone,
+   which a requirements file cannot express. So the script writes both
+   index lines itself.
+2. **Their order.** In a requirements file `--index-url` *replaces* the
+   index list, including an `--extra-index-url` read before it. With PyPI's
+   line second, pip saw only PyPI and failed: "No matching distribution
+   found for torch==2.13.0+cpu". PyPI's line now comes first.
+
+**Checks:**
+- **pip on Linux.** `pip install --dry-run --report` in a throwaway 3.12
+  venv resolved exactly the lock's set:
+  - CPU: 96 packages, `torch 2.13.0+cpu`;
+  - CUDA: 115 packages, `torch 2.13.0+cu126`;
+  - `huggingface-hub` 1.33.0 in both, with no hash errors.
+
+  The PyTorch index also hosts other packages, but hash-checking kept pip
+  on the locked files.
+- **Windows, simulated.** The lines that apply to Windows were extracted
+  and resolved with `uv pip compile --python-platform x86_64-pc-windows-msvc`:
+  99 pins per file, all resolved as Windows packages, at identical
+  versions.
+  - The simulation needs the markers stripped. Every line says
+    `platform_machine == 'AMD64'`, which is what CPython reports on real
+    64-bit Windows, and with the markers left in uv's simulated platform
+    resolved nothing.
+- **Torch hashes.** The SHA-256 that `download.pytorch.org` lists for the
+  `win_amd64` wheels of `2.13.0+cpu` and `2.13.0+cu126` is in the
+  respective file.
+
+**Not tested:** an actual install on Windows.
+
 ### DEPLOYED 2026-10-17: the model is pinned and loaded by path, and the server runs offline (step 3b)
 
 **`model_files.py` pins 30 files** at revision `f3ff357…`:
