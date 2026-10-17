@@ -28,12 +28,15 @@ set -uo pipefail
 
 HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 SERVER="${KOKORO_SERVER:-http://127.0.0.1:5111}"
-LOG="${KOKORO_READ_LOG-$HERE/read_aloud.log}"   # KOKORO_READ_LOG= (empty) disables
+# Kept with the other logs in the state folder, never next to the code
+# (paths.py says why). KOKORO_READ_LOG= (empty) disables it.
+LOG="${KOKORO_READ_LOG-${XDG_STATE_HOME:-$HOME/.local/state}/kokoro-read-aloud/read_aloud.log}"
 STATE="${XDG_RUNTIME_DIR:-/tmp}/kokoro-read-aloud"
 SETTLE_TRIES="${KOKORO_SETTLE_TRIES:-5}"        # incl. the first read
 SETTLE_SLEEP="${KOKORO_SETTLE_SLEEP:-0.06}"
 
 T0=$(date +%s%3N)
+[[ $LOG != */* || -d ${LOG%/*} ]] || mkdir -p -- "${LOG%/*}"
 if [[ -n $LOG && -f $LOG && $(stat -c%s "$LOG" 2>/dev/null || echo 0) -gt 262144 ]]; then
   : >"$LOG"
 fi

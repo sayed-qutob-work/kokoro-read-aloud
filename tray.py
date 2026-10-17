@@ -48,11 +48,14 @@ import urllib.request
 import tkinter as tk
 from tkinter import ttk
 
+sys.dont_write_bytecode = True     # no __pycache__ next to the code, see paths.py
+import paths                       # noqa: E402
+
 IS_WIN = sys.platform == "win32"
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-SETTINGS = os.path.join(ROOT, "settings.json")
-LOG = os.path.join(ROOT, "tray.log")
+SETTINGS = paths.SETTINGS
+LOG = paths.TRAY_LOG
 SERVER = "http://127.0.0.1:5111"
 # venvs put the interpreter in different places per platform
 PY = os.path.join(ROOT, "env", "Scripts" if IS_WIN else "bin",
@@ -278,7 +281,7 @@ def open_folder():
 def restart_server():
     kill_script("tts_server.py")
     time.sleep(1.2)
-    ok = spawn_hidden([PY, "tts_server.py"], os.path.join(ROOT, "server.log"))
+    ok = spawn_hidden([PY, "tts_server.py"], paths.SERVER_LOG)
     log(f"server restart spawned={ok}")
     return ok
 
@@ -299,7 +302,7 @@ def restart_overlay():
     at startup, so changing either only takes effect through here."""
     kill_script("overlay.py")
     time.sleep(0.4)
-    ok = spawn_hidden([PY, "overlay.py"], os.path.join(ROOT, "overlay.err"))
+    ok = spawn_hidden([PY, "overlay.py"], paths.OVERLAY_ERR)
     log(f"overlay restart spawned={ok}")
     return ok
 
@@ -887,6 +890,7 @@ class App:
 def main():
     """--settings opens the panel straight away, which is how the desktop
     entry launches it where there is no tray icon to click."""
+    paths.prepare()
     try:
         App().start(open_panel="--settings" in sys.argv[1:])
     except Exception:

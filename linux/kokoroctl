@@ -41,6 +41,10 @@ import time
 import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+sys.dont_write_bytecode = True     # no __pycache__ next to the code, see paths.py
+sys.path.insert(0, ROOT)
+import paths                       # noqa: E402
+
 PY = os.path.join(ROOT, "env", "bin", "python")
 SERVER = os.environ.get("KOKORO_SERVER", "http://127.0.0.1:5111")
 UNIT = "kokoro-server.service"
@@ -279,8 +283,7 @@ def set_mode(mode):
         env["CUDA_VISIBLE_DEVICES"] = ""
     else:
         env.pop("CUDA_VISIBLE_DEVICES", None)
-    spawn([PY, os.path.join(ROOT, "tts_server.py")],
-          os.path.join(ROOT, "server.log"), env=env)
+    spawn([PY, os.path.join(ROOT, "tts_server.py")], paths.SERVER_LOG, env=env)
     return f"starting on {mode}"
 
 
@@ -311,8 +314,7 @@ def captions(action):
         systemctl("start", OVERLAY_UNIT)
     else:
         spawn([PY, os.path.join(ROOT, "overlay.py")],
-              os.path.join(ROOT, "overlay.log"),
-              os.path.join(ROOT, "overlay.err"))
+              paths.OVERLAY_LOG, paths.OVERLAY_ERR)
     return "captions on"
 
 
@@ -341,7 +343,7 @@ def settings():
 
 
 def log():
-    path = os.path.join(ROOT, "server.log")
+    path = paths.SERVER_LOG
     if shutil.which("omarchy-launch-tui"):
         args = ["omarchy-launch-tui", "--app-id=org.omarchy.kokoro-log",
                 "less", "+F", path]
@@ -360,6 +362,7 @@ def ping_widget():
 
 
 def main(argv):
+    paths.prepare()      # the units' log files need the state folder
     cmd = argv[1] if len(argv) > 1 else "status"
     if cmd == "status":
         print(json.dumps(status(), separators=(",", ":")))

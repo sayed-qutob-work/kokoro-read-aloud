@@ -15,15 +15,17 @@ set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 UNITS="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+# where paths.py puts the logs; systemd will not create it for us
+STATE="${XDG_STATE_HOME:-$HOME/.local/state}/kokoro-read-aloud"
 
 if [[ ! -x "$ROOT/env/bin/python" ]]; then
   echo "no venv at $ROOT/env -- create it first (see README)" >&2
   exit 1
 fi
 
-mkdir -p "$UNITS"
+mkdir -p "$UNITS" "$STATE"
 for u in kokoro-server kokoro-overlay; do
-  sed "s|@ROOT@|$ROOT|g" "$ROOT/linux/$u.service.in" > "$UNITS/$u.service"
+  sed -e "s|@ROOT@|$ROOT|g" -e "s|@STATE@|$STATE|g" "$ROOT/linux/$u.service.in" > "$UNITS/$u.service"
   chmod 644 "$UNITS/$u.service"
   echo "installed $UNITS/$u.service"
 done
@@ -33,5 +35,5 @@ systemctl --user enable --now kokoro-server.service
 
 echo
 echo "  server   : systemctl --user status kokoro-server"
-echo "  logs     : $ROOT/server.log   (truncated at each start)"
+echo "  logs     : $STATE/server.log   (truncated at each start)"
 echo "  captions : systemctl --user enable --now kokoro-overlay   # opt-in"

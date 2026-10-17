@@ -357,7 +357,9 @@ panel does that for you when you save.
 
 The Settings panel is the main way to change settings. It writes
 `settings.json`, which the server loads at startup, and it shows the fastest
-reading speed your machine can sustain. `settings.json` is not tracked by git.
+reading speed your machine can sustain. On Linux the file is
+`~/.config/kokoro-read-aloud/settings.json`. On Windows it is next to the code,
+and not tracked by git.
 [settings.example.json](settings.example.json) shows its format and the shipped
 defaults.
 
@@ -398,7 +400,8 @@ Synthesis has to produce it faster than that, or long reads stall.
 Linux is slower than Windows on the same laptop. The cause is not known yet,
 but both are well above the break-even point. Your own figure is `measured_rt`
 in `GET /config`. It is learned from real reads and saved separately for the
-GPU and the CPU in `calibration.json`.
+GPU and the CPU in `calibration.json`, which on Linux is in
+`~/.local/state/kokoro-read-aloud/`.
 
 On a CPU, lower the reading speed in the Settings panel until its warning
 clears. The panel knows your machine's measured throughput. A CUDA install can
@@ -437,7 +440,10 @@ fixed. `docs/AUDIT.md` §6 has the evidence.
 ## Troubleshooting
 
 Read `server.log` first. It is truncated at each server start, so it always
-covers the current run.
+covers the current run. On Windows it is next to the code. On Linux,
+`linux/kokoroctl log` opens it. It lives in `~/.local/state/kokoro-read-aloud/`
+with the other logs: `read_aloud.log` records every hotkey press, and
+`overlay.log` and `overlay.err` record the caption strip.
 
 ### "No matching distribution found for kokoro"
 

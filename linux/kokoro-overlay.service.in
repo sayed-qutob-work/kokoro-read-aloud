@@ -10,8 +10,8 @@ PartOf=graphical-session.target
 Type=simple
 WorkingDirectory=@ROOT@
 ExecStart=@ROOT@/env/bin/python @ROOT@/overlay.py
-StandardOutput=truncate:@ROOT@/overlay.log
-StandardError=truncate:@ROOT@/overlay.err
+StandardOutput=truncate:@STATE@/overlay.log
+StandardError=truncate:@STATE@/overlay.err
 Restart=on-failure
 RestartSec=5
 

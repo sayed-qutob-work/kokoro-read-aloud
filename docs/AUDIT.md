@@ -101,6 +101,10 @@ the safety net now** — repo: https://github.com/sayed-qutob-work/kokoro-read-a
 
 **Autostart:** shortcut to `start_tts.vbs` in `shell:startup` (Win+R → `shell:startup`).
 
+**Linux, from 2026-10-17:** none of the runtime files above are next to the code.
+`paths.py` puts `settings.json` in `~/.config/kokoro-read-aloud/`, and the logs and
+`calibration.json` in `~/.local/state/kokoro-read-aloud/` (§8, 2026-10-17).
+
 ---
 
 ## 3. Current config (in `tts_server.py`)
@@ -2891,6 +2895,84 @@ rules. Until now only Arabic was handled (§6, `sanitize()`).
      jaconv, mojimoji, unidic-lite and the stub.
   8. Not solved: Arabic stays silent (§6), a sentence mixing two languages
      takes one of them, and the speaker changes between languages.
+
+### DEPLOYED 2026-10-17: on Linux nothing is written next to the code any more (plugin packaging, step 3a)
+
+**Why.** The read was of `/usr/bin/omarchy-plugin-*` and the shell's
+`PluginRegistry.qml` (Omarchy 4.0.4).
+
+- `omarchy plugin add <repo>` clones the whole repo and validates its root:
+  - `manifest.json` must be there, with `schemaVersion` 1;
+  - entry points are relative and may sit in subfolders;
+  - **no symlinks anywhere** except under `.git`.
+
+  Then it moves the clone to `~/.config/omarchy/plugins/<id>/`.
+- `update` fetches, fast-forwards and validates again. `remove` deletes the
+  folder.
+- The shell runs `inotifywait -m -r` on the plugins folder. Any create,
+  write, delete or move inside a plugin folder (hidden entries and `.git`
+  excepted) triggers `reloadPlugins()` 150 ms later. That unloads every
+  panel, plugin service and widget, then rescans.
+
+So once the repo is the plugin (step 3d), every file the app writes next to
+its code reloads the whole bar. Five things did that:
+- `server.log` (systemd);
+- `read_aloud.log` (every hotkey press);
+- `settings.json`;
+- `calibration.json`;
+- `__pycache__/` (the tray importing `overlay.py`).
+
+`overlay.log`, `overlay.err` and `tray.log` joined them whenever their code
+paths ran. The venv can't live in the plugin folder either, because it is
+full of symlinks.
+
+**What changed:**
+- **`paths.py` names every runtime file.** It is stdlib only and imported by
+  the server, `tray.py`, `overlay.py` and `kokoroctl`. The XDG variables are
+  honoured.
+  - Linux: `settings.json` in `~/.config/kokoro-read-aloud/`. `server.log`,
+    `read_aloud.log`, `overlay.log`, `overlay.err`, `tray.log` and
+    `calibration.json` in `~/.local/state/kokoro-read-aloud/`.
+  - Windows: unchanged, next to the code. Checked by importing `paths.py`
+    with `sys.platform` patched to `win32`; not run on Windows.
+- **`paths.prepare()`** creates both folders. If `settings.json` or
+  `calibration.json` exists in the code folder and not yet in its new
+  place, it moves the file once. Every entry point calls it.
+  - Four processes racing it in a fake root moved each file exactly once,
+    with its contents intact.
+  - Old logs stay where they are; they are not state.
+- **Every Python entry point sets `sys.dont_write_bytecode`** before
+  importing a local module.
+  - For the server this applies to the venv too. **Step 3c must therefore
+    install a precompiled venv** (`uv sync --compile-bytecode`), or every
+    start recompiles whatever was left uncompiled.
+  - pip compiles at install time, so `env/` was already complete.
+- **`read_aloud.sh` repeats the state path in bash.** Starting a Python per
+  hotkey press would cost more than the read itself.
+- **The systemd units now take `@STATE@`, rendered by
+  `install-systemd.sh`**, which also creates the folder. `kokoroctl`
+  recreates it on every call.
+  - `StateDirectory=` can't create it. Systemd 261 opens the
+    `StandardOutput=truncate:` file first: a transient unit with both
+    failed with **exit 209/STDOUT** and created no folder.
+
+**Verified on the Omarchy desktop:**
+- **The upgrade path works.** The bar widget's next `kokoroctl status` poll
+  ran the new code and moved both files before anything was restarted. The
+  first entry point to run does the migration.
+- **The server reads both files from their new places.** After
+  `install-systemd.sh` and `kokoroctl restart`:
+  - it loaded `playback_speed=1.743` from the new `settings.json`;
+  - it loaded `rt` from the new `calibration.json`: 72.8 saved, clamped to
+    8.0 at boot as designed. A missing file shows as 2.0 with
+    `rt_known=false`.
+- **The other writers use the state folder.**
+  - `read_aloud.sh stop` logged to the new `read_aloud.log`.
+  - A spawned caption strip wrote its `overlay.log` and `overlay.err` there.
+- **The readers find the new `settings.json`.** The tray and the strip read
+  it under both 3.12 and 3.14.
+- **The code folder stays clean.** After the stale logs and `__pycache__`
+  were removed, `git status --ignored` lists only `env/`.
 
 ---
 

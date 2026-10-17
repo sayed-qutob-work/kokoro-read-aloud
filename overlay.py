@@ -30,10 +30,14 @@ import json
 import os
 import re
 import subprocess
+import sys
 import time
 import tkinter as tk
 import tkinter.font as tkfont
 from urllib.request import urlopen
+
+sys.dont_write_bytecode = True     # no __pycache__ next to the code, see paths.py
+import paths                       # noqa: E402
 
 URL = "http://127.0.0.1:5111/now"
 POLL_MS = 80          # while visible
@@ -53,8 +57,7 @@ FADE_MS = 160          # show/hide fade duration
 FADE_STEP_MS = 16      # ~60fps, the tick for every animation here
 SCROLL_MS = 280        # teleprompter glide between reading positions
 
-_ROOT = os.path.dirname(os.path.abspath(__file__))
-SETTINGS_FILE = os.path.join(_ROOT, "settings.json")
+SETTINGS_FILE = paths.SETTINGS
 
 # "Segoe UI"/"Consolas" (Windows) aren't installed on Linux; Tk silently
 # substitutes something for a missing family, but picking a real match
@@ -742,4 +745,5 @@ class Overlay:
 
 
 if __name__ == "__main__":
+    paths.prepare()
     Overlay().root.mainloop()

@@ -13,6 +13,7 @@ Endpoints:
 import json
 import os
 import re
+import sys
 import time
 import queue
 import threading
@@ -21,6 +22,9 @@ from collections import deque
 import numpy as np
 import sounddevice as sd
 from flask import Flask, request, jsonify
+
+sys.dont_write_bytecode = True     # no __pycache__ next to the code, see paths.py
+import paths                       # noqa: E402
 
 _ROOT = os.path.dirname(os.path.abspath(__file__))
 
@@ -78,8 +82,8 @@ PREFETCH = 2
 #                       bm_george bm_fable bm_lewis bm_daniel
 
 
-SETTINGS_FILE = os.path.join(_ROOT, "settings.json")
-CALIB_FILE = os.path.join(_ROOT, "calibration.json")
+SETTINGS_FILE = paths.SETTINGS
+CALIB_FILE = paths.CALIBRATION
 
 
 def load_user_settings():
@@ -1038,6 +1042,7 @@ def devices():
 
 
 if __name__ == "__main__":
+    paths.prepare()
     # before the engine: it reads KOKORO_VOICE and MODEL_SPEED at construction
     load_user_settings()
     engine = KokoroOnnxEngine() if ENGINE == "onnx" else KokoroEngine()
