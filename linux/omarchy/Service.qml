@@ -35,6 +35,7 @@ Item {
   // false until `kokoroctl setup` has installed the venv and the model
   property bool installed: true
   property var setup: null             // setup.json: state, step, steps, title, detail, fraction, error
+  property string build: ""            // "cuda" or "cpu": the torch in the venv; "" before setup
   // what the model held the last time it was on the GPU, so "off" can say
   // how much it gave back
   property int lastVramMib: 0
@@ -53,6 +54,8 @@ Item {
   property string lastError: ""
 
   readonly property bool hasGpu: gpu !== null
+  // the CPU build cannot use the GPU at all, NVIDIA card or not
+  readonly property bool gpuUsable: hasGpu && build !== "cpu"
   readonly property bool setupRunning: setup !== null && setup.state === "running"
   readonly property bool needsSetup: known && !installed
   // the first-run view, also while a repair run is going
@@ -141,6 +144,7 @@ Item {
     captions = s.captions === true
     installed = s.installed !== false
     setup = s.setup || null
+    build = String(s.build || "")
     if (vramMib > 0) lastVramMib = vramMib
     if (serverState !== "running") speaking = false
     // the server caught up with what was asked
@@ -204,7 +208,7 @@ Item {
 
   function setMode(m) {
     if (busy || m === shownMode) return
-    if (m === "gpu" && !hasGpu) return
+    if (m === "gpu" && !gpuUsable) return
     pendingMode = m
     lastError = ""
     message = m === "off" ? "" : "The model takes a few seconds to load."
@@ -214,12 +218,12 @@ Item {
   // the bar's right-click: off when on, back on (GPU when there is one)
   // when off
   function toggleOn() {
-    setMode(shownMode === "off" ? (hasGpu ? "gpu" : "cpu") : "off")
+    setMode(shownMode === "off" ? (gpuUsable ? "gpu" : "cpu") : "off")
   }
 
   function restart() {
     if (busy) return
-    pendingMode = shownMode !== "off" ? shownMode : (hasGpu ? "gpu" : "cpu")
+    pendingMode = shownMode !== "off" ? shownMode : (gpuUsable ? "gpu" : "cpu")
     message = "Restarting…"
     runControl(["restart"])
   }
@@ -231,11 +235,14 @@ Item {
 
   // Setup runs as its own systemd unit, so closing the panel, or the shell
   // reloading, does not stop it; this only starts it and then polls.
-  function runSetup() {
+  // variant "cuda" (the GPU build) or "cpu"; anything else picks the GPU
+  // build when there is an NVIDIA GPU, as `kokoroctl setup` would
+  function runSetup(variant) {
     if (busy || setupRunning) return
+    var v = variant === "cpu" || variant === "cuda" ? variant : (hasGpu ? "cuda" : "cpu")
     lastError = ""
-    setup = { state: "running", step: 0, steps: 5, title: "Starting", detail: "", fraction: null }
-    runControl(["setup", "--background"])
+    setup = { state: "running", step: 0, steps: 5, title: "Starting", detail: "", fraction: null, variant: v }
+    runControl(["setup", "--background", "--" + v])
   }
 
   function openSetupLog() { Quickshell.execDetached([ctl, "log", "setup"]) }

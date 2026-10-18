@@ -21,6 +21,7 @@ Panel {
   property int cursorRow: 0
   property int cursorCol: 0
   property int phraseIndex: 0
+  property int setupChoice: 0           // the build the keyboard cursor is on
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
@@ -152,6 +153,7 @@ Panel {
 
   onOpenedChanged: if (opened) {
     cursorActive = false
+    setupChoice = 0
     if (panelFlick) panelFlick.contentY = 0
     kokoro.refresh()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
@@ -176,7 +178,8 @@ Panel {
     function off(): string { kokoro.setMode("off"); return "ok" }
     function stop(): string { kokoro.stopSpeaking(); return "ok" }
     function status(): string { return kokoro.tooltip }
-    function setup(): string { kokoro.runSetup(); return "ok" }
+    function setup(): string { kokoro.runSetup(""); return "ok" }
+    function setupCpu(): string { kokoro.runSetup("cpu"); return "ok" }
   }
 
   BarIconButton {
@@ -218,11 +221,17 @@ Panel {
       id: keyCatcher
       anchors.fill: parent
       onMoveRequested: function(dx, dy) {
+        if (kokoro.showSetup) {
+          root.cursorActive = true
+          root.setupChoice = Math.max(0, Math.min(setupView.choices.length - 1,
+                                                  root.setupChoice + dx + dy))
+          return
+        }
         if (!root.cursorActive) { root.cursorActive = true; return }
         root.moveCursor(dx, dy)
       }
       onActivateRequested: {
-        if (kokoro.showSetup) kokoro.runSetup()
+        if (kokoro.showSetup) kokoro.runSetup(setupView.choices[root.setupChoice].variant)
         else if (root.cursorActive) root.activateCursor()
       }
       onCloseRequested: root.close()
@@ -322,19 +331,23 @@ Panel {
               lineHeight: 1.1
             }
 
-            // measured 2026-10-18 with a fresh user: 3.8 GiB received for CUDA
-            Text {
-              visible: !kokoro.setupRunning
-              textFormat: Text.PlainText
-              width: parent.width
-              text: kokoro.hasGpu
-                ? "An NVIDIA GPU was found, so it installs the CUDA build: about 4 GB to download, 7 GB on disk."
-                : "No NVIDIA GPU was found, so it installs the CPU build: about 0.7 GB to download, 2 GB on disk."
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-              wrapMode: Text.WordWrap
-            }
+            // The builds setup can install, the default first. Measured
+            // 2026-10-18: a fresh GPU install received 3.8 GiB (4.1 GB); the
+            // CPU build's files add up to 0.74 GB by the same count. First
+            // sound and speed are the RTX 4060 Ti / i5-12400F rows of AUDIT
+            // §8 (2026-10-07); the GTX 1650 laptop's CPU managed only 1.77x.
+            readonly property var choices: kokoro.hasGpu ? [
+              { variant: "cuda", icon: 0xF08AE, label: "GPU build · about 4 GB",          // md-expansion_card
+                note: "Fastest: speech starts in about 0.1 s. It can still switch to the CPU "
+                  + "from this panel when a game needs the VRAM. About 7 GB on disk." },
+              { variant: "cpu", icon: 0xF0EE0, label: "CPU build · about 0.7 GB",         // md-cpu_64_bit
+                note: "Smaller and slower: speech starts in about 0.4 s, and a slower CPU may "
+                  + "need a lower reading speed. It cannot use the GPU. About 2 GB on disk." }
+            ] : [
+              { variant: "cpu", icon: 0xF01DA, label: "Set up · about 0.7 GB",            // md-download
+                note: "No NVIDIA GPU was found, so it installs the CPU build: speech starts "
+                  + "in about 0.4 s. About 2 GB on disk." }
+            ]
 
             Column {
               visible: kokoro.setupRunning
@@ -396,22 +409,46 @@ Panel {
               wrapMode: Text.WordWrap
             }
 
-            Button {
-              visible: !kokoro.setupRunning
-              width: parent.width
-              iconText: root.glyph(setupView.failed ? 0xF0450 : 0xF01DA)   // md-refresh, md-download
-              iconSize: Style.font.title
-              text: setupView.failed ? "Try again" : "Set up"
-              fontSize: Style.font.bodySmall
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              horizontalPadding: Style.spacing.controlPaddingX
-              verticalPadding: Style.spacing.controlPaddingY + Style.space(2)
-              bordered: true
-              enabled: !kokoro.busy
-              hasCursor: root.cursorActive
-              onClicked: kokoro.runSetup()
-              onHovered: function(h) { if (h) root.cursorActive = true }
+            // one button per build; after a failure they retry, either one
+            Repeater {
+              model: setupView.choices
+
+              Column {
+                required property var modelData
+                required property int index
+                visible: !kokoro.setupRunning
+                width: setupView.width
+                spacing: Style.spacing.labelGap + Style.space(2)
+
+                Button {
+                  width: parent.width
+                  iconText: root.glyph(modelData.icon)
+                  iconSize: Style.font.title
+                  text: modelData.label
+                  fontSize: Style.font.bodySmall
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  leftAlign: true
+                  horizontalPadding: Style.spacing.controlPaddingX
+                  verticalPadding: Style.spacing.controlPaddingY + Style.space(2)
+                  bordered: true
+                  active: index === 0          // the default, what Enter picks
+                  enabled: !kokoro.busy
+                  hasCursor: root.cursorActive && root.setupChoice === index
+                  onClicked: kokoro.runSetup(modelData.variant)
+                  onHovered: function(h) { if (h) { root.cursorActive = true; root.setupChoice = index } }
+                }
+
+                Text {
+                  textFormat: Text.PlainText
+                  width: parent.width
+                  text: modelData.note
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  wrapMode: Text.WordWrap
+                }
+              }
             }
 
             Row {
@@ -541,9 +578,11 @@ Panel {
                     verticalPadding: Style.spacing.controlPaddingY + Style.space(2)
                     bordered: true
                     active: current
-                    enabled: modelData.key !== "gpu" || kokoro.hasGpu
+                    enabled: modelData.key !== "gpu" || kokoro.gpuUsable
                     opacity: enabled ? 1.0 : 0.4
-                    tooltipText: modelData.key === "gpu" && !kokoro.hasGpu ? "No NVIDIA GPU found" : ""
+                    tooltipText: modelData.key !== "gpu" || kokoro.gpuUsable ? ""
+                      : kokoro.hasGpu ? "The CPU build is installed. kokoroctl setup --cuda adds the GPU build."
+                      : "No NVIDIA GPU found"
                     hasCursor: root.cursorActive && root.cursorRow === 0 && root.cursorCol === index
                     onClicked: kokoro.setMode(modelData.key)
                     onHovered: function(h) { if (h) root.hoverCursor(0, index) }

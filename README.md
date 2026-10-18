@@ -133,9 +133,11 @@ is never written to. The steps:
 2. **Gets uv.** It uses your own if it is 0.12.10 or newer. Otherwise it
    downloads uv 0.12.24 and checks it against a pinned SHA-256.
 3. **Installs Python 3.12 and the server's packages** from `uv.lock`, at the
-   exact versions they were tested with. It picks the CUDA build when
-   `nvidia-smi` finds a GPU, and the CPU build otherwise. `--cpu` and
-   `--cuda` override the choice.
+   exact versions they were tested with. It installs the GPU (CUDA) build
+   when `nvidia-smi` finds a GPU, and the CPU build otherwise; `--cpu` and
+   `--cuda` override that. On a machine with an NVIDIA GPU, the bar widget
+   offers both. The CPU build is smaller but slower, and cannot use the GPU
+   later: `kokoroctl setup --cuda` switches to the GPU build.
 4. **Downloads the voice model.** That is 326 MiB from Hugging Face, each file
    checked against its pinned SHA-256. From then on the server loads it from
    disk and makes no network connections.
@@ -143,10 +145,11 @@ is never written to. The steps:
    Hyprland, a "Kokoro Settings" launcher entry, and the `kokoroctl` command
    in `~/.local/bin`. Then it starts the server.
 
-| | NVIDIA GPU | No NVIDIA GPU |
+| | GPU build | CPU build |
 |---|---|---|
 | Download | about 4 GB | about 0.7 GB |
 | On disk | about 7 GB | about 2 GB |
+| First sound after the hotkey | about 0.1 s | about 0.4 s |
 
 Most of the time is the download. A fresh NVIDIA install took 1 min 46 s on a
 fast connection, and 31 minutes at 2 MB/s.
@@ -295,8 +298,8 @@ than the first one takes to play. CPU mode lasts until you log out, and the
 next login starts on the GPU again. A hotkey pressed while Kokoro is off shows a
 notification and does not start the model, so a game keeps its VRAM.
 
-Before setup has run, the icon shows five dim dots and the panel offers **Set
-up** instead. To update or remove the widget, see [Updating](#updating) and
+Before setup has run, the icon shows five dim dots and the panel offers setup
+instead: the GPU build, or on an NVIDIA machine the smaller CPU build. To update or remove the widget, see [Updating](#updating) and
 [Removing](#removing).
 
 ### From a terminal or a keybind

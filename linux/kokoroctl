@@ -37,8 +37,10 @@ Stdlib only, so the system python3 runs it in ~50ms. Importing anything
 from the venv would pull in torch and take seconds per call.
 """
 
+import glob
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -180,6 +182,25 @@ def gpu_info(pid):
     return gpu, vram
 
 
+def torch_build(python=PY):
+    """"cuda" or "cpu": which torch the server's venv holds, read from
+    torch's version.py (`cuda = '12.6'` or `None`) instead of importing
+    torch, which takes seconds. None when there is no venv yet. The panel
+    and `gpu` need it since setup offers the CPU build on NVIDIA machines
+    too, and that torch cannot use the GPU at all."""
+    prefix = os.path.dirname(os.path.dirname(python))
+    for f in glob.glob(os.path.join(prefix, "lib", "python3.*", "site-packages",
+                                    "torch", "version.py")):
+        try:
+            with open(f, encoding="utf-8") as fh:
+                m = re.search(r"^cuda\b[^=]*=\s*(.+)$", fh.read(), re.M)
+        except OSError:
+            continue
+        if m:
+            return "cpu" if m.group(1).strip() == "None" else "cuda"
+    return None
+
+
 def status():
     is_managed = managed()
     state_raw = unit_props(UNIT).get("ActiveState", "") if is_managed else ""
@@ -219,6 +240,7 @@ def status():
         "root": ROOT,
         # what the widget needs to offer setup, and to show it running
         "installed": os.path.exists(PY) and model_files.complete(),
+        "build": torch_build(),
         "setup": kokoro_setup.read_progress(),
     }
 
@@ -404,6 +426,10 @@ def main(argv):
             print("usage: kokoroctl uninstall [--yes] [--purge]", file=sys.stderr)
             return 2
         return kokoro_setup.uninstall("--yes" in args, "--purge" in args)
+    if cmd == "gpu" and torch_build() == "cpu":
+        print("This is the CPU build of Kokoro, which cannot use the GPU. "
+              "`kokoroctl setup --cuda` installs the GPU build.", file=sys.stderr)
+        return 1
     if cmd in ("gpu", "cpu", "off"):
         msg = set_mode(cmd)
     elif cmd == "restart":

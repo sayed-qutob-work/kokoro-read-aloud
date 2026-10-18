@@ -3605,6 +3605,43 @@ use (untested on Windows).
 4. The empty settings folder after uninstall. Fixed.
 5. `tk` is missing on a fresh Omarchy. The README's pacman line covers it.
 
+### DEPLOYED 2026-10-18: the setup view offers both builds, and the CPU build is respected afterwards
+
+On an NVIDIA machine the first-run view now offers two buttons:
+- **GPU build · about 4 GB**, the default, which Enter picks;
+- **CPU build · about 0.7 GB.**
+
+Each has a note: first sound about 0.1 s against 0.4 s (the RTX 4060 Ti
+/ i5-12400F rows of 2026-10-07), the disk size, and for the CPU build
+that it cannot use the GPU and that a slower CPU may need a lower reading
+speed. Without NVIDIA only the CPU build is offered. Arrow keys move
+between them.
+
+**The sizes:**
+- **CPU download, 0.74 GB.** The lock's wheel sizes, the torch wheels'
+  `Content-Length` (the PyTorch index gives no size: 805 MiB for cu126,
+  183 MiB for cpu), uv 16.5 MiB, Python 32.7 MiB and the model 326 MiB.
+- **That method checked against a real download.** The same sum for CUDA
+  gives 3.82 GiB, and the fresh-user install received 3.8 GiB.
+- **CPU disk, about 2 GB.** In a sandbox (XDG folders pointed at a
+  throwaway folder, steps 1–4 only) `setup --cpu` installed `torch
+  2.13.0+cpu` and 96 packages in 49 s. That is 2.9 GB of files, which
+  btrfs stores in about 1.3 GiB, or about 1.9 GB where the cache is
+  hard-linked.
+
+**Why the CPU build needs handling afterwards.** On an NVIDIA machine, the
+panel's GPU mode would have restarted a CPU-only torch and waited 90 s for
+a GPU that never came. So:
+- `kokoroctl status` reports `build`, read from the venv's
+  `torch/version.py` (`cuda = '12.6'` or `None`) without importing torch;
+- the panel greys out GPU on the CPU build, with a tooltip naming
+  `kokoroctl setup --cuda`, and right-click "on" picks the CPU;
+- `kokoroctl gpu` refuses there, with the same message.
+
+Tested on fake `version.py` files for both builds, a missing venv, and
+the sandbox's real CPU venv. The QML loaded without errors, but nobody has
+looked at the view yet: no screenshots while the user is at the machine.
+
 ### DEPLOYED 2026-10-17: the model is pinned and loaded by path, and the server runs offline (step 3b)
 
 **`model_files.py` pins 30 files** at revision `f3ff357…`:
