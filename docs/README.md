@@ -14,6 +14,7 @@ For installing and using Kokoro Read-Aloud. Start with the root
 | [troubleshooting.md](troubleshooting.md) | The logs, common problems, reporting a bug |
 | [how-it-works.md](how-it-works.md) | The pieces, what happens on a read, speed and hardware, what gets read, security, pinning |
 | [licenses.md](licenses.md) | Credits, third-party licenses, and what redistributing a bundle would require |
+| [windows-test-checklist.md](windows-test-checklist.md) | Step-by-step retest of the current version on Windows 11: install, hotkeys, request checks, settings, tray, caption strip, highlighting, autostart, uninstall |
 | [security.md](security.md) | Three web-page attacks on the local server, measured in a real browser before and after the 2026-10-18 fix. Reporting a vulnerability: [SECURITY.md](../SECURITY.md) |
 
 ## Engineering docs
