@@ -261,11 +261,13 @@ or the Kokoro project.
 
 ## Contributing and support
 
-- **Bugs:** use the
-  [bug report form](https://github.com/sayed-qutob-work/kokoro-read-aloud/issues/new?template=bug_report.yml).
-  It asks for your platform, `kokoroctl status` and the logs.
-- **Questions and ideas:**
-  [open an issue](https://github.com/sayed-qutob-work/kokoro-read-aloud/issues/new).
+Bug reports and ideas welcome via
+[issues](https://github.com/sayed-qutob-work/kokoro-read-aloud/issues/new/choose).
+For pull requests, please open an issue first.
+
+- **Bugs:** the
+  [bug report form](https://github.com/sayed-qutob-work/kokoro-read-aloud/issues/new?template=bug_report.yml)
+  asks for your platform, `kokoroctl status` and the logs.
 - **Before changing code,** read [docs/README.md](docs/README.md). The
   engineering docs record what was measured, and what was tried and
   rejected.
