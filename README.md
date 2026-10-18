@@ -393,7 +393,7 @@ defaults.
 
 | Key | What |
 |---|---|
-| `voice` | e.g. `af_heart`, `am_michael`, `bf_emma` (full list in `tts_server.py`) |
+| `voice` | e.g. `af_heart`, `am_michael`, `bf_emma` (all 28 in `kokoro_settings.py`) |
 | `playback_speed` | Speed-up applied after synthesis, keeping pitch. Set it above what the machine can synthesize and reads stall |
 | `model_speed` | The speed Kokoro itself is asked for. Keep it at or below 1.3, above that the voice degrades |
 | `pause` | Silence after a sentence |
@@ -557,6 +557,7 @@ the highlighter is healthy.
 | `highlighter.py` | Windows | Tints the spoken word in the source app, using UI Automation and a click-through layered window |
 | `overlay.py` | both | The caption strip. Polls `/now` and renders the sentence being read |
 | `tray.py` | both | The Settings panel over `/config`. Windows also gets a tray icon (`tray_win32.py`) |
+| `kokoro_settings.py` | both | The voices, the speed rules and `settings.json`, shared by the Settings panel and the widget |
 | `extension/` | both | Chromium in-page highlighter, loaded unpacked |
 | `linux/kokoroctl` | Linux | Off / CPU / GPU / restart / status, for the bar widget, keybinds and terminals |
 | `linux/omarchy/` | Omarchy | The bar widget (a Quickshell plugin) |

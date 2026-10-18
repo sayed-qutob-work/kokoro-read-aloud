@@ -50,58 +50,24 @@ from tkinter import ttk
 
 sys.dont_write_bytecode = True     # no __pycache__ next to the code, see paths.py
 import paths                       # noqa: E402
+# The voices, defaults and speed rules live there, shared with kokoroctl and
+# through it the Omarchy widget.
+import kokoro_settings as ks       # noqa: E402
+from kokoro_settings import (      # noqa: E402
+    DEFAULTS, MODEL_SPEED_CAP, SAMPLE, VOICES)
 
 IS_WIN = sys.platform == "win32"
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-SETTINGS = paths.SETTINGS
 LOG = paths.TRAY_LOG
 SERVER = "http://127.0.0.1:5111"
 # venvs put the interpreter in different places per platform
 PY = os.path.join(ROOT, "env", "Scripts" if IS_WIN else "bin",
                   "python.exe" if IS_WIN else "python")
 
-# Voices, from the tts_server.py config block. lang_code is derived from the
-# prefix by the server (af_ -> 'a', bf_ -> 'b'), so this list is all it needs.
-VOICES = [
-    "af_heart", "af_bella", "af_nicole", "af_aoede", "af_kore", "af_sarah",
-    "af_nova", "af_sky", "af_alloy", "af_jessica", "af_river",
-    "am_michael", "am_fenrir", "am_puck", "am_echo", "am_eric", "am_liam",
-    "am_onyx", "am_adam",
-    "bf_emma", "bf_isabella", "bf_alice", "bf_lily",
-    "bm_george", "bm_fable", "bm_lewis", "bm_daniel",
-]
-
-# AUDIT S3/S6: Kokoro's own speed parameter rescales its duration predictor,
-# and past ~1.3 it physically cannot articulate -- garbled onsets and endings.
-# The rest of the speed comes from WSOLA time-stretching after synthesis.
-MODEL_SPEED_CAP = 1.3
-
-# Fraction of measured throughput we call "sustainable". Synthesis must outrun
-# playback or the buffer drains; leaving 15% covers the per-chunk variance
-# (measured 1.3x-1.9x RT on this machine depending on chunk size).
-SUSTAIN_MARGIN = 0.85
-
 # Shown for output_device = None: whatever Windows is using right now, or on
 # Linux the sound server's default output (PortAudio's ALSA "default").
 DEVICE_DEFAULT_LABEL = "Default (follow Windows)" if IS_WIN else "System default"
-
-DEFAULTS = {
-    "voice": "af_heart",
-    "model_speed": 1.15,
-    "playback_speed": 1.8,
-    "pause": 0.1,
-    "first_chunk_audio": 2.0,
-    "output_device": None,      # None = follow the system default
-    # caption strip (overlay.py). Read by the strip at startup, not by the
-    # server -- /config ignores them, and changing either needs the strip
-    # restarted, which the panel does for you.
-    "caption_style": "underline",
-    "caption_layout": "teleprompter",
-    "caption_position": "bottom",
-    "caption_monitor": "primary",   # or a connector name, e.g. "DP-1"
-    "caption_scroll": "continuous",  # continuous | line | off
-}
 
 # Taken from overlay.py rather than restated, so the panel can never offer
 # a value the strip does not understand.
@@ -134,35 +100,11 @@ def log(msg):
 # ----------------------------------------------------------------- settings
 
 def load_settings():
-    """Disk settings merged over DEFAULTS. Unknown keys are dropped so a
-    hand-edited file can't inject anything the server won't understand."""
-    out = dict(DEFAULTS)
-    try:
-        with open(SETTINGS, encoding="utf-8") as f:
-            d = json.load(f)
-        for k in DEFAULTS:
-            if k in d:
-                out[k] = d[k]
-    except FileNotFoundError:
-        pass
-    except Exception as e:
-        log(f"settings load failed: {e}")
-    return out
+    return ks.load_settings(log)
 
 
 def save_settings(d):
-    """Persist. This is what makes a tuned speed survive a reboot -- /config
-    alone is in-memory, so before this file existed every restart silently
-    reverted the user's tuning to whatever was hardcoded."""
-    try:
-        tmp = SETTINGS + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump({k: d[k] for k in DEFAULTS if k in d}, f, indent=2)
-        os.replace(tmp, SETTINGS)
-        return True
-    except Exception as e:
-        log(f"settings save failed: {e}")
-        return False
+    return ks.save_settings(d, log)
 
 
 # ------------------------------------------------------------------- server
@@ -333,10 +275,6 @@ def make_tray(app):
 
 # ------------------------------------------------------------ settings panel
 
-SAMPLE = ("This is how the reading voice sounds at the speed you just chose. "
-          "If it stutters or pauses in the middle, the speed is set higher "
-          "than this machine can synthesize.")
-
 
 class App:
     def __init__(self):
@@ -489,7 +427,7 @@ class App:
             value=round(self.cfg["model_speed"] * self.cfg["playback_speed"], 2))
         self.lbl_speed = ttk.Label(frm, text="")
         self.lbl_speed.grid(row=r, column=2, sticky="e", **pad)
-        ttk.Scale(frm, from_=0.8, to=3.0, variable=self.v_speed,
+        ttk.Scale(frm, from_=ks.SPEED_MIN, to=ks.SPEED_MAX, variable=self.v_speed,
                   command=lambda _=None: self._speed_changed()
                   ).grid(row=next(rows), column=0, columnspan=3,
                          sticky="ew", **pad)
@@ -657,15 +595,8 @@ class App:
 
     # ---- panel helpers
     def _split(self, effective, model):
-        """Split a target effective speed into (model, playback).
-
-        Only playback_speed drives the synthesis race -- the model produces
-        FEWER audio seconds at higher model_speed, so leaning on it costs less
-        throughput. AUDIT S3 nonetheless keeps model_speed near 1.15 for
-        quality, so the user's Advanced choice is honored and playback takes
-        the remainder."""
-        model = max(1.0, min(MODEL_SPEED_CAP, model))
-        return model, max(0.3, effective / model)
+        """Effective speed -> (model, playback); see kokoro_settings.split."""
+        return ks.split(effective, model)
 
     def _labels(self):
         self.lbl_speed.config(text=f"{self.v_speed.get():.2f}x")
@@ -816,7 +747,7 @@ class App:
         if not ok or not rt:
             self.lbl_sustain.config(text="Server not running - cannot measure.")
         else:
-            ceiling = self.v_model.get() * rt * SUSTAIN_MARGIN
+            ceiling = ks.sustain_ceiling(rt, self.v_model.get())
             self.lbl_sustain.config(
                 text=(f"This machine synthesizes at {rt:.2f}x realtime, so it "
                       f"sustains about {ceiling:.2f}x reading speed."))
@@ -827,15 +758,15 @@ class App:
         if not rt:
             self.lbl_warn.config(text="")
             return
-        model, playback = self._split(self.v_speed.get(), self.v_model.get())
-        if playback >= rt:
+        level = ks.sustain_level(self.v_speed.get(), self.v_model.get(), rt)
+        if level == "over":
             self.lbl_warn.config(
                 text=("Above this machine's limit. Audio is consumed faster "
                       "than it can be synthesized, so reads will stall for "
                       "seconds at a time. Lower the speed, or raise the "
                       "Advanced slider so less of the speed comes from "
                       "stretching."))
-        elif playback >= rt * SUSTAIN_MARGIN:
+        elif level == "close":
             self.lbl_warn.config(
                 text="Close to this machine's limit - occasional stutter likely.")
         else:
