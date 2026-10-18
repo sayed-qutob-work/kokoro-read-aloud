@@ -322,13 +322,13 @@ Panel {
               lineHeight: 1.1
             }
 
-            // measured 2026-10-17: uv announced 3,523 MiB of CUDA packages
+            // measured 2026-10-18 with a fresh user: 3.8 GiB received for CUDA
             Text {
               visible: !kokoro.setupRunning
               textFormat: Text.PlainText
               width: parent.width
               text: kokoro.hasGpu
-                ? "An NVIDIA GPU was found, so it installs the CUDA build: about 3.9 GB to download, 7 GB on disk."
+                ? "An NVIDIA GPU was found, so it installs the CUDA build: about 4 GB to download, 7 GB on disk."
                 : "No NVIDIA GPU was found, so it installs the CPU build: about 0.7 GB to download, 2 GB on disk."
               color: root.dim
               font.family: root.fontFamily

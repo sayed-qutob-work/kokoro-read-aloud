@@ -59,7 +59,9 @@ sudo pacman -S --needed tk portaudio wl-clipboard jq curl libnotify
 omarchy plugin add https://github.com/sayed-qutob-work/kokoro-read-aloud --enable
 ```
 
-A Kokoro icon appears in the bar, as five dim dots. Click it and press **Set
+`omarchy plugin add` first warns that plugins run unsandboxed inside the
+shell, and asks you to confirm. With `--enable` it then asks which bar section
+to use. A Kokoro icon appears there, as five dim dots. Click it and press **Set
 up**. The panel shows each step, and a notification says when it is ready.
 From a terminal, run this instead:
 
@@ -140,10 +142,11 @@ is never written to. The steps:
 
 | | NVIDIA GPU | No NVIDIA GPU |
 |---|---|---|
-| Download | about 3.9 GB | about 0.7 GB |
+| Download | about 4 GB | about 0.7 GB |
 | On disk | about 7 GB | about 2 GB |
 
-A fresh NVIDIA install took 1 min 46 s on the test machine's connection.
+Most of the time is the download. A fresh NVIDIA install took 1 min 46 s on a
+fast connection, and 31 minutes at 2 MB/s.
 
 Everything goes to three folders:
 

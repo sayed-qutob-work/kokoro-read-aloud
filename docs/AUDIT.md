@@ -3518,6 +3518,85 @@ use (untested on Windows).
 - `omarchy plugin add` from a local clone of the repo was tested in step
   3d. The GitHub URL in the README works once `main` is pushed.
 
+### TESTED 2026-10-18: clean install as a fresh user, from the GitHub URL (step 4)
+
+**Method.** A root script run through `pkexec`:
+- **The user.** It created a fresh user, `kokorotest`. `useradd -m`
+  copies Omarchy's `/etc/skel`, so the user had the Hypr config and web
+  apps, like a new Omarchy account. Linger gave it a systemd user manager.
+- **The environment.** It ran the README's Omarchy lines in order, with
+  `env -i`: only `HOME`, `PATH=/usr/local/bin:/usr/bin`, `XDG_RUNTIME_DIR`
+  and the D-Bus address. No session variables, no mise.
+- **The measurement.** Setup ran as a transient system unit with
+  `IPAccounting=yes`, so the journal records its traffic.
+- **The end.** The README's remove steps, then `userdel -r`.
+- **This desktop's server was off** for the whole run. Every user shares
+  port 5111, so setup's `/config` check would have reached that server
+  instead.
+
+**Results:**
+- **README line 1 (pacman).** All six packages were already installed here.
+  On a fresh Omarchy only **`tk`** would be missing: it is in no Omarchy
+  package list, and was installed here by hand on 2026-10-06. PortAudio
+  comes in with xournalpp, curl with git, and libnotify with several base
+  apps.
+- **README line 2 (`omarchy plugin add <GitHub URL> --enable`).**
+  - **The trust prompt.** Without a terminal it refuses. Omarchy warns that
+    plugins run unsandboxed inside the shell and asks for confirmation
+    (`--yes`); a person in a terminal answers it, then a gum prompt for
+    the bar section.
+  - The README did not mention either prompt, and now does.
+  - The clone took 1.3 s and was 1.7 MB, history included.
+  - Enabling failed only because the test user had no shell session
+    (`OMARCHY_PATH` unset).
+- **Setup, the terminal route: success, on the CUDA variant.** From the
+  journal: **31 min 31.6 s of wall time, 1 min 23 s CPU, 3.8 GiB received**
+  (about 4.1 GB), 49 MiB sent.
+  - uv: "Prepared 115 packages in 30m 43s". The line ran at about 2 MB/s
+    that day; on 2026-10-17 the same install took 1 min 46 s.
+  - The server came up enabled and active, loaded the model by path, and
+    warmed up on CUDA in 1129 ms, holding 768 MiB of VRAM. Status said
+    `installed: true`.
+  - The plugin folder's `git status` was clean.
+  - Disk: 13.15 GiB in total, 4.68 GiB shared, as in the 3c round trip.
+- **Remove.** `kokoroctl uninstall` (answered y, then Enter) removed:
+  - the units;
+  - the launcher entry;
+  - the data and state folders.
+
+  **It kept an empty `~/.config/kokoro-read-aloud`, reported as "your
+  settings"; fixed.** `omarchy plugin remove` failed only for the missing
+  session. A 108 KB `~/.cache` was not inspected before the user was
+  deleted.
+- **Cleanup.** The user and their home are gone.
+
+**The widget half, in the real session:**
+- **Reinstalled from GitHub.** The widget was removed and re-added from the
+  GitHub URL (origin GitHub, `0042ef8`) and put back after the tray.
+- **Not-set-up state.** With the model folder hidden, IPC `status` said "not
+  set up yet: click to set up".
+- **Setup through the widget.** IPC `setup`, the button's `runSetup()`, went
+  through steps 3 (packages present), 4 (the model, 31 s) and 5, and was
+  done in 40 s. The server ran from the plugin folder;
+  `linux/kokoroctl setup` from the repo pointed it back.
+- **Two mistakes, recorded so they are not repeated:**
+  - a `wtype` Enter meant for the panel went to the user's browser, because
+    the panel had not opened. Send synthetic keys only after confirming the
+    panel's layer, and not at all while the user is at the machine;
+  - a panel screenshot caught the browser instead, because the panel had
+    already been dismissed. It was deleted.
+
+**Where a stranger stumbles:**
+1. The trust and section prompts of `omarchy plugin add`. README updated.
+2. Install time on a slow line. The README now gives both measurements, and
+   both it and the widget say "about 4 GB", not 3.9.
+3. **The terminal route's path is long:**
+   `~/.config/omarchy/plugins/io.github.sayed-qutob-work.kokoro-read-aloud/linux/kokoroctl`.
+   Proposed: setup puts `kokoroctl` on PATH (`~/.local/bin`), and uninstall
+   removes it.
+4. The empty settings folder after uninstall. Fixed.
+5. `tk` is missing on a fresh Omarchy. The README's pacman line covers it.
+
 ### DEPLOYED 2026-10-17: the model is pinned and loaded by path, and the server runs offline (step 3b)
 
 **`model_files.py` pins 30 files** at revision `f3ff357…`:
