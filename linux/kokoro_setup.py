@@ -575,6 +575,26 @@ def _unhook_hyprland(removed):
                   file=sys.stderr)
 
 
+def _settings_folder(purge, ask, removed, kept):
+    """The settings folder: deleted with --purge or a yes, else kept. Every
+    entry point creates it, so a user who never saved a setting has an
+    empty one; that is removed rather than reported as "your settings"
+    (found by the clean-install test, AUDIT 2026-10-18)."""
+    if not os.path.isdir(paths.CONFIG):
+        return
+    if not any(os.scandir(paths.CONFIG)):
+        os.rmdir(paths.CONFIG)
+        removed.append(f"{paths.CONFIG} (empty)")
+        return
+    drop = purge or (ask and input(f"Also delete your settings ({paths.CONFIG})? [y/N] "
+                                   ).strip().lower() in ("y", "yes"))
+    if drop:
+        _rmtree(paths.CONFIG)
+        removed.append(f"{paths.CONFIG} (settings)")
+    else:
+        kept.append(f"{paths.CONFIG} (your settings; --purge removes them)")
+
+
 def uninstall(assume_yes=False, purge=False):
     """Remove everything setup installed. The code folder is left alone:
     it is the Omarchy plugin (omarchy plugin remove) or a git clone."""
@@ -637,16 +657,7 @@ def uninstall(assume_yes=False, purge=False):
             _rmtree(path)
             removed.append(f"{path} ({what})")
 
-    if os.path.exists(paths.CONFIG):
-        drop = purge
-        if not purge and interactive and not assume_yes:
-            drop = input(f"Also delete your settings ({paths.CONFIG})? [y/N] "
-                         ).strip().lower() in ("y", "yes")
-        if drop:
-            _rmtree(paths.CONFIG)
-            removed.append(f"{paths.CONFIG} (settings)")
-        else:
-            kept.append(f"{paths.CONFIG} (your settings; --purge removes them)")
+    _settings_folder(purge, interactive and not assume_yes, removed, kept)
 
     hf = os.path.expanduser("~/.cache/huggingface/hub/models--hexgrad--Kokoro-82M")
     if os.path.exists(hf):
