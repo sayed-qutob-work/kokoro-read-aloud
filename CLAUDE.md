@@ -114,6 +114,15 @@ UIA `FindText` returns ranges at the wrong position). `.md` reads happen in
 
 ## Key endpoints
 
+**Only local programs may call the server** (`_only_local_programs`, AUDIT
+2026-10-18). It refuses a `Host` other than `127.0.0.1:5111`/`localhost:5111`
+(DNS rebinding), any web-page `Origin` (extension origins may only GET), a
+cross-site/same-site `Sec-Fetch-Site`, and any POST that is not
+`application/json`. It never sends an `Access-Control-*` header. So **every
+new client must POST JSON**, and **a GET must never change state**. Refusals
+are logged in `server.log` as `refused (<reason>): ...`. Tests:
+`tests/test_server.py` (server venv, `-B`).
+
 - `POST /speak {"text":...}`, `POST /stop`. `/speak` returns `atoms`, the
   chunks queued: **0 means nothing was readable**. `skip_unreadable()` drops
   every script but Latin (a lone Greek letter stays), `skip_emoji()` drops
@@ -123,7 +132,8 @@ UIA `FindText` returns ranges at the wrong position). `.md` reads happen in
   `pause`, `first_chunk_audio`, `output_device`). GET also reports `device`
   (`cuda`/`cpu`), `measured_rt`, and `rt_known` — false while `rt` is still
   the 2.0 boot seed, so don't present it as a measurement then
-- `GET/POST /devices` — output devices. **POST re-initializes PortAudio**,
+- `GET/POST /devices` — output devices. **POST re-initializes PortAudio**
+  (GET only lists; `?refresh=1` is gone),
   which is the only way a device plugged in after startup becomes visible
   (PortAudio enumerates once). This is the headphone-replug fix
 - `GET /now` — current chunk, word timings, sounding word index, `utt` counter

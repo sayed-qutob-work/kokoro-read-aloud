@@ -91,7 +91,10 @@ log "RUN mode=$mode"
 
 case "$mode" in
   stop)
-    curl -sf -m 2 -X POST "$SERVER/stop" >/dev/null || note 'Kokoro' 'server not responding'
+    # every POST must be JSON: the server refuses anything a web page could
+    # send without a CORS preflight (AUDIT 2026-10-18)
+    curl -sf -m 2 -X POST "$SERVER/stop" -H 'Content-Type: application/json' -d '{}' \
+      >/dev/null || note 'Kokoro' 'server not responding'
     exit 0
     ;;
   clipboard)

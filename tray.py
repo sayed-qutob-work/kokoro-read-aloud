@@ -674,7 +674,8 @@ class App:
             self.status.config(text="Rescanning audio devices...")
 
         def work():
-            d = api("/devices" + ("?refresh=1" if refresh else ""),
+            # the re-scan is a POST: a GET must never change server state
+            d = api("/devices", payload={} if refresh else None,
                     timeout=10.0 if refresh else 3.0)
             self.ui(lambda: self._devices_ready(d, refresh))
         threading.Thread(target=work, daemon=True).start()

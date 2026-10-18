@@ -3743,6 +3743,101 @@ in the list's label, not on a line of its own.
   `settings.json` when it opens, and its Save writes its own voice and
   speed back. The last Save wins.
 
+### FIXED 2026-10-18: any web page could make the server speak, change its settings, and read what it was reading
+
+**Found while writing the README's privacy section.** The server listened
+only on 127.0.0.1, but a web page in any browser tab can reach 127.0.0.1
+too. It accepted any request: `get_json(force=True)` parsed any content
+type, nothing looked at `Origin`, `Host` or `Sec-Fetch-Site`, and
+`GET /devices?refresh=1` changed state.
+
+**Measured in a real browser.** A throwaway headless Chromium 152 ran with
+its own profile and the extension loaded, driven over the DevTools protocol.
+`--host-resolver-rules` mapped `evil.test` to 127.0.0.1. An ordinary page
+was served at `http://evil.test:8765`, and output went to a null sink.
+
+| Attack | What the browser sent | Before | After |
+|---|---|---|---|
+| 1. Cross-site "simple" POST: `fetch(..., {mode: "no-cors"})` to `/speak` and `/config` | `Origin: http://evil.test:8765`, `Sec-Fetch-Site: cross-site`, `Content-Type: text/plain;charset=UTF-8` | Started a read; changed `pause` 0.1 → 0.15 | Refused (`origin`), nothing spoken, `pause` unchanged |
+| 2. POST with `application/json` (needs a CORS preflight) | `OPTIONS` with the same Origin; the POST itself never left the browser | Blocked by the browser: no `Access-Control-Allow-*` header came back | Same, and the `OPTIONS` itself is now refused too |
+| 2b. Cross-origin GET `/utterance` | Same Origin, `cross-site` | Browser blocked the read (no CORS grant) | Refused before the browser even gets to decide |
+| 3. DNS rebinding: the page sits at `http://evil.test:5111` and `evil.test` resolves to 127.0.0.1, so `/utterance` is same-origin | `Host: evil.test:5111`, **no Origin and no Sec-Fetch-\*** (Chromium sends those only to trustworthy URLs, and plain http to `evil.test` is not) | `200`, the text being read: `{"text":"A web page made this machine speak."}` | `403 refused: host` |
+| The extension's own worker, `fetch(".../now")` | **No Origin**, `Sec-Fetch-Site: none` | 200 | 200 |
+
+So:
+- **Attack 1 is the one browsers do not stop.** A page cannot read the reply
+  to a "simple" request, but it can send one anywhere.
+- **Attack 2 shows the browser's own defence working.** A request a page
+  could not send without asking first (a preflight) stays blocked, as long
+  as the server never says yes.
+- **Attack 3 gets around that defence.** Only the `Host` header still carries
+  the attacker's name, so a `Sec-Fetch-Site` check alone would not catch it.
+
+**The fix** is `_only_local_programs`, a `before_request` guard in
+`tts_server.py`. It refuses, in this order:
+1. a `Host` other than `127.0.0.1:5111` or `localhost:5111` (403 `host`);
+2. any `Origin` that is not `chrome-extension://` or `moz-extension://`,
+   which includes `null` from sandboxed pages and every preflight (403
+   `origin`);
+3. `Sec-Fetch-Site: cross-site` or `same-site` (403);
+4. a non-GET request from an extension origin (403);
+5. a POST that is not `application/json` (415). A page can send
+   text/plain, form or multipart data without a preflight, but not JSON.
+
+Also:
+- **No `Access-Control-*` header is sent, anywhere, ever.** The extension
+  needs none, because `host_permissions` exempt its worker from CORS.
+- **`GET /devices?refresh=1` is gone:** re-scanning is POST only, and no GET
+  changes state.
+- **Refusals are logged:** `refused (<reason>): METHOD /path host=…
+  origin=… site=… type=…` in `server.log`.
+
+**Clients changed:** two of them sent something the guard refuses.
+- `read_aloud.sh stop` POSTed with no body or type; it now sends JSON `{}`.
+- The Tk panel's Rescan used `GET /devices?refresh=1`; it is now a POST.
+
+**Every client checked against the restarted server**, on a null sink. 0
+refusals in `server.log` during the run.
+- **`read_aloud.sh selection`:** PRIMARY was set to a test sentence. It read.
+- **`read_aloud.sh stop`:** it stopped.
+- **The Omarchy widget:** the `/now` poll (QML XHR GET) worked, since its
+  tooltip said "reading" during a read. Its stop (XHR POST) stopped.
+- **`kokoroctl status`, `set --no-save`, `sample` and `stop`:** checked from
+  both the repo and the plugin folder's copy.
+- **The Tk panel's calls through `tray.api`:** GET `/config`, POST
+  `/config`, POST `/devices` (27 devices) and POST `/stop`.
+- **The extension:** the Chromium worker got 200 for `/now`, as in the table.
+- **AutoHotkey, by reading its code:** `Post()` sends `Content-Type:
+  application/json; charset=utf-8` through WinHTTP, with no Origin and no
+  Sec-Fetch-\*, to `127.0.0.1:5111`. That is allowed, and so is
+  `highlighter.py`'s urllib GET. Untested on Windows.
+
+**Permanent tests: `tests/test_server.py`** (stdlib unittest, server venv,
+`-B`).
+- **`GuardTests`** (17) run Flask's test client against a stand-in player,
+  with no model and no audio. They cover:
+  - every attack above, with the exact headers Chromium sent;
+  - `Origin: null`, form and multipart bodies, and `Sec-Fetch-Site` on its
+    own;
+  - extensions limited to reads, and "a GET changes nothing";
+  - each client's own header set;
+  - "no `Access-Control-Allow-Origin` on any response".
+- **`LiveServerTests`** (2) send the attacks over a real socket to the
+  running server. They are skipped when it is down, and carry empty text so
+  that even a wrongly accepting server would stay silent.
+- All 19 pass.
+
+**Still true, by design:** any *local program* can drive the server; there
+is no token. That is the same trust as any process run as you.
+
+**Not covered:** Chrome's own Local Network Access prompt would also stop a
+public site from reaching 127.0.0.1. Firefox-based browsers have no such
+prompt, and the guard does not depend on it either way.
+
+**The widget's plugin folder** is the GitHub clone at `187236c`. Its
+`tray.py` still sends `GET /devices?refresh=1`, which now lists devices
+without re-scanning, until the plugin is updated after a push.
+
 ### DEPLOYED 2026-10-17: the model is pinned and loaded by path, and the server runs offline (step 3b)
 
 **`model_files.py` pins 30 files** at revision `f3ff357…`:

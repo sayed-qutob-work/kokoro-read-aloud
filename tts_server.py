@@ -8,6 +8,11 @@ Endpoints:
     POST /stop     {}
     POST /config   {"voice":..., "model_speed":..., "playback_speed":..., "pause":...}
     GET  /config
+    POST /devices  {}   re-scan the output devices; GET only lists them
+    GET  /now, GET /utterance
+
+Only local programs may call it: every POST must be application/json, and
+requests from web pages are refused (see _only_local_programs).
 """
 
 import json
@@ -949,6 +954,60 @@ class Player:
 app = Flask(__name__)
 player = None
 
+# ---- who may talk to this server
+# The server listens on 127.0.0.1, but so can every web page in every browser
+# tab: a page may SEND a "simple" request anywhere (it just can't read the
+# answer), and with DNS rebinding it can even read the answer. Measured in a
+# real Chromium (AUDIT 2026-10-18): a page made this server speak, changed its
+# settings, and read /utterance -- the text being read aloud.
+# Every real client is a local program or the Chromium extension's worker:
+# read_aloud.sh (curl), read_aloud.ahk (WinHTTP), kokoroctl, tray.py,
+# overlay.py, highlighter.py (urllib), the Omarchy widget (QML XHR). None of
+# them sends an Origin or a cross-site Sec-Fetch-Site, and every POST of
+# theirs is application/json. So:
+ALLOWED_HOSTS = {f"127.0.0.1:{PORT}", f"localhost:{PORT}"}
+# Browser extensions may read (GET). Chromium's worker in fact sends no Origin
+# at all for a host it has permission for; a Firefox port would send this.
+EXTENSION_ORIGINS = ("chrome-extension://", "moz-extension://")
+
+
+def _refusal():
+    """Why this request must be refused, or None. Pure, so tests can call it."""
+    origin = request.headers.get("Origin")
+    if request.headers.get("Host", "") not in ALLOWED_HOSTS:
+        # DNS rebinding: the page's own hostname now resolves to 127.0.0.1,
+        # so the browser calls it same-origin and lets the page read replies.
+        # Only the Host header still carries the attacker's name.
+        return 403, "host"
+    if origin is not None and not origin.startswith(EXTENSION_ORIGINS):
+        # a web page (a sandboxed one sends "null"); this also refuses every
+        # CORS preflight, so the browser never sends the request behind it
+        return 403, "origin"
+    if request.headers.get("Sec-Fetch-Site") in ("cross-site", "same-site"):
+        # the browser's own statement that another site started this request
+        return 403, "sec-fetch-site"
+    if origin is not None and request.method != "GET":
+        return 403, "extensions may only read"
+    if request.method == "POST" and request.mimetype != "application/json":
+        # A page can send text/plain, form or multipart data without asking.
+        # application/json needs a CORS preflight first, and nothing here
+        # ever grants one: no Access-Control-* header is sent, anywhere.
+        return 415, "content-type"
+    return None
+
+
+@app.before_request
+def _only_local_programs():
+    r = _refusal()
+    if r:
+        status, why = r
+        print(f"refused ({why}): {request.method} {request.path} "
+              f"host={request.headers.get('Host')!r} "
+              f"origin={request.headers.get('Origin')!r} "
+              f"site={request.headers.get('Sec-Fetch-Site')!r} "
+              f"type={request.mimetype!r}", flush=True)
+        return jsonify(ok=False, error=f"refused: {why}"), status
+
 # the overlay polls /now up to 12x/s all day; keep it out of server.log
 import logging
 logging.getLogger("werkzeug").addFilter(lambda r: "/now" not in r.getMessage())
@@ -956,7 +1015,7 @@ logging.getLogger("werkzeug").addFilter(lambda r: "/now" not in r.getMessage())
 
 @app.post("/speak")
 def speak():
-    text = (request.get_json(force=True, silent=True) or {}).get("text", "")
+    text = (request.get_json(silent=True) or {}).get("text", "")
     if not text.strip():
         return jsonify(ok=False, error="empty"), 400
     atoms = player.speak(text)
@@ -1133,7 +1192,7 @@ def utterance():
 def config():
     global SENTENCE_PAUSE, PLAYBACK_SPEED, FIRST_CHUNK_AUDIO
     if request.method == "POST":
-        d = request.get_json(force=True, silent=True) or {}
+        d = request.get_json(silent=True) or {}
         if "voice" in d:
             player.engine.voice = d["voice"]
         if "model_speed" in d:
@@ -1167,9 +1226,10 @@ def config():
 
 @app.route("/devices", methods=["GET", "POST"])
 def devices():
-    """List output devices. POST (or ?refresh=1) re-initializes PortAudio
-    first, which is the only way a device plugged in since startup appears."""
-    if request.method == "POST" or request.args.get("refresh") == "1":
+    """List output devices. POST re-initializes PortAudio first, which is
+    the only way a device plugged in since startup appears. GET never
+    changes anything (there used to be a ?refresh=1)."""
+    if request.method == "POST":
         player.refresh_devices()
     return jsonify(devices=list_output_devices(),
                    current=player.device_spec,
