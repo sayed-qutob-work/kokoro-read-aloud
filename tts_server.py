@@ -53,6 +53,9 @@ OUTPUT_DEVICE = None      # None = follow the Windows default output device.
                           # tray Settings panel; stored in settings.json.
 
 MODEL_SPEED = 1.15        # what Kokoro itself is asked for. KEEP <= 1.3.
+# Past ~1.3 Kokoro cannot articulate: garbled onsets and endings (AUDIT S6).
+# Enforced on every way in: settings.json at boot and POST /config.
+MODEL_SPEED_MIN, MODEL_SPEED_MAX = 0.5, 1.3
 PLAYBACK_SPEED = 1.8      # WSOLA time-stretch after synthesis. Pitch-preserving.
                           # Real speed = MODEL_SPEED * PLAYBACK_SPEED
 
@@ -111,7 +114,8 @@ def load_user_settings():
         return
     try:
         KOKORO_VOICE = str(d.get("voice", KOKORO_VOICE))
-        MODEL_SPEED = min(1.3, max(0.5, float(d.get("model_speed", MODEL_SPEED))))
+        MODEL_SPEED = min(MODEL_SPEED_MAX, max(MODEL_SPEED_MIN,
+                                              float(d.get("model_speed", MODEL_SPEED))))
         PLAYBACK_SPEED = max(0.3, float(d.get("playback_speed", PLAYBACK_SPEED)))
         SENTENCE_PAUSE = max(0.0, float(d.get("pause", SENTENCE_PAUSE)))
         FIRST_CHUNK_AUDIO = max(0.3, float(d.get("first_chunk_audio",
@@ -1196,7 +1200,8 @@ def config():
         if "voice" in d:
             player.engine.voice = d["voice"]
         if "model_speed" in d:
-            player.engine.model_speed = float(d["model_speed"])
+            player.engine.model_speed = min(MODEL_SPEED_MAX, max(
+                MODEL_SPEED_MIN, float(d["model_speed"])))
         if "playback_speed" in d:
             PLAYBACK_SPEED = float(d["playback_speed"])
         if "pause" in d:

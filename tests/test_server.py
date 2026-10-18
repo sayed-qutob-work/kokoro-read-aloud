@@ -202,6 +202,26 @@ class GuardTests(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
 
 
+class ConfigTests(unittest.TestCase):
+    """POST /config clamps model_speed the way the boot path does: past 1.3
+    Kokoro garbles (AUDIT S6), and the UIs never ask for more."""
+
+    def setUp(self):
+        self.player = tts_server.player = FakePlayer()
+        self.client = tts_server.app.test_client()
+
+    def post(self, value):
+        r = self.client.post("/config", json={"model_speed": value},
+                             base_url="http://" + HOST)
+        self.assertEqual(r.status_code, 200)
+        return r.get_json()["model_speed"]
+
+    def test_model_speed_is_capped(self):
+        self.assertEqual(self.post(2.0), 1.3)
+        self.assertEqual(self.post(0.1), 0.5)
+        self.assertEqual(self.post(1.15), 1.15)
+
+
 class LiveServerTests(unittest.TestCase):
     """The same attacks against the running server, over a real socket."""
 

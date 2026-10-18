@@ -3834,6 +3834,12 @@ is no token. That is the same trust as any process run as you.
 public site from reaching 127.0.0.1. Firefox-based browsers have no such
 prompt, and the guard does not depend on it either way.
 
+**Same day, separate commit: `POST /config` caps `model_speed` to 0.5–1.3**
+(`MODEL_SPEED_MIN/MAX`), as the boot path always did. Both settings UIs
+already stayed under 1.3, but a hand-made POST of 2.0 was taken as is and
+made Kokoro garble (§6). Live: a POST of 2.0 now reads back 1.3. Tested by
+`ConfigTests`, which brings the suite to 20.
+
 **The widget's plugin folder** is the GitHub clone at `187236c`. Its
 `tray.py` still sends `GET /devices?refresh=1`, which now lists devices
 without re-scanning, until the plugin is updated after a push.
