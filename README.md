@@ -492,6 +492,11 @@ covers the current run. On Windows it is next to the code. On Linux,
 with the other logs: `read_aloud.log` records every hotkey press, and
 `overlay.log` and `overlay.err` record the caption strip.
 
+If none of the cases below fits, [open a bug
+report](https://github.com/sayed-qutob-work/kokoro-read-aloud/issues/new?template=bug_report.yml).
+The form asks for your platform, GPU, Python version, `kokoroctl status` and
+the logs, and says what in the logs to check before you paste them.
+
 ### "No matching distribution found for kokoro"
 
 ```text

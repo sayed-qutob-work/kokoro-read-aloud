@@ -1,0 +1,107 @@
+name: Bug report
+description: Something does not work, or works differently from the README.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. The details below decide where to look: most
+        problems depend on the platform, the GPU and the install method.
+
+        **Before pasting a log, read through it.** `read_aloud.log` holds the
+        first 48 characters of every text you read aloud, and `server.log`
+        can name single words from it. Cut anything private.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+      placeholder: Pressed Ctrl+Alt+R on a selection in Firefox. Nothing was read, and no notification appeared.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Select a paragraph in ...
+        2. Press Ctrl+Alt+R
+        3. ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Omarchy (Hyprland)
+        - Fedora (GNOME)
+        - Windows 11
+        - Another Linux (say which below)
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: OS and desktop versions
+      description: "Linux: `cat /etc/os-release | head -3`, plus the desktop (`hyprctl version | head -1`, `gnome-shell --version`). Windows: `winver`."
+      placeholder: Omarchy 4.0.4 (Arch), Hyprland 0.56.2
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: How did you install it?
+      options:
+        - "Omarchy: omarchy plugin add, then Set up in the bar"
+        - "Linux: git clone, then linux/kokoroctl setup"
+        - "pip into env/ (Windows, or Linux by hand)"
+    validations:
+      required: true
+
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU and driver
+      description: "`nvidia-smi --query-gpu=name,driver_version --format=csv,noheader`, or \"none\" for the CPU build."
+      placeholder: NVIDIA GeForce RTX 4060 Ti, 610.57
+    validations:
+      required: true
+
+  - type: input
+    id: python
+    attributes:
+      label: Python version of the server
+      description: "After setup: `~/.local/share/kokoro-read-aloud/venv/bin/python -V`. pip installs: `env/bin/python -V`, or `env\\Scripts\\python.exe -V` on Windows."
+      placeholder: Python 3.12.15
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Kokoro Read-Aloud version
+      description: "`git -C <the code folder> log -1 --format='%h %s'`. On Omarchy the code folder is `~/.config/omarchy/plugins/io.github.sayed-qutob-work.kokoro-read-aloud`."
+    validations:
+      required: true
+
+  - type: textarea
+    id: status
+    attributes:
+      label: "Linux: output of `kokoroctl status`"
+      description: "`linux/kokoroctl status` in the code folder. It is one line of JSON: whether the server runs, on which device, its settings, and the last setup's progress."
+      render: json
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        `server.log` first; it covers the current server run.
+        - Linux: `~/.local/state/kokoro-read-aloud/server.log`. If setup failed, `setup.log` from the same folder. For a wrong or empty selection, `read_aloud.log` too.
+        - Windows: `server.log` next to the code. For highlighting, `highlighter.log` and `highlighter.err`.
+      render: text
