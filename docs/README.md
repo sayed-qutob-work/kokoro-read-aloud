@@ -1,9 +1,23 @@
-# Engineering docs
+# Documentation
 
-These are working documents, not user documentation. If you want to install and
-use the tool, the root [README.md](../README.md) is the right place.
+## Guides
 
-They are published because they are the reason the code looks the way it does.
+For installing and using Kokoro Read-Aloud. Start with the root
+[README.md](../README.md); these pages hold the details it links to.
+
+| Guide | What it covers |
+|---|---|
+| [install.md](install.md) | Every platform in detail: what setup does, download and disk sizes, where files go, updating, removing, optional extras |
+| [omarchy.md](omarchy.md) | The Omarchy bar widget, what each mode costs, and `kokoroctl` |
+| [windows.md](windows.md) | In-place highlighting per app, the Chromium extension, known issues |
+| [settings.md](settings.md) | The Settings panel, `settings.json`, the 28 voices and their grades, the caption strip |
+| [troubleshooting.md](troubleshooting.md) | The logs, common problems, reporting a bug |
+| [how-it-works.md](how-it-works.md) | The pieces, what happens on a read, speed and hardware, what gets read, security, pinning |
+| [licenses.md](licenses.md) | Credits, third-party licenses, and what redistributing a bundle would require |
+
+## Engineering docs
+
+These are working documents, not user documentation. They are published because they are the reason the code looks the way it does.
 Almost every design decision here was made against a measurement, and several
 were made *twice* because the first attempt trusted an estimate instead. The
 logs record both.
@@ -14,7 +28,7 @@ logs record both.
 | [plan.md](plan.md) | The highlighter diagnosis and phased fix plan (2026-07-21). Still the open work item. |
 | [RELEASE_PLAN.md](RELEASE_PLAN.md) | The current release plan: Windows beta, caption strip, and the Linux (Fedora) port. |
 
-## Two things to know before reading
+### Two things to know before reading
 
 **The measurements are tied to specific hardware, and that hardware changed.**
 Numbers in AUDIT §4 were taken on the original desktop's CPU, under Windows

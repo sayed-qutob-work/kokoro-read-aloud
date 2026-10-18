@@ -3844,6 +3844,63 @@ made Kokoro garble (§6). Live: a POST of 2.0 now reads back 1.3. Tested by
 `tray.py` still sends `GET /devices?refresh=1`, which now lists devices
 without re-scanning, until the plugin is updated after a push.
 
+### DOCUMENTED 2026-10-18: the README restructured, details moved into `docs/` guides (step 5)
+
+The README went from 629 to about 275 lines. It follows "cognitive funneling"
+(art-of-readme; its GitHub repo is gone, read from archive.org's June 2026
+copy), makeareadme.com and zoxide's layout:
+1. name, one-liner, link row, three badges, demo GIF;
+2. "Why this one", then the limits and a test-status table;
+3. install per platform, in `<details>`, with Omarchy open;
+4. usage, privacy and security, settings, update and uninstall,
+   troubleshooting;
+5. how it works, related projects, credits, contributing, license.
+
+**The long material moved into seven guides:** `install.md`, `omarchy.md`,
+`windows.md`, `settings.md`, `troubleshooting.md`, `how-it-works.md` and
+`licenses.md`. `docs/README.md` indexes them and the engineering docs.
+
+**Claims checked while writing,** and corrected where the old README went
+too far:
+- **The caption strip's current version has never run on Windows.** It was
+  rebuilt on Fedora from 2026-08-18; the old "works on both platforms" was
+  unverified. The docs say so.
+- **Windows was last tested in mid-August 2026, around v0.1.0-beta, and
+  Fedora last ran 2026-09-30.** Both are stated in the test-status table, and
+  Windows is labelled "retest pending" wherever it is offered.
+- **uv refuses a package whose hash differs from `uv.lock`.** Measured: a
+  scratch project's lock for `six` was tampered by one hex digit, and `uv sync
+  --frozen` (0.12.24) failed with "Expected … Computed …". Only then does the
+  privacy section say packages are hash-checked.
+- **`setup.log` holds only background runs.** That is setup from the bar, or
+  with `--background`; a terminal run prints to the terminal.
+- **The model_speed range and the request guard** are described as they are
+  after `cbcbdca` and `c90370f`.
+- **Every relative link and anchor resolves** (script), except the
+  `docs/img/demo.gif` placeholder, which waits for a recording.
+- **Every external link returns 200.**
+
+**Related projects.** At least seven Omarchy tools started between August
+and October 2026 read the selection or clipboard aloud with Kokoro:
+- omatalk;
+- Say It;
+- Read Aloud (remigius-labs);
+- kokoro-tts-omarchy;
+- omarchy-tts;
+- omarchy-speak;
+- Omarchy Talks.
+
+Several have what this project lacks: nine languages, a word-highlighting
+player, AMD and Intel GPUs. Each gets one line, described from its own README.
+
+**Still to do:**
+- **Record the demo GIF.**
+- **Re-shoot `docs/img/omarchy-widget.png`.** It still shows the read-only
+  voice/speed lines from before the settings rows, and its alt text describes
+  that.
+- **The "latest release" badge shows "no releases"** until v0.2.0 is
+  published as a GitHub Release: `v0.1.0-beta` is only a tag.
+
 ### DEPLOYED 2026-10-17: the model is pinned and loaded by path, and the server runs offline (step 3b)
 
 **`model_files.py` pins 30 files** at revision `f3ff357…`:
