@@ -313,10 +313,13 @@ kokoroctl cpu       # run on the CPU: no VRAM, reads keep working
 kokoroctl gpu       # back on the GPU
 kokoroctl restart   # same device as now
 kokoroctl status    # JSON: state, device, VRAM/RAM, live config
+kokoroctl set voice=bf_emma speed=2.1   # live and saved, like the panel
+kokoroctl sample    # read a sample sentence with them
 ```
 
-It also takes `stop`, `clipboard`, `captions [on|off|toggle]`, `settings`,
-`log [setup]`, `setup` and `uninstall`.
+It also takes `stop`, `clipboard`, `captions [on|off|toggle]`, `settings`
+(`--json` prints the voice, speed and voice list), `log [setup]`, `setup` and
+`uninstall`.
 
 ## Showing where you are
 
@@ -559,7 +562,7 @@ the highlighter is healthy.
 | `tray.py` | both | The Settings panel over `/config`. Windows also gets a tray icon (`tray_win32.py`) |
 | `kokoro_settings.py` | both | The voices, the speed rules and `settings.json`, shared by the Settings panel and the widget |
 | `extension/` | both | Chromium in-page highlighter, loaded unpacked |
-| `linux/kokoroctl` | Linux | Off / CPU / GPU / restart / status, for the bar widget, keybinds and terminals |
+| `linux/kokoroctl` | Linux | Off / CPU / GPU / restart / status, voice and speed, for the bar widget, keybinds and terminals |
 | `linux/omarchy/` | Omarchy | The bar widget (a Quickshell plugin) |
 
 On Linux, `tray.py` and `overlay.py` run on the system Python and its Tk.

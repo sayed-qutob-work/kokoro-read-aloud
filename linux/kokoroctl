@@ -12,6 +12,12 @@ Usage:  kokoroctl <command>
   clipboard            read the clipboard aloud
   captions [on|off|toggle]
   settings             open the settings panel (or focus it)
+  settings --json      the reading settings, the voices and whether the
+                       speed is sustainable, as JSON (for the bar widget)
+  set voice=NAME speed=X [--no-save]
+                       change them live and save them; --no-save is for a
+                       slider that is still being dragged
+  sample               read a sample sentence with the current settings
   log [setup]          follow server.log (or setup.log) in a terminal
   setup [--cpu|--cuda] [--background]
                        install the server's Python, packages and model
@@ -54,6 +60,7 @@ sys.path.insert(0, ROOT)
 import paths                       # noqa: E402
 import model_files                 # noqa: E402
 import kokoro_setup                # noqa: E402  (linux/, next to this file)
+import kokoro_settings as ks       # noqa: E402
 
 PY = paths.SERVER_PYTHON
 SERVER = os.environ.get("KOKORO_SERVER", "http://127.0.0.1:5111")
@@ -377,6 +384,80 @@ def settings():
     return "opened"
 
 
+def settings_json(live=None):
+    """The widget's settings rows: voice, speed, the voices to pick from,
+    whether the speed is sustainable, and the output. Live values when the
+    server runs, the saved ones when it does not. The rules are
+    kokoro_settings', the same the Tk panel uses."""
+    if live is None:
+        live = api("/config")
+    src = live if live else ks.load_settings()
+    model = float(src.get("model_speed") or ks.DEFAULTS["model_speed"])
+    playback = float(src.get("playback_speed") or ks.DEFAULTS["playback_speed"])
+    speed = round(model * playback, 2)
+    # rt_known is false while rt is still the 2.0 boot seed: not a measurement
+    rt = live.get("measured_rt") if live and live.get("rt_known") else None
+    return {
+        "server": bool(live),
+        "voice": src.get("voice"),
+        "speed": speed,
+        "speed_min": ks.SPEED_MIN, "speed_max": ks.SPEED_MAX, "speed_step": ks.SPEED_STEP,
+        "voices": ks.voice_catalog(),
+        "sustain": {"rt": rt,
+                    "ceiling": round(ks.sustain_ceiling(rt, model), 1) if rt else None,
+                    "level": ks.sustain_level(speed, model, rt)},
+        # None = the system default, which follows Omarchy's audio panel
+        # even mid-read (AUDIT 2026-10-18)
+        "output": {"device": src.get("output_device"),
+                   "name": live.get("output_device_name") if live else None},
+    }
+
+
+def set_settings(args):
+    """`set voice=NAME speed=X [--no-save]`: validate, apply live, save.
+    Speed is the effective speed, split into model and playback the way the
+    Tk panel does, keeping the current model_speed. Returns settings_json."""
+    save = "--no-save" not in args
+    changes = {}
+    for a in (a for a in args if a != "--no-save"):
+        key, sep, val = a.partition("=")
+        if not sep:
+            raise ValueError(f"expected key=value, got {a!r}")
+        if key == "voice":
+            if val not in ks.VOICES:
+                raise ValueError(f"unknown voice {val!r}; the voices are: "
+                                 + " ".join(ks.VOICES))
+            changes["voice"] = val
+        elif key == "speed":
+            try:
+                speed = float(val)
+            except ValueError:
+                raise ValueError(f"speed must be a number, got {val!r}") from None
+            changes["speed"] = max(ks.SPEED_MIN, min(ks.SPEED_MAX, speed))
+        else:
+            raise ValueError(f"cannot set {key!r} here: voice and speed can be; "
+                             "the rest is in the settings panel (kokoroctl settings)")
+    if not changes:
+        raise ValueError("nothing to set: give voice=NAME and/or speed=X")
+    live = api("/config")
+    saved = ks.load_settings()
+    payload = {}
+    if "voice" in changes:
+        payload["voice"] = changes["voice"]
+    if "speed" in changes:
+        current = float((live or saved).get("model_speed") or ks.DEFAULTS["model_speed"])
+        model, playback = ks.split(changes["speed"], current)
+        payload["model_speed"] = round(model, 3)
+        payload["playback_speed"] = round(playback, 3)
+    if live is not None:
+        live = api("/config", payload=payload) or live
+    if save:
+        saved.update(payload)
+        if not ks.save_settings(saved):
+            raise OSError(f"could not write {paths.SETTINGS}")
+    return settings_json(live)
+
+
 def log(which="server"):
     path = paths.SETUP_LOG if which == "setup" else paths.SERVER_LOG
     if shutil.which("omarchy-launch-tui"):
@@ -442,15 +523,30 @@ def main(argv):
         msg = "reading the clipboard"
     elif cmd == "captions":
         msg = captions(argv[2] if len(argv) > 2 else "toggle")
+    elif cmd == "settings" and "--json" in argv[2:]:
+        print(json.dumps(settings_json(), separators=(",", ":")))
+        return 0
     elif cmd == "settings":
         msg = settings()
+    elif cmd == "set":
+        try:
+            print(json.dumps(set_settings(argv[2:]), separators=(",", ":")))
+        except (ValueError, OSError) as e:
+            print(e, file=sys.stderr)
+            return 2
+        return 0
+    elif cmd == "sample":
+        if api("/speak", payload={"text": ks.SAMPLE}) is None:
+            print("server not running", file=sys.stderr)
+            return 1
+        msg = "reading a sample"
     elif cmd == "log":
         msg = log(argv[2] if len(argv) > 2 else "server")
     else:
         print("\n\n".join(__doc__.split("\n\n")[1:3]), file=sys.stderr)
         return 2
     print(msg)
-    if cmd not in ("settings", "log", "clipboard"):
+    if cmd not in ("settings", "log", "clipboard", "sample"):
         ping_widget()
     return 0
 
