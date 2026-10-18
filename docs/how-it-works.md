@@ -127,7 +127,8 @@ out. Every browser tab can send requests to 127.0.0.1 too. In a real Chromium
 - read the text being read aloud, through DNS rebinding: a hostname that
   resolves to 127.0.0.1 makes the server look same-origin to the browser.
 
-So the server refuses:
+The full account, with the headers Chromium sent and the before and after
+results, is in [security.md](security.md). So the server refuses:
 - any `Host` other than `127.0.0.1:5111` or `localhost:5111`;
 - any request from a web page: an `Origin` header, or a `Sec-Fetch-Site` of
   `cross-site` or `same-site`;

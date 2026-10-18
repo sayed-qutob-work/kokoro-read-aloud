@@ -161,9 +161,10 @@ on [copy-on-select](docs/install.md#optional-extras).
   files from disk in Hugging Face's offline mode. It was tested with no
   network at all. On Windows, see [install.md](docs/install.md#windows).
 - **Web pages can't use it.** The server refuses requests from browser tabs,
-  including DNS rebinding, and accepts only JSON from local programs
-  ([how](docs/how-it-works.md#who-may-talk-to-the-server)). Any program
-  running as you can still use it, as with any local service.
+  including DNS rebinding, and accepts only JSON from local programs. Until
+  2026-10-18 a web page could make it speak and read what it was reading:
+  [the three attacks, measured before and after the fix](docs/security.md).
+  Any program running as you can still use it, as with any local service.
 - **The clipboard is never polled.** On Linux the hotkey doesn't touch it at
   all.
 - **Pinned downloads.** Every package and every model file is checked
