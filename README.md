@@ -69,6 +69,9 @@ From a terminal, run this instead:
 ~/.config/omarchy/plugins/io.github.sayed-qutob-work.kokoro-read-aloud/linux/kokoroctl setup
 ```
 
+Setup also puts a `kokoroctl` command in `~/.local/bin`, so from then on
+`kokoroctl setup`, `kokoroctl status` and the rest work from any terminal.
+
 Setup also writes the Hyprland hotkeys: Ctrl+Alt+R, T and S. They live in
 `~/.config/hypr/kokoro.lua`, loaded by one `dofile(...)` line that setup adds
 to `~/.config/hypr/hyprland.lua` after backing that file up. If you had
@@ -118,7 +121,7 @@ the clipboard is never touched.
 There is no tray icon on GNOME. GNOME removed the notification area, and an
 indicator would need the third-party AppIndicator extension. The settings
 panel opens from the app grid ("Kokoro Settings"), or with
-`linux/kokoroctl settings`.
+`kokoroctl settings`.
 
 ### What setup does
 
@@ -137,8 +140,8 @@ is never written to. The steps:
    checked against its pinned SHA-256. From then on the server loads it from
    disk and makes no network connections.
 5. **Installs the services:** autostart for the server, the hotkeys on
-   Hyprland, and a "Kokoro Settings" launcher entry. Then it starts the
-   server.
+   Hyprland, a "Kokoro Settings" launcher entry, and the `kokoroctl` command
+   in `~/.local/bin`. Then it starts the server.
 
 | | NVIDIA GPU | No NVIDIA GPU |
 |---|---|---|
@@ -209,13 +212,13 @@ all hidden, and logs the server to `server.log`.
   ```bash
   omarchy plugin update io.github.sayed-qutob-work.kokoro-read-aloud
   omarchy restart shell
-  ~/.config/omarchy/plugins/io.github.sayed-qutob-work.kokoro-read-aloud/linux/kokoroctl setup
+  kokoroctl setup
   ```
 
   The shell restart loads the new widget code; the shell keeps the old
   compiled code until then. Setup installs any new packages and restarts
   the server on the new code.
-- **Fedora:** `git pull`, then `linux/kokoroctl setup`.
+- **Fedora:** `git pull`, then `kokoroctl setup`.
 - **Windows:** `git pull`, run the same `pip install -r` again, then restart
   the server.
 
@@ -224,10 +227,10 @@ all hidden, and logs the server to `server.log`.
 - **Omarchy:**
 
   ```bash
-  ~/.config/omarchy/plugins/io.github.sayed-qutob-work.kokoro-read-aloud/linux/kokoroctl uninstall
+  kokoroctl uninstall
   omarchy plugin remove io.github.sayed-qutob-work.kokoro-read-aloud
   ```
-- **Fedora:** `linux/kokoroctl uninstall`, delete the hotkeys you bound in
+- **Fedora:** `kokoroctl uninstall`, delete the hotkeys you bound in
   GNOME Settings, then delete the folder.
 - **Windows:** first remove the model from Hugging Face's cache, which is
   shared with other apps and so is not inside the folder:
@@ -237,7 +240,7 @@ all hidden, and logs the server to `server.log`.
 `kokoroctl uninstall` asks before doing anything. It removes:
 
 - the services and the hotkeys;
-- the launcher entry;
+- the launcher entry and the `kokoroctl` command;
 - the `~/.local/share/kokoro-read-aloud/` and
   `~/.local/state/kokoro-read-aloud/` folders.
 
@@ -298,16 +301,15 @@ up** instead. To update or remove the widget, see [Updating](#updating) and
 
 ### From a terminal or a keybind
 
-The widget runs everything through `linux/kokoroctl`, which also works on its
-own. On Omarchy it is in
-`~/.config/omarchy/plugins/io.github.sayed-qutob-work.kokoro-read-aloud/linux/`:
+The widget runs everything through `kokoroctl`, which also works on its own.
+Setup puts it in `~/.local/bin`:
 
 ```bash
-linux/kokoroctl off       # stop the server: VRAM and RAM freed, hotkeys go quiet
-linux/kokoroctl cpu       # run on the CPU: no VRAM, reads keep working
-linux/kokoroctl gpu       # back on the GPU
-linux/kokoroctl restart   # same device as now
-linux/kokoroctl status    # JSON: state, device, VRAM/RAM, live config
+kokoroctl off       # stop the server: VRAM and RAM freed, hotkeys go quiet
+kokoroctl cpu       # run on the CPU: no VRAM, reads keep working
+kokoroctl gpu       # back on the GPU
+kokoroctl restart   # same device as now
+kokoroctl status    # JSON: state, device, VRAM/RAM, live config
 ```
 
 It also takes `stop`, `clipboard`, `captions [on|off|toggle]`, `settings`,
@@ -429,7 +431,7 @@ GPU and the CPU in `calibration.json`, which on Linux is in
 On a CPU, lower the reading speed in the Settings panel until its warning
 clears. The panel knows your machine's measured throughput. A CUDA install can
 still run on the CPU when you want the VRAM back, see
-[Omarchy bar widget](#omarchy-bar-widget) and `linux/kokoroctl`.
+[Omarchy bar widget](#omarchy-bar-widget) and `kokoroctl`.
 
 ## Optional extras
 
@@ -488,7 +490,7 @@ fixed. `docs/AUDIT.md` §6 has the evidence.
 
 Read `server.log` first. It is truncated at each server start, so it always
 covers the current run. On Windows it is next to the code. On Linux,
-`linux/kokoroctl log` opens it. It lives in `~/.local/state/kokoro-read-aloud/`
+`kokoroctl log` opens it. It lives in `~/.local/state/kokoro-read-aloud/`
 with the other logs: `read_aloud.log` records every hotkey press, and
 `overlay.log` and `overlay.err` record the caption strip.
 
@@ -524,13 +526,13 @@ Settings panel until the warning clears, or use the GPU. See
 
 On Linux, Kokoro was turned off from the bar or with `kokoroctl off`, or it is
 still loading its model, which takes about 6 s. Turn it back on from the bar
-icon or with `linux/kokoroctl gpu`.
+icon or with `kokoroctl gpu`.
 
 ### Changes to the server or the widget don't show up
 
 Editing `tts_server.py` does nothing to a server that is already running. A
 second copy dies silently with "address in use" while the old one keeps
-serving. Restart it instead: on Linux with `linux/kokoroctl restart` (or
+serving. Restart it instead: on Linux with `kokoroctl restart` (or
 `systemctl --user restart kokoro-server`), on Windows as described in
 `docs/AUDIT.md` §7. For the Omarchy widget, run `omarchy restart shell`: the
 shell keeps the old compiled widget code until it restarts.

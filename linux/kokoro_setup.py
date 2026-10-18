@@ -13,8 +13,9 @@ code folder.
      that torch really is the build it asked for -- a bare `uv sync` would
      have installed an untested one from PyPI (AUDIT 2026-10-17).
   4. The model files (model_files.py), each checked against its SHA-256.
-  5. The systemd units, the launcher entry and, under Hyprland, the hotkeys.
-     Then it restarts the server and waits until it answers.
+  5. The systemd units, the launcher entry, under Hyprland the hotkeys, and
+     a `kokoroctl` command in ~/.local/bin. Then it restarts the server and
+     waits until it answers.
 
 Everything goes to ~/.local/share/kokoro-read-aloud: uv, uv's own cache,
 Python, the venv and the model. The code folder is never written to (on
@@ -64,6 +65,10 @@ UV_BIN = os.path.join(paths.DATA, "bin", "uv")
 UV_CACHE = os.path.join(paths.DATA, "cache")
 PYTHON_DIR = os.path.join(paths.DATA, "python")
 VENV_PYTHON = os.path.join(paths.VENV, "bin", "python")
+
+# `kokoroctl` on PATH, so nobody has to type the plugin folder's path:
+# ~/.local/bin is on PATH by default on Omarchy and Fedora.
+SHORTCUT = os.path.join(os.path.expanduser("~/.local/bin"), "kokoroctl")
 
 UNIT = "kokoro-setup"
 SERVER = "http://127.0.0.1:5111"
@@ -371,6 +376,29 @@ def _server_up():
         return False
 
 
+def _ours(link):
+    """A symlink to some copy of Kokoro's linux/kokoroctl, even a dangling
+    one left by a code folder that has since moved."""
+    return os.path.islink(link) and os.readlink(link).endswith(
+        os.sep + os.path.join("linux", "kokoroctl"))
+
+
+def install_shortcut(progress):
+    target = os.path.join(ROOT, "linux", "kokoroctl")
+    if os.path.lexists(SHORTCUT) and not _ours(SHORTCUT):
+        progress.update(f"{SHORTCUT} exists and is not Kokoro's: left alone")
+        return
+    os.makedirs(os.path.dirname(SHORTCUT), exist_ok=True)
+    tmp = SHORTCUT + ".new"
+    if os.path.lexists(tmp):
+        os.remove(tmp)
+    os.symlink(target, tmp)
+    os.replace(tmp, SHORTCUT)          # atomic, also over an older link
+    on_path = os.path.dirname(SHORTCUT) in os.environ.get("PATH", "").split(":")
+    progress.update(f"kokoroctl command: {SHORTCUT}"
+                    + ("" if on_path else " (~/.local/bin is not on your PATH)"))
+
+
 def install_services(progress):
     was_running = subprocess.run(["systemctl", "--user", "is-active", "--quiet",
                                   "kokoro-server.service"]).returncode == 0
@@ -382,6 +410,7 @@ def install_services(progress):
     if hyprland:
         progress.update("Hyprland hotkeys")
         _script("install-hyprland.sh")
+    install_shortcut(progress)
     # One that was already running still has its old Python and code.
     progress.update("starting the server")
     if was_running:
@@ -650,6 +679,10 @@ def uninstall(assume_yes=False, purge=False):
             subprocess.run(["update-desktop-database", apps], capture_output=True)
 
     _unhook_hyprland(removed)
+
+    if _ours(SHORTCUT):
+        os.remove(SHORTCUT)
+        removed.append(f"{SHORTCUT} (the kokoroctl command)")
 
     for path, what in ((paths.DATA, "venv, Python, model, uv and its cache"),
                        (paths.STATE, "logs and calibration")):

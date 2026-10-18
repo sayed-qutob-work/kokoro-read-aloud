@@ -3592,8 +3592,16 @@ use (untested on Windows).
    both it and the widget say "about 4 GB", not 3.9.
 3. **The terminal route's path is long:**
    `~/.config/omarchy/plugins/io.github.sayed-qutob-work.kokoro-read-aloud/linux/kokoroctl`.
-   Proposed: setup puts `kokoroctl` on PATH (`~/.local/bin`), and uninstall
-   removes it.
+   **Done the same day:**
+   - setup's step 5 makes `~/.local/bin/kokoroctl`, a symlink to the code
+     folder's `linux/kokoroctl`. kokoroctl finds its repo by `realpath`, so
+     the link works;
+   - it replaces only a link that already points at a `linux/kokoroctl`,
+     dangling or not, and leaves anything else there alone;
+   - uninstall removes it on the same terms.
+
+   Tested on four cases: fresh, again, a foreign file, and a dangling link.
+   Only the first-run commands in the README still need the long path.
 4. The empty settings folder after uninstall. Fixed.
 5. `tk` is missing on a fresh Omarchy. The README's pacman line covers it.
 
