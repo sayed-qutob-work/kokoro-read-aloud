@@ -268,6 +268,8 @@ For pull requests, please open an issue first.
 - **Bugs:** the
   [bug report form](https://github.com/sayed-qutob-work/kokoro-read-aloud/issues/new?template=bug_report.yml)
   asks for your platform, `kokoroctl status` and the logs.
+- **Security problems:** please report them privately, as described in
+  [SECURITY.md](SECURITY.md).
 - **Before changing code,** read [docs/README.md](docs/README.md). The
   engineering docs record what was measured, and what was tried and
   rejected.
