@@ -3705,6 +3705,9 @@ applies live while dragging (`--no-save`) and saves on release.
 graded B- or better in Kokoro's `VOICES.md` at `f3ff357`: af_heart (A),
 af_bella (A-), af_nicole (B-) and bf_emma (B-). No male voice reaches
 it, the best are C+. All 28 grades were checked against that file.
+Added the same day at the user's request: the male voices with the best
+male grade are labelled "best male": am_michael, am_fenrir and am_puck,
+all C+. The grade is computed from the table, not hardcoded.
 
 **Tested on the Omarchy desktop** (panel on DP-2, screenshots):
 - **IPC `voice bf_emma`:** live and saved changed, and the list showed

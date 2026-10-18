@@ -47,9 +47,13 @@ _VOICES = [
     ("bm_daniel", "British", "male", "D"),
 ]
 VOICES = [v[0] for v in _VOICES]
+# VOICES.md's grades, best first.
+GRADES = ("A+", "A", "A-", "B+", "B", "B-", "C+", "C", "C-", "D+", "D", "D-", "F+", "F")
 # "Recommended" = graded B- or better: af_heart, af_bella, af_nicole and
-# bf_emma. No male voice reaches it; the best are C+.
-RECOMMENDED_GRADES = ("A+", "A", "A-", "B+", "B", "B-")
+# bf_emma. No male voice reaches it, so the male voices with the best male
+# grade are marked "best male" instead: am_michael, am_fenrir and am_puck (C+).
+RECOMMENDED_GRADES = GRADES[:GRADES.index("B-") + 1]
+BEST_MALE_GRADE = min((g for _n, _a, gender, g in _VOICES if gender == "male"), key=GRADES.index)
 
 # AUDIT S3/S6: Kokoro's own speed parameter rescales its duration predictor,
 # and past ~1.3 it physically cannot articulate -- garbled onsets and endings.
@@ -92,10 +96,11 @@ def voice_catalog():
     out = []
     for name, accent, gender, grade in _VOICES:
         rec = grade in RECOMMENDED_GRADES
+        best_male = gender == "male" and grade == BEST_MALE_GRADE and not rec
         out.append({"name": name, "group": f"{accent} {gender}",
                     "label": f"{accent} {gender} · {name.split('_', 1)[1].capitalize()}"
-                             + (" ★" if rec else ""),
-                    "grade": grade, "recommended": rec})
+                             + (" ★" if rec else "") + (" · best male" if best_male else ""),
+                    "grade": grade, "recommended": rec, "best_male": best_male})
     return out
 
 

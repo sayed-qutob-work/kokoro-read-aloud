@@ -282,7 +282,9 @@ The panel shows:
 - **Voice and reading speed**, changed in place and saved at once, so they
   survive a restart. The list has all 28 English voices, grouped by accent and
   gender. A ★ marks the four that Kokoro's authors grade B- or better:
-  af_heart, af_bella, af_nicole and bf_emma. The speed applies while you drag
+  af_heart, af_bella, af_nicole and bf_emma. No male voice is graded that
+  high, so the three best male voices (C+: am_michael, am_fenrir, am_puck)
+  are marked "best male". The speed applies while you drag
   the slider and is saved when you let go. ▶ reads a sample sentence, and a line
   under the slider gives the fastest speed this machine keeps up with.
 - **Output:** the system default, which you pick in Omarchy's audio panel.
