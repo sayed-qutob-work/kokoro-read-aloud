@@ -44,10 +44,15 @@ Panel {
     { key: "clipboard", label: "Read clipboard", icon: 0xF0C5B }, // md-clipboard_text_play
     { key: "restart", label: "Restart", icon: 0xF0709 },          // md-restart
     { key: "captions", label: "Captions", icon: 0xF0A17 },        // md-subtitles_outline
-    { key: "settings", label: "Settings", icon: 0xF0493 },        // md-cog
+    { key: "settings", label: "More settings", icon: 0xF0493 },   // md-cog
     { key: "log", label: "Server log", icon: 0xF018D }            // md-console
   ]
   readonly property int actionRows: Math.ceil(actions.length / 2)
+  // keyboard rows: 0 the mode selector, 1 voice, 2 speed, then the actions
+  readonly property int voiceRow: 1
+  readonly property int speedRow: 2
+  readonly property int firstActionRow: 3
+  readonly property bool settingsShown: kokoro.settingsInfo !== null && !kokoro.showSetup
 
   readonly property var readingPhrases: [
     "Reading aloud",
@@ -100,14 +105,23 @@ Panel {
     else if (key === "log") { kokoro.openLog(); root.close() }
   }
 
-  // ---- keyboard cursor: row 0 is the mode selector, then the action grid
+  // ---- keyboard cursor: row 0 is the mode selector, then voice and speed,
+  // then the action grid. Left/Right on the speed row change it by one step,
+  // like the volume rows of Omarchy's audio panel.
 
-  function rowLength(r) { return r === 0 ? modes.length : Math.min(2, actions.length - (r - 1) * 2) }
+  function rowLength(r) {
+    if (r === 0) return modes.length
+    if (r === voiceRow || r === speedRow) return 1
+    return Math.min(2, actions.length - (r - firstActionRow) * 2)
+  }
 
   function moveCursor(dx, dy) {
     cursorActive = true
     if (dy !== 0) {
-      var next = Math.max(0, Math.min(actionRows, cursorRow + dy))
+      var next = Math.max(0, Math.min(firstActionRow + actionRows - 1, cursorRow + dy))
+      // the settings rows are skipped until there is something to show
+      if (!settingsShown && (next === voiceRow || next === speedRow))
+        next = dy > 0 ? firstActionRow : 0
       if (next !== cursorRow) {
         // keep the same horizontal position across a 3-wide and a 2-wide row
         var frac = (cursorCol + 0.5) / rowLength(cursorRow)
@@ -115,12 +129,21 @@ Panel {
         cursorCol = Math.min(rowLength(next) - 1, Math.floor(frac * rowLength(next)))
       }
     }
+    if (dx !== 0 && cursorRow === speedRow) {
+      var info = kokoro.settingsInfo || {}
+      var step = Number(info.speed_step || 0.05)
+      var v = Math.round((kokoro.speedValue + dx * step) / step) * step
+      kokoro.setSpeed(Math.max(Number(info.speed_min || 0.8), Math.min(Number(info.speed_max || 3.0), v)), true)
+      return
+    }
     if (dx !== 0) cursorCol = Math.max(0, Math.min(rowLength(cursorRow) - 1, cursorCol + dx))
   }
 
   function activateCursor() {
     if (cursorRow === 0) kokoro.setMode(modes[cursorCol].key)
-    else runAction(actions[(cursorRow - 1) * 2 + cursorCol].key)
+    else if (cursorRow === voiceRow) voiceDropdown.open()
+    else if (cursorRow === speedRow) kokoro.playSample()
+    else runAction(actions[(cursorRow - firstActionRow) * 2 + cursorCol].key)
   }
 
   function hoverCursor(row, col) {
@@ -156,6 +179,7 @@ Panel {
     setupChoice = 0
     if (panelFlick) panelFlick.contentY = 0
     kokoro.refresh()
+    kokoro.loadSettings()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
 
@@ -177,6 +201,10 @@ Panel {
     function cpu(): string { kokoro.setMode("cpu"); return "ok" }
     function off(): string { kokoro.setMode("off"); return "ok" }
     function stop(): string { kokoro.stopSpeaking(); return "ok" }
+    // the same calls as the voice list, the speed slider and its play button
+    function voice(name: string): string { kokoro.setVoice(name); return "ok" }
+    function speed(value: real): string { kokoro.setSpeed(value, true); return "ok" }
+    function sample(): string { kokoro.playSample(); return "ok" }
     function status(): string { return kokoro.tooltip }
     function setup(): string { kokoro.runSetup(""); return "ok" }
     function setupCpu(): string { kokoro.runSetup("cpu"); return "ok" }
@@ -215,7 +243,7 @@ Panel {
     open: root.opened
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(380))
-    contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(640))
+    contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(820))
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -668,34 +696,132 @@ Panel {
             }
 
             PanelSeparator {
-              visible: kokoro.config !== null
+              visible: root.settingsShown
               foreground: root.foreground
             }
 
-            // ---------- the live config ----------
-            Row {
-              visible: kokoro.config !== null
+            // ---------- voice and speed: applied and saved as they change ----------
+            // kokoroctl set does the work (kokoro_settings.py, shared with the
+            // Tk panel); this column only shows its answers.
+            Column {
+              id: settingsRows
+              visible: root.settingsShown
               width: parent.width
-              spacing: Style.space(20)
+              spacing: Style.space(10)
+
+              readonly property var info: kokoro.settingsInfo || ({})
+              readonly property var sustain: info.sustain || ({})
+
+              Dropdown {
+                id: voiceDropdown
+                width: parent.width
+                // the recommended mark is explained here, not in a line of its own
+                label: "Voice · ★ recommended"
+                fontFamily: root.fontFamily
+                options: (settingsRows.info.voices || []).map(function(v) {
+                  return { value: v.name, label: v.label }
+                })
+                value: String(settingsRows.info.voice || "")
+                hasCursor: root.cursorActive && root.cursorRow === root.voiceRow
+                onChanged: function(v) { kokoro.setVoice(v) }
+                onHovered: function(h) { if (h) root.hoverCursor(root.voiceRow, 0) }
+              }
 
               Column {
-                width: (parent.width - parent.spacing) / 2
+                width: parent.width
                 spacing: Style.spacing.labelGap
-                InfoPair { label: "Voice"; value: kokoro.config ? String(kokoro.config.voice || "") : "" }
-                InfoPair {
-                  label: "Speed"
-                  value: kokoro.config ? Number(kokoro.config.effective_speed || 0).toFixed(2) + "×" : ""
+
+                RowLayout {
+                  width: parent.width
+                  spacing: Style.space(8)
+
+                  Text {
+                    textFormat: Text.PlainText
+                    text: "Reading speed"
+                    color: root.foreground
+                    opacity: root.cursorActive && root.cursorRow === root.speedRow ? 1.0 : 0.6
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.bodySmall
+                    font.bold: root.cursorActive && root.cursorRow === root.speedRow
+                  }
+                  Item { Layout.fillWidth: true; implicitHeight: 1 }
+                  Text {
+                    textFormat: Text.PlainText
+                    text: kokoro.speedValue.toFixed(2) + "×"
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.bodySmall
+                  }
+                  PanelActionButton {
+                    iconText: root.glyph(0xF040A)     // md-play
+                    tooltipText: enabled ? "Hear a sample" : "Hear a sample (the model is off)"
+                    enabled: settingsRows.info.server === true
+                    opacity: enabled ? 1.0 : 0.4
+                    foreground: root.foreground
+                    fontFamily: root.fontFamily
+                    onClicked: kokoro.playSample()
+                  }
+                }
+
+                PanelSlider {
+                  width: parent.width
+                  bar: root.bar
+                  minimum: Number(settingsRows.info.speed_min || 0.8)
+                  maximum: Number(settingsRows.info.speed_max || 3.0)
+                  step: Number(settingsRows.info.speed_step || 0.05)
+                  value: kokoro.speedValue
+                  onDraggingChanged: kokoro.speedDragging = dragging
+                  onMoved: function(v) { kokoro.setSpeed(v, false) }       // live only
+                  onReleased: function(v) { kokoro.setSpeed(v, true) }     // and saved
+                }
+
+                Text {
+                  textFormat: Text.PlainText
+                  visible: text !== ""
+                  width: parent.width
+                  readonly property string level: String(settingsRows.sustain.level || "")
+                  text: level === "over" ? "Faster than this machine can synthesize: reads will stall. Lower the speed."
+                    : level === "close" ? "Close to this machine's limit: an occasional stutter is likely."
+                    : level === "ok" ? "This machine keeps up to about " + Number(settingsRows.sustain.ceiling).toFixed(0) + "×."
+                    : settingsRows.info.server ? "The speed limit is measured during the first reads." : ""
+                  color: level === "over" || level === "close" ? root.urgent : root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  wrapMode: Text.WordWrap
                 }
               }
 
               Column {
-                width: (parent.width - parent.spacing) / 2
+                width: parent.width
                 spacing: Style.spacing.labelGap
-                InfoPair {
-                  label: "Output"
-                  value: kokoro.config ? String(kokoro.config.output_device_name || "default") : ""
+
+                // The system default follows the output picked in Omarchy's
+                // audio panel, even mid-read (AUDIT 2026-10-18); a specific
+                // device is the Tk panel's business.
+                RowLayout {
+                  width: parent.width
+                  spacing: Style.space(8)
+                  readonly property var out: settingsRows.info.output || ({})
+                  InfoLabel { text: "Output" }
+                  Item { Layout.fillWidth: true; implicitHeight: 1 }
+                  Text {
+                    textFormat: Text.PlainText
+                    Layout.maximumWidth: settingsRows.width * 0.8
+                    horizontalAlignment: Text.AlignRight
+                    text: parent.out.device
+                      ? (parent.out.name || parent.out.device) + " (chosen in More settings)"
+                      : "System default (set in Omarchy's audio panel)"
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    elide: Text.ElideRight
+                  }
                 }
-                InfoPair { label: "Up"; value: root.uptimeText(kokoro.uptime) }
+                InfoPair {
+                  visible: kokoro.config !== null
+                  label: "Up"
+                  value: root.uptimeText(kokoro.uptime)
+                }
               }
             }
 
@@ -741,10 +867,10 @@ Panel {
                     active: on
                     enabled: root.actionEnabled(modelData.key)
                     opacity: enabled ? 1.0 : 0.4
-                    hasCursor: root.cursorActive && root.cursorRow === 1 + Math.floor(index / 2)
+                    hasCursor: root.cursorActive && root.cursorRow === root.firstActionRow + Math.floor(index / 2)
                       && root.cursorCol === index % 2
                     onClicked: root.runAction(modelData.key)
-                    onHovered: function(h) { if (h) root.hoverCursor(1 + Math.floor(index / 2), index % 2) }
+                    onHovered: function(h) { if (h) root.hoverCursor(root.firstActionRow + Math.floor(index / 2), index % 2) }
                   }
                 }
               }

@@ -40,7 +40,15 @@ Item {
   // how much it gave back
   property int lastVramMib: 0
 
-  // ---- from /now
+  // ---- the settings rows, from `kokoroctl settings --json` and `set`.
+  // The rules (voices, speed range, what is sustainable) are Python's,
+  // kokoro_settings.py, shared with the Tk panel; this only shows them.
+  property var settingsInfo: null
+  // The speed shown on the slider. Set the moment the slider moves, so a
+  // release does not flick back to the old value while `set` is running.
+  property real speedValue: 0
+  property var _pendingSet: null       // newest `set` asked for while one runs
+
   property bool speaking: false
   property string sentence: ""
   property real spokenFraction: 0
@@ -154,6 +162,13 @@ Item {
       message = ""
     }
     if (serverState === "failed") pendingMode = ""
+    // the server came up or went away, or voice or speed changed elsewhere
+    // (the Tk panel, `kokoroctl set`)
+    if (panelOpen && settingsInfo && !setProcess.running && !speedDragging
+        && ((config !== null) !== (settingsInfo.server === true)
+            || config && (config.voice !== settingsInfo.voice
+                || Math.abs(Number(config.effective_speed) - Number(settingsInfo.speed)) > 0.005)))
+      loadSettings()
   }
 
   // ---------------------------------------------------------------- /now
@@ -252,6 +267,54 @@ Item {
     if (value) Quickshell.execDetached(["bash", "-c", "printf %s " + Util.shellQuote(value) + " | wl-copy"])
   }
 
+  function loadSettings() {
+    if (!settingsProcess.running) settingsProcess.running = true
+  }
+
+  function applySettings(raw) {
+    try {
+      var d = JSON.parse(String(raw || "").trim())
+      settingsInfo = d
+      if (!speedDragging) speedValue = Number(d.speed || 0)
+    } catch (e) {
+      lastError = "kokoroctl settings returned no JSON"
+    }
+  }
+
+  property bool speedDragging: false
+
+  function setVoice(name) { queueSet(["voice=" + name]) }
+
+  // While dragging: apply live only (--no-save). On release: apply and save.
+  function setSpeed(value, save) {
+    speedValue = value
+    queueSet(["speed=" + Number(value).toFixed(2)].concat(save ? [] : ["--no-save"]))
+  }
+
+  // One `set` at a time. While it runs, requests merge into one pending
+  // request: the newest value per key (a voice picked mid-drag survives the
+  // next slider step), and it saves if any of them would have.
+  function queueSet(args) {
+    if (setProcess.running) {
+      var key = function(a) { return a.split("=")[0] }
+      var fresh = args.filter(function(a) { return a !== "--no-save" })
+      var old = (_pendingSet || []).filter(function(a) {
+        return a !== "--no-save" && !fresh.some(function(b) { return key(b) === key(a) })
+      })
+      var noSave = args.indexOf("--no-save") >= 0
+        && (!_pendingSet || _pendingSet.indexOf("--no-save") >= 0)
+      _pendingSet = old.concat(fresh).concat(noSave ? ["--no-save"] : [])
+      return
+    }
+    setProcess.command = [ctl, "set"].concat(args)
+    setProcess.running = true
+  }
+
+  // needs the server: with it off, `kokoroctl sample` has nothing to read with
+  function playSample() {
+    if (settingsInfo && settingsInfo.server) Quickshell.execDetached([ctl, "sample"])
+  }
+
   function readClipboard() { Quickshell.execDetached([ctl, "clipboard"]) }
   function openSettings() { Quickshell.execDetached([ctl, "settings"]) }
   function openLog() { Quickshell.execDetached([ctl, "log"]) }
@@ -312,6 +375,35 @@ Item {
       if (exitCode !== 0) {
         root.known = true
         root.lastError = "Could not run " + root.ctl
+      }
+    }
+  }
+
+  Process {
+    id: settingsProcess
+    command: [root.ctl, "settings", "--json"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.applySettings(text)
+    }
+  }
+
+  Process {
+    id: setProcess
+    command: []
+    stdout: StdioCollector { id: setOut; waitForEnd: true }
+    stderr: StdioCollector { id: setErr; waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode === 0) {
+        root.lastError = ""
+        root.applySettings(setOut.text)
+      } else {
+        root.lastError = String(setErr.text || "kokoroctl set failed").trim()
+      }
+      if (root._pendingSet) {
+        var next = root._pendingSet
+        root._pendingSet = null
+        root.queueSet(next)
       }
     }
   }

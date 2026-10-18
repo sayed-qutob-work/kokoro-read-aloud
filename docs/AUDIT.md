@@ -3057,6 +3057,8 @@ and Windows keep the call.
   server's default output.
 - Whether it follows a change of that default while playing is not
   measured, so the label does not claim it.
+- Measured 2026-10-18: it does follow, idle and mid-read. See "voice and
+  speed in the Omarchy widget" below.
 
 ### DEPLOYED 2026-10-17: v0.2.0 skips what the English pipeline would spell out
 
@@ -3641,6 +3643,102 @@ a GPU that never came. So:
 Tested on fake `version.py` files for both builds, a missing venv, and
 the sandbox's real CPU venv. The QML loaded without errors, but nobody has
 looked at the view yet: no screenshots while the user is at the machine.
+
+### DEPLOYED 2026-10-18: voice and speed in the Omarchy widget; the settings rules are shared with the Tk panel
+
+The widget's read-only Voice / Speed / Output lines are now controls:
+- a voice list;
+- a speed slider with a ▶ sample button;
+- the Output line.
+
+The "Settings" action is renamed "More settings" and still opens the Tk
+panel, which keeps everything else and stays the only UI on Windows.
+
+**Measured first: the output follows Omarchy's audio panel.** That panel
+sets Quickshell's `Pipewire.preferredDefaultAudioSink`, PipeWire's
+configured default sink. `pactl set-default-sink` sets the same default,
+so the test used it with two null sinks (`module-null-sink`).
+Kokoro's stream is `alsa_playback.python3.12`, opened once at startup on
+PortAudio's ALSA `default`.
+- **Idle:** the stream moved to the new default.
+- **Mid-read:** it moved too, `/now`'s cursor kept advancing through the
+  switch, and `server.log` showed no error.
+
+So the Output line says "System default (set in Omarchy's audio panel)",
+and picking one specific device stays in the Tk panel. With a device set
+there, the line names it, "(chosen in More settings)".
+
+**The split: Python decides, QML draws.**
+- **`kokoro_settings.py` (new, stdlib, no Tk)** holds what `tray.py` had
+  inline:
+  - the voices, `DEFAULTS`, the speed range;
+  - `load_settings`/`save_settings`;
+  - `split` (effective speed → model + playback, model capped at 1.3);
+  - `sustain_ceiling`/`sustain_level`.
+- **`tray.py` imports it.** No behaviour change: old (`HEAD`) against new
+  `tray.py` on 320 cases (split, the warning texts, the sustain line, load
+  and save, the log lines) gave 0 mismatches. The one intended difference:
+  **`am_santa` was missing from the Tk list** and is now in it.
+  `model_files.py` already shipped its voice file, and a sample read with
+  it plays.
+- **`kokoroctl` gets three commands for the widget:**
+  - `settings --json`: voice, speed, the voice catalog, the speed range,
+    `sustain {rt, ceiling, level}` and `output`. The values are live when
+    the server runs and saved when it does not. `rt` is reported only when
+    `rt_known`, never the 2.0 boot seed.
+  - `set voice=NAME speed=X [--no-save]` validates the values, POSTs
+    `/config` if the server is up and saves through `kokoro_settings`. It
+    splits the speed the Tk way, keeping the current `model_speed`. A wrong
+    voice, a non-number or another key exits 2 with a message. Speed is
+    clamped to 0.8–3.0.
+  - `sample` reads the Tk panel's sample sentence.
+- **The widget** (`Service.qml`, `Panel.qml`) runs one `set` at a time.
+  Requests made meanwhile merge into one pending request: the newest value
+  per key, and it saves if any of them would. Tested in node on six
+  sequences (drag steps, drag then release, release then a new drag,
+  voice + drag in both orders, two voices).
+
+**Rules the user chose:** changes apply and save at once. The slider
+applies live while dragging (`--no-save`) and saves on release.
+
+**Voices: all 28, grouped American / British × female / male.** ★ =
+graded B- or better in Kokoro's `VOICES.md` at `f3ff357`: af_heart (A),
+af_bella (A-), af_nicole (B-) and bf_emma (B-). No male voice reaches
+it, the best are C+. All 28 grades were checked against that file.
+
+**Tested on the Omarchy desktop** (panel on DP-2, screenshots):
+- **IPC `voice bf_emma`:** live and saved changed, and the list showed
+  "British female · Emma ★".
+- **A real click on the list, then on "American male · Santa":** live and
+  saved became `am_santa`. A sample read with it on a null sink.
+- **A slider drag with real pointer motion:**
+  - while pressed, live went 2.3 → 2.23 → 2.15 → 2.08 and the saved
+    `playback_speed` stayed 2.078;
+  - on release it saved 1.809, which is 2.08 / 1.15.
+- **Model turned off:** the rows show the saved values, ▶ is dimmed and
+  the Up line is hidden. Turned back on, the panel reloads its settings by
+  itself and ▶ comes back.
+- **The sustain line** reads "This machine keeps up to about N×" (`model ×
+  rt × 0.85`). It warns in the urgent colour when the speed is over or
+  close to the limit, and says "measured during the first reads" while
+  `rt` is still the seed.
+
+**A test-harness trap.** A `hyprctl` cursor warp sends no motion event to
+the client until the next real input. A drag made of warps therefore
+showed no live update during the drag, only a jump at release.
+`ydotool mousemove` relative steps do deliver motion. Test drags with them.
+
+**Layout:** the panel's height cap went from 640 to 820. The ★ legend is
+in the list's label, not on a line of its own.
+
+**Not verified:**
+- **The keyboard on the new rows:** Left/Right on the speed row step it by
+  0.05 and save; Enter on the voice row opens the list; Enter on the speed
+  row plays the sample. No synthetic keys were sent while the user was at
+  the machine, so this is not in the README yet.
+- **The Tk panel and the widget open at the same time.** The Tk panel loads
+  `settings.json` when it opens, and its Save writes its own voice and
+  speed back. The last Save wins.
 
 ### DEPLOYED 2026-10-17: the model is pinned and loaded by path, and the server runs offline (step 3b)
 

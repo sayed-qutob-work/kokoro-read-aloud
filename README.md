@@ -36,8 +36,8 @@ Hyprland, both on Wayland.
   fast your machine can synthesize, and warns you before you pick a speed it
   cannot keep up with.
 - **An Omarchy bar icon** that frees the model's VRAM when a game or a local
-  LLM needs it, or moves the model to the CPU.
-  [See below](#omarchy-bar-widget).
+  LLM needs it, or moves the model to the CPU. Its panel also changes the
+  voice and the reading speed. [See below](#omarchy-bar-widget).
 
 ## Install
 
@@ -279,9 +279,18 @@ The panel shows:
 - **Kokoro's share of the GPU's memory**, next to every other process, plus
   the RAM it holds.
 - **The sentence being read**, with the part already spoken shown brighter.
-- **The live voice, speed, output device and uptime.**
-- **Actions:** stop reading, read the clipboard, restart, captions on/off, open
-  Settings, and follow `server.log`.
+- **Voice and reading speed**, changed in place and saved at once, so they
+  survive a restart. The list has all 28 English voices, grouped by accent and
+  gender. A ★ marks the four that Kokoro's authors grade B- or better:
+  af_heart, af_bella, af_nicole and bf_emma. The speed applies while you drag
+  the slider and is saved when you let go. ▶ reads a sample sentence, and a line
+  under the slider gives the fastest speed this machine keeps up with.
+- **Output:** the system default, which you pick in Omarchy's audio panel.
+  Kokoro follows a change there, even in the middle of a read. To send it to
+  one specific device instead, use More settings.
+- **Actions:** stop reading, read the clipboard, restart, captions on/off,
+  More settings (the full Settings panel: pauses, the speed split, output
+  device, captions) and follow `server.log`.
 
 What each mode costs, measured on an RTX 4060 Ti with an i5-12400F:
 
@@ -388,7 +397,8 @@ panel does that for you when you save.
 
 The Settings panel is the main way to change settings. It writes
 `settings.json`, which the server loads at startup, and it shows the fastest
-reading speed your machine can sustain. On Linux the file is
+reading speed your machine can sustain. On Omarchy, the voice and the speed are
+also in the bar widget, which writes the same file with the same rules. On Linux the file is
 `~/.config/kokoro-read-aloud/settings.json`. On Windows it is next to the code,
 and not tracked by git.
 [settings.example.json](settings.example.json) shows its format and the shipped
