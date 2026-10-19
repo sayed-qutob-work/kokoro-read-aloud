@@ -132,8 +132,8 @@ background; `kokoroctl log setup` shows its output.
 
 ## Windows
 
-> Last tested in mid-August 2026, around v0.1.0-beta. A retest of the
-> current version is pending.
+> Retested on 2026-10-19 on a fresh Windows 11, in a VM without a GPU.
+> The GPU path was last tested in mid-August 2026.
 
 You need:
 - **[Python 3.12](https://www.python.org/downloads/).** Exactly 3.12, see
@@ -183,8 +183,8 @@ Things to know:
 - **The model** downloads on the first run, about 330 MB, and the server
   then checks Hugging Face for updates at every start. To stop that, run
   `env\Scripts\python.exe model_files.py fetch` once. The server then loads
-  the pinned files from `models\` and makes no network connection. This was
-  tested on Linux, not yet on Windows.
+  the pinned files from `models\` and makes no network connection. Tested
+  on Linux, and on Windows on 2026-10-19.
 - **PowerShell traps:** use `py -3.12 -m venv`, not `python -m venv`, and
   `env\Scripts\python.exe -m pip`, never a bare `pip`.
 

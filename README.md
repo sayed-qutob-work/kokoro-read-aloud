@@ -29,7 +29,7 @@ and your text never leaves the machine.
 - **Pinned and offline.** Packages and model files are pinned to tested
   versions and hashes, and on Linux the server makes no network connection
   after setup.
-- **Windows 11 support (last tested mid-August; retest pending).** The same
+- **Windows 11 support (retested 2026-10-19 in a VM, without a GPU).** The same
   server, hotkeys and settings as on Linux.
 
 The details behind each of these are in
@@ -51,7 +51,7 @@ The details behind each of these are in
 |---|---|
 | Omarchy 4.0.4 (Hyprland), NVIDIA | Clean install from this repository, 2026-10-18 |
 | Fedora 44 (GNOME), NVIDIA | Last run 2026-09-30; the installer not yet run there |
-| Windows 11 | Last tested mid-August 2026; retest pending |
+| Windows 11 | Fresh install in a VM without a GPU, 2026-10-19; the GPU path last tested mid-August 2026 |
 
 ## Install
 
@@ -100,7 +100,7 @@ what happens.
 </details>
 
 <details>
-<summary><b>Windows 11</b> (last tested mid-August; retest pending)</summary>
+<summary><b>Windows 11</b> (retested 2026-10-19 in a VM, without a GPU)</summary>
 
 You need [Python 3.12](https://www.python.org/downloads/) (exactly 3.12),
 [AutoHotkey v2](https://www.autohotkey.com/) and the

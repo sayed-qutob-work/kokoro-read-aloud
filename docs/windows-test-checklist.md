@@ -8,6 +8,9 @@ mid-August 2026, around v0.1.0-beta. Since then, these have changed:
 - the settings panel's shared code;
 - the caption strip, rebuilt on Linux and never run on Windows.
 
+First run on 2026-10-19, on a fresh Windows 11 in a VM without a GPU; the
+results are in [AUDIT.md](AUDIT.md) §8.
+
 Work top to bottom: later items assume the earlier ones passed. Each item
 says what to do, what should happen, and where to look if it doesn't. All
 the logs are in the code folder.

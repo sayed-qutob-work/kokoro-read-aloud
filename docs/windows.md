@@ -1,8 +1,9 @@
 # Windows: in-place highlighting and known issues
 
-> Windows 11 support was last tested in mid-August 2026, around v0.1.0-beta.
-> A retest of the current version is pending. Everything on this page
-> describes that tested version.
+> Windows 11 was retested on 2026-10-19, on a fresh install in a VM without
+> a GPU: install, hotkeys, settings, caption strip, and highlighting in
+> Notepad. The rest of this page, including the per-app table, is from the
+> mid-August 2026 tests.
 
 Installing is in [install.md](install.md#windows).
 

@@ -29,6 +29,9 @@ enabled.
   an i5-12400F + RTX 4060 Ti 8GB + 16GB, the ORIGINAL desktop's CPU and
   GPU, with Kokoro on the **GPU** (CPU mode on demand). The entries from
   2026-10-06 on were measured here.
+- **Windows VM on the Omarchy desktop, 2026-10-19:** Windows 11 (build
+  26200) under KVM, 8 vCPUs, 6.3 GB, **no GPU**. Only the Windows retest
+  in §8 was measured here.
 
 **Most numbers in §4 do not transfer to either later machine** — each one's
 values are in §8: 2026-08-11 (laptop, Windows), 2026-08-18 (laptop, Fedora),
@@ -3957,6 +3960,103 @@ machine".
 
 **Windows:** `paths.DATA` is the code folder, so the files go to
 `models\Kokoro-82M` (gitignored). Untested.
+
+### TESTED 2026-10-19: Windows 11 retest, in a VM on the Omarchy desktop (CPU only)
+
+The retest of [windows-test-checklist.md](windows-test-checklist.md), on a
+fresh Windows rather than a PC that had run Kokoro before.
+
+**Method:**
+- **The VM.** `omarchy-windows-vm` (dockur/windows under KVM): Windows 11
+  build 26200, 8 vCPUs of the i5-12400F, 6417 MiB of RAM, **no GPU**. The
+  12400F has no integrated graphics, so passing the 4060 Ti through would
+  take the host's only display.
+- **Viewed over RDP** (`omarchy-windows-vm launch`, xfreerdp3 with `/sound
+  /clipboard`). The web viewer on `127.0.0.1:8006` has neither sound nor
+  clipboard; the first steps were run there by mistake.
+- **The host's Ctrl+Alt+R/T/S** were turned off for the test (the
+  `dofile` line in `~/.config/hypr/hyprland.lua` commented out). Hyprland
+  takes its binds before the RDP window sees them.
+- **The code:** a fresh clone from GitHub, whose `main` was `5efd1c1`
+  (the commit was not recorded in the VM). Python 3.12.10, AutoHotkey v2
+  and the Visual C++ runtime from winget.
+
+**Results, by checklist item:**
+- **1, install.** `requirements-cuda.txt`, the README's first line, in a VM
+  with no GPU. pip's hash-checked install went through, and that torch runs
+  on the CPU. The README's inline `# NVIDIA GPU` comment broke the line in
+  Command Prompt, where `#` is not a comment (fixed, below).
+- **3, server: failed on the fresh Windows, then passed.**
+  - The first start stopped at `import torch`: `OSError: [WinError 126]
+    ... torch\lib\c10.dll or one of its dependencies`, after torch's own
+    warning "Microsoft Visual C++ Redistributable is not installed".
+  - `winget install Microsoft.VCRedist.2015+.x64` fixed it, with no
+    reinstall of the venv.
+  - The earlier Windows machines already had that runtime, which games and
+    many apps install; no doc listed it. Now a stated requirement.
+  - Then: `warmed up in 2047ms on cpu`, `audio out: 'Remote Audio' (system
+    default)`, ready. This first start loaded from the Hugging Face cache
+    online, because item 2 had been skipped.
+- **2, model files offline: passed, the first Windows run.** After
+  `model_files.py fetch` and `verify`, the server logged `[kokoro] model:
+  C:\Users\docker\kokoro-read-aloud\models\Kokoro-82M`, no Hugging Face
+  line, and `warmed up in 395ms on cpu`.
+- **A direct `/speak`** from `curl.exe` returned `{"atoms":1,"chars":19,
+  "ok":true}` and was heard on the host through RDP's Remote Audio.
+- **4, the request checks: passed.** `Ran 20 tests`, `OK`; the two
+  `LiveServerTests` ran against the live server.
+- **5, hotkeys: passed** (Ctrl+Alt+R in Notepad, Ctrl+Alt+T, Ctrl+Alt+S),
+  as reported by the tester. The clipboard-restore check was not reported
+  separately.
+- **6, AutoHotkey passes the request checks: passed.** The server logged
+  `POST /speak ... 200` for each press and `POST /stop ... 200`, and no
+  `refused (` line came from AutoHotkey. Until now this rested on reading
+  the code.
+- **7, the settings panel: passed.** It measured `This machine synthesizes
+  at 3.23x realtime, so it sustains about 3.16x reading speed`, showed
+  `Currently playing through: Remote Audio`, and Save answered `Saved -
+  these settings now survive a restart.`
+- **9, the caption strip: passed, its first run on Windows.** Teleprompter
+  layout with the underline look, following the voice.
+- **11, in-place highlighting: reported working.** `highlighter.log` was
+  not collected.
+- **Not run:** 8 (the tray menu), 10 (Firefox), 12 (start at login), 13
+  (uninstall), the Chromium extension. The GPU path on Windows was last
+  tested in August (§8, 2026-08-11).
+
+**Speed, in this VM** (8 vCPUs, the CUDA build of torch running on the CPU):
+- **Synthesis:** 2.8–3.7x RT per chunk; the panel's measured rt was 3.23x.
+  For comparison, on the same CPU: 5.2–5.3x on Linux with 12 threads
+  (2026-10-07), 4.03x on the original Windows install (§4).
+- **START:** 430–814 ms after the hotkey. The panel's Test took 1100 and
+  1384 ms on 30-character samples (cause not examined).
+- **One `GAP 163ms mid-stream`,** after a 13-character first chunk (0.8 s
+  of audio): the small-first-chunk gap of CPU mode (2026-10-07).
+
+**Found, not fixed: a terminal selection without copy-on-select reads the
+old clipboard, silently.** In Windows Terminal, whose `copyOnSelect` is off
+by default, Ctrl+Alt+R spoke the last copied text instead of the selection.
+That is the designed terminal path (read the clipboard, never send Ctrl+C,
+which interrupts there), and install.md lists copy-on-select under
+"Optional extras". But nothing tells the user. Proposed: in terminals, speak
+the clipboard only if it changed recently, as the VS Code path already does
+(`LastClipTick`), and otherwise show a tooltip. Not decided.
+
+**A tester incident, now in troubleshooting.md.** `env\Scripts\python.exe`
+was emptied to 0 bytes twice ("This app can't run on your PC", then
+`Access is denied.`). `doskey /history` showed why: console lines were
+pasted back in with their prompt, `C:\...\kokoro-read-aloud>env\Scripts\
+python.exe tts_server.py`, and cmd took the `>` as a redirection into
+`python.exe`. In conhost a right-click pastes at once. `py -3.12 -m venv
+--upgrade env` restores the launcher and keeps the packages.
+
+**Docs changed from this test:**
+- **README and install.md** list the Visual C++ runtime, and their Windows
+  commands no longer carry `#` comments, so they run in Command Prompt as
+  well as PowerShell.
+- **troubleshooting.md:** `WinError 126` loading `c10.dll`, and the emptied
+  `python.exe`.
+- **The checklist:** item 0 installs the runtime; item 3 names the error.
 
 ---
 
