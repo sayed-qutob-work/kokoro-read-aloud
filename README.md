@@ -102,18 +102,24 @@ what happens.
 <details>
 <summary><b>Windows 11</b> (last tested mid-August; retest pending)</summary>
 
-You need [Python 3.12](https://www.python.org/downloads/) (exactly 3.12) and
-[AutoHotkey v2](https://www.autohotkey.com/).
+You need [Python 3.12](https://www.python.org/downloads/) (exactly 3.12),
+[AutoHotkey v2](https://www.autohotkey.com/) and the
+[Visual C++ runtime](https://aka.ms/vs/17/release/vc_redist.x64.exe), which
+torch needs and a fresh Windows lacks
+(`winget install Microsoft.VCRedist.2015+.x64`).
+
+In PowerShell or Command Prompt:
 
 ```powershell
 git clone https://github.com/sayed-qutob-work/kokoro-read-aloud.git
 cd kokoro-read-aloud
 py -3.12 -m venv env
-env\Scripts\python.exe -m pip install -r requirements-cuda.txt   # NVIDIA GPU
-# or, without one:
-env\Scripts\python.exe -m pip install -r requirements.txt
+env\Scripts\python.exe -m pip install -r requirements-cuda.txt
 env\Scripts\python.exe tts_server.py
 ```
+
+Without an NVIDIA GPU, install `requirements.txt` instead of
+`requirements-cuda.txt`.
 
 When it prints `[kokoro] ready on http://127.0.0.1:5111`, start
 `read_aloud.ahk`. To start everything at login, put a shortcut to

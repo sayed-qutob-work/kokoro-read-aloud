@@ -140,23 +140,28 @@ You need:
   below.
 - **[AutoHotkey v2](https://www.autohotkey.com/),** per-user or
   machine-wide. The hotkeys come from it.
+- **The [Visual C++ runtime](https://aka.ms/vs/17/release/vc_redist.x64.exe)
+  (x64),** or `winget install Microsoft.VCRedist.2015+.x64`. torch's DLLs
+  need it. Many apps and games install it, so most PCs have it, but a fresh
+  Windows does not: without it the server stops at `import torch` with
+  `WinError 126` (tested 2026-10-19, on a fresh Windows 11).
 
 You don't need to install eSpeak NG: `espeakng-loader`, pulled in by
 `misaki[en]`, ships the DLL and its data inside the venv.
+
+These commands work in PowerShell and in Command Prompt:
 
 ```powershell
 git clone https://github.com/sayed-qutob-work/kokoro-read-aloud.git
 cd kokoro-read-aloud
 py -3.12 -m venv env
-env\Scripts\python.exe -V          # must print 3.12.x
-
-# NVIDIA GPU:
+env\Scripts\python.exe -V
 env\Scripts\python.exe -m pip install -r requirements-cuda.txt
-# otherwise:
-env\Scripts\python.exe -m pip install -r requirements.txt
-
 env\Scripts\python.exe tts_server.py
 ```
+
+`python.exe -V` must print `3.12.x`. Without an NVIDIA GPU, install
+`requirements.txt` instead of `requirements-cuda.txt`.
 
 Wait for `[kokoro] ready on http://127.0.0.1:5111`. Then start
 `read_aloud.ahk`, select some text and press Ctrl+Alt+R.

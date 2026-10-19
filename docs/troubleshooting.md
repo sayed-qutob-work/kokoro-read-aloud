@@ -4,6 +4,8 @@
 - [Reads stall or stutter partway through](#reads-stall-or-stutter-partway-through)
 - [The hotkey says "Kokoro is off" or "still loading"](#the-hotkey-says-kokoro-is-off-or-still-loading)
 - ["No matching distribution found for kokoro"](#no-matching-distribution-found-for-kokoro)
+- [`WinError 126` loading `c10.dll` (Windows)](#winerror-126-loading-c10dll)
+- ["This app can't run on your PC" for `python.exe` (Windows)](#this-app-cant-run-on-your-pc-for-pythonexe)
 - [Changes to the server or the widget don't show up](#changes-to-the-server-or-the-widget-dont-show-up)
 - [A script of your own gets "refused"](#a-script-of-your-own-gets-refused)
 - [Highlighting is wrong or missing (Windows)](#highlighting-is-wrong-or-missing)
@@ -55,6 +57,46 @@ of `Requires-Python`, which left only the 0.7.x line. Rebuild the venv on
 Don't relax the pin to a 0.7.x `kokoro`. That is a different model and voice
 API, and every number in [AUDIT.md](AUDIT.md) was measured on the versions
 pinned in `uv.lock`.
+
+## `WinError 126` loading `c10.dll`
+
+```text
+Microsoft Visual C++ Redistributable is not installed, this may lead to the DLL load failure.
+...
+OSError: [WinError 126] The specified module could not be found. Error loading
+"...\env\Lib\site-packages\torch\lib\c10.dll" or one of its dependencies.
+```
+
+Windows is missing the Visual C++ runtime, which torch's DLLs need. A fresh
+Windows does not include it. Install it, then start the server again; the
+venv needs no reinstall:
+
+```powershell
+winget install Microsoft.VCRedist.2015+.x64
+```
+
+Or download it from <https://aka.ms/vs/17/release/vc_redist.x64.exe>.
+
+## "This app can't run on your PC" for `python.exe`
+
+Running `env\Scripts\python.exe` shows that dialog, or prints
+`Access is denied.`, and `dir env\Scripts\python.exe` shows 0 bytes.
+
+A line copied from the console together with its prompt was pasted back in:
+
+```text
+C:\Users\you\kokoro-read-aloud>env\Scripts\python.exe tts_server.py
+```
+
+The `>` after the prompt is a redirection, so the shell writes into
+`env\Scripts\python.exe` and empties it. In Command Prompt a right-click
+pastes at once, which makes this easy to do by accident; copy with a
+selection and Ctrl+C instead. To repair the venv without reinstalling its
+packages:
+
+```powershell
+py -3.12 -m venv --upgrade env
+```
 
 ## Changes to the server or the widget don't show up
 

@@ -47,6 +47,10 @@ failed.
   Check that AutoHotkey v2 is installed: `AutoHotkey64.exe` in
   `%LOCALAPPDATA%\Programs\AutoHotkey\v2\` or
   `%ProgramFiles%\AutoHotkey\v2\`.
+
+  Install the Visual C++ runtime, which torch needs and a fresh Windows
+  lacks: `winget install Microsoft.VCRedist.2015+.x64`. On a PC that
+  already has it, winget says so and changes nothing.
 - [ ] **Do:** if an older copy is installed, for example in `C:\kokoro`, stop
   it first:
   1. Quit it from its tray icon.
@@ -138,6 +142,8 @@ On Windows this has never been tested.
     complete files. Run `model_files.py verify`.
   - **The window closes, or shows a traceback:** copy it.
   - **"address already in use":** an old server is running. See item 0.
+  - **`OSError: [WinError 126]` loading `torch\lib\c10.dll`:** the Visual
+    C++ runtime is missing. See item 0.
 
 ## 4. The server's request checks
 
