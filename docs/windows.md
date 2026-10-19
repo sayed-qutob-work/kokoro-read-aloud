@@ -8,7 +8,8 @@
 Installing is in [install.md](install.md#windows).
 
 On Windows the hotkey copies the selection with Ctrl+C, sends it to the
-server, and puts your previous clipboard back.
+server, and puts your previous clipboard back. In a terminal it never sends
+Ctrl+C: it asks the terminal for its selection instead.
 
 ## In-place highlighting
 
@@ -24,14 +25,16 @@ each app exposes to accessibility tools:
 | VS Code editor | partial | Needs `"editor.accessibilitySupport": "on"` in user settings, or no editor text is exposed at all |
 | Obsidian (`.md`) | partial | Works since 2026-08-12 |
 | Outlook / Hotmail on the web | partial | Intermittent, cause not known (`plan.md` D2) |
-| Terminals | no | Not possible, see below |
+| Windows Terminal | yes | Measured 2026-10-19 on short reads. Scrolling during a read is untested |
+| VS Code's terminal | no | Not possible, see below |
 | PDFs in a browser viewer, Google Docs | no | Drawn to a canvas, with no text geometry to point at |
 
-**Terminals** draw text to a canvas, and expose it to accessibility tools
-through a hidden off-screen buffer. The position they report has nothing to
-do with where the pixels are. So terminal text can be read aloud, but it
-can't be highlighted. The [caption strip](settings.md#caption-strip) works
-there instead.
+**VS Code's terminal** draws text to a canvas, and exposes it to
+accessibility tools through a hidden off-screen buffer. The position it
+reports has nothing to do with where the pixels are. So its text can be read
+aloud, but it can't be highlighted. The
+[caption strip](settings.md#caption-strip) works there instead. **Windows
+Terminal** reports where its text really is, so the marker works there.
 
 **In VS Code,** the highlighter has to move the cursor, and VS Code then
 tints every other occurrence of the word. To turn that off for markdown only:
@@ -61,7 +64,7 @@ All of these are in the in-place highlighter. None of them affect audio.
   not known.
 - The marker can land on the wrong word, rather than simply not appearing.
 
-The terminal, PDF-viewer and Google Docs cases in the table can't be fixed.
+The VS Code terminal, PDF-viewer and Google Docs cases in the table can't be fixed.
 [AUDIT.md](AUDIT.md) §6 has the evidence.
 
 For diagnosing the highlighter, see

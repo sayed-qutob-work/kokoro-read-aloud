@@ -20,8 +20,10 @@ anything. In particular:
   lengthening, per-word timestamps) are model-level and still hold. Every
   unmeasured estimate made in past sessions was wrong, always optimistically.
 - **§6 Rejected options** — do not re-propose Piper, kokoro-onnx,
-  MODEL_SPEED > 1.3, torch thread tuning, or in-place terminal highlighting
-  (proven impossible). **GPU is no longer on that list** — it was adopted
+  MODEL_SPEED > 1.3, torch thread tuning, or in-place highlighting in VS
+  Code's terminal (proven impossible for xterm.js). **Windows Terminal is
+  not covered by that** — it highlights in place (measured 2026-10-19).
+  **GPU is no longer on that list** — it was adopted
   2026-08-11 and measured at 25.03x RT vs 1.77x on the GTX 1650 laptop's CPU.
 - **Speed is bounded by hardware, not taste.** Playback drains
   `PLAYBACK_SPEED` audio-seconds per second; synthesis produces `rt`
@@ -40,7 +42,7 @@ port. Phase 1 (release hygiene) shipped as `v0.1.0-beta`.
 | Path | What |
 |---|---|
 | `tts_server.py` | Flask server on 127.0.0.1:5111; model resident; config block holds the DEFAULTS, `settings.json` overrides them at boot |
-| `read_aloud.ahk` | Hotkeys (AutoHotkey **v2**); window-aware clipboard/copy logic |
+| `read_aloud.ahk` | Hotkeys (AutoHotkey **v2**); window-aware clipboard/copy logic. In terminals it never sends ^c: `FocusedSelection()` reads the selection through UIA (raw `ComCall`s), else a clipboard changed < 10s ago (AUDIT 2026-10-19) |
 | `read_aloud.sh` | The Linux hotkey handler (GNOME custom shortcuts, or Hyprland binds written by `linux/install-hyprland.sh` → `selection`/`clipboard`/`stop`). **On Hyprland reads go `via=wl`**: no python-xlib there, and none needed, because Hyprland implements data-control, so wl-paste takes no focus (AUDIT 2026-10-06). Reads the PRIMARY selection — it never copies, Wayland forbids injecting Ctrl+C. **Reads go through Xwayland (`linux/xselection.py`, system `/usr/bin/python3` + python-xlib), not wl-paste**: since mutter 50.5 (2026-09-30), wl-paste is refused the focus it needs, which gives "wl-clipboard is ready" notifications, multi-second stalls and stale text. wl-paste is only the fallback when X is unavailable (exit 2); log lines carry `via=x11|wl` (AUDIT 2026-09-30). A **mouse button is a second trigger route**: input-remapper maps the G Pro Wireless side button to a tap/hold macro (tap = back, hold = drag-select then Ctrl+Alt+R) — config lives outside the repo in `~/.config/input-remapper-2/`, and the right-side button is physically the *same* code as left-back, so it cannot be split (AUDIT 2026-08-19). The mouse enumerates under **two** evdev names — `Logitech G Pro ` (trailing space; Lightspeed receiver) and `Logitech G Pro Wireless Gaming Mouse` (charging cable plugged in) — and **both** need an `autoload` entry in `config.json`, or the button silently dies whenever the mouse is plugged in to charge (AUDIT 2026-09-16). Its **settle loop is load-bearing**: `wl-paste` steals focus to read PRIMARY, which races VTE's on-release claim and made the first terminal read speak the previous selection (AUDIT 2026-08-19). Diagnostics in `read_aloud.log` |
 | `highlighter.py` | In-place word highlighter (UIA TextPattern + layered window) |
 | `tray.py` | Settings panel over `/config` + process control. Platform-neutral since 2026-08-18; `--settings` opens the panel directly. On Linux it runs on the **system Python** (`/usr/bin/python3`, `paths.GUI_PYTHON`), not the venv: a prebuilt 3.12 bundles a Tk with one bitmap font (AUDIT 2026-10-17). Its voices, speed rules and `settings.json` load/save are in `kokoro_settings.py` |

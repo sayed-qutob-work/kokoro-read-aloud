@@ -360,6 +360,9 @@ Follows [install.md](install.md#removing).
   - **Expect:** the word is marked inside the page.
   - **If not:** check the extension's worker console, under "Inspect views"
     on the extensions page.
-- **Terminal text:** turn on copy-on-select in Windows Terminal
-  (`"copyOnSelect": true`). Then select text in a terminal and press
-  Ctrl+Alt+R.
+- **Terminal text:** with copy-on-select **off** in Windows Terminal (the
+  default), select text in it and press Ctrl+Alt+R.
+  - **Expect:** the selection is read and the marker follows it. With
+    nothing selected, a "no selection found" tooltip and nothing read.
+  - **Passed 2026-10-19** in a VM, short reads; scrolling during a read is
+    still untested (AUDIT §8).

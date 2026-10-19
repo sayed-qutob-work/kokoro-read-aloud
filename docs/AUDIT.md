@@ -43,8 +43,9 @@ values are in §8: 2026-08-11 (laptop, Windows), 2026-08-18 (laptop, Fedora),
 ## 1. What this is
 
 A hotkey-driven read-aloud system. Select text anywhere → **Ctrl+Alt+R** reads it aloud
-→ **Ctrl+Alt+S** stops. Ctrl+Alt+R is **window-aware** (details in §8): terminals get
-the clipboard path (never a simulated Ctrl+C — that means "interrupt" there); inside
+→ **Ctrl+Alt+S** stops. Ctrl+Alt+R is **window-aware** (details in §8): terminals never
+get a simulated Ctrl+C (that means "interrupt" there); their selection is read through
+UI Automation (Windows Terminal, 2026-10-19), else from a clipboard changed < 10s ago; inside
 VS Code, clipboard *freshness* tells terminal selections from editor/markdown-preview
 selections, so `.md` files read correctly too. **Ctrl+Alt+T** reads the clipboard
 as-is anywhere. Fully local, no network, no clipboard polling (everything fires only
@@ -304,7 +305,7 @@ ramp gapped *every* time.
 | **torch thread tuning** | No headroom | Already 6/6 P-cores. |
 | **`MODEL_SPEED` > 1.3** | Rejected | Garbles onsets/endings. Use `PLAYBACK_SPEED` instead. |
 | **Trimming AHK `Sleep`/`KeyWait`** | Pointless | AHK contributes ~0 to START. Measured. |
-| **In-place highlighting in a terminal, via the terminal's OWN TextPattern** | **Impossible — proven 2026-07-18, still true** | xterm.js (VS Code's integrated terminal) paints text to a canvas and exposes it to accessibility through a hidden off-screen DOM mirror. Probed live: terminal text reports rects at `x=-11571` and `x=-14907`, height `58557`, for a window occupying `x=-1928..8`. UIA gives the text but no usable geometry and nothing bridges the two. Reading terminal text still works (that is `copyOnSelection`, unrelated). **Narrowed 2026-07-21** — the *ancestor* path is a different story, see §8. |
+| **In-place highlighting in VS Code's integrated terminal, via the terminal's OWN TextPattern** | **Impossible — proven 2026-07-18, still true. NOT true of Windows Terminal (measured 2026-10-19, §8): its `TermControl` reports real on-screen rects and highlights in place.** This row was written "in a terminal" from an xterm.js-only probe. | xterm.js (VS Code's integrated terminal) paints text to a canvas and exposes it to accessibility through a hidden off-screen DOM mirror. Probed live: terminal text reports rects at `x=-11571` and `x=-14907`, height `58557`, for a window occupying `x=-1928..8`. UIA gives the text but no usable geometry and nothing bridges the two. Reading terminal text still works (that is `copyOnSelection`, unrelated). **Narrowed 2026-07-21** — the *ancestor* path is a different story, see §8. |
 | **Solaar for remapping the Logitech G Pro Wireless's buttons (Linux)** | **Tested, rejected — 2026-08-18** | Solaar's button remapping needs the HID++ `REPROG CONTROLS` feature (`0x1B00`/`0x1B04`). The G Pro Wireless exposes `MOUSE BUTTON SPY` (`0x8110`) and `ONBOARD PROFILES` (`0x8100`) instead — it's a gaming mouse, profile-programmed via G HUB's protocol on Windows, not the productivity-line reprogrammable-controls feature MX-series mice expose. `solaar show` confirms the feature is simply absent. Used `input-remapper` (evdev/uinput-level, Wayland-safe) instead — see 2026-08-18 §8 entry. |
 
 ### GPU — **TESTED AND ADOPTED 2026-08-11 on the GTX 1650 laptop.** See the
@@ -505,7 +506,9 @@ mouse button works everywhere:
 
 - **Pure terminals** (WindowsTerminal, conhost, …): clipboard path, no ^c ever sent
   (^c = interrupt there). Needs copy-on-select in that terminal (Windows Terminal:
-  `"copyOnSelect": true`).
+  `"copyOnSelect": true`). **Superseded 2026-10-19:** the selection is now read
+  through UIA, so Windows Terminal needs no setting, and a stale clipboard is no
+  longer read as the selection (§8, 2026-10-19).
 - **VS Code (Code.exe)** is both terminal and editor, disambiguated by **clipboard
   freshness** (`OnClipboardChange` timestamp in the `.ahk`): clipboard changed
   externally < 3s ago → that IS the terminal selection (copyOnSelection fires at
@@ -1098,10 +1101,11 @@ the four fixes contains a site name or a per-site branch, and each one was a
 | Gmail never highlighted | inline mention chip = its own text run, so contiguous `FindText` of the head missed | any link/bold/emoji/mention, any site |
 | claude.ai worked sometimes | Firefox rebuilds the a11y tree on re-render, killing the anchored range | any dynamic/SPA page |
 | Hotmail never highlighted | 7th tab dropped by a hardcoded cap | any site, any tab beyond the cap |
-| terminal reads ~0% | window document interleaves chrome with content, so token order ≠ reading order | structural, see §6 — not fixable |
+| VS Code terminal reads ~0% | window document interleaves chrome with content, so token order ≠ reading order | structural, see §6 — not fixable |
 
 The remaining hard limit is text that never reaches the accessibility tree at
-all (canvas-rendered: Google Docs, the terminal). That is a wall, not a
+all (canvas-rendered: Google Docs, VS Code's terminal — Windows Terminal is
+*not* in this class, §8 2026-10-19). That is a wall, not a
 tuning problem, and no amount of per-site work would move it.
 
 **CORRECTION, 2026-07-22, same night.** The claim above that Hotmail "was a
@@ -4040,7 +4044,8 @@ That is the designed terminal path (read the clipboard, never send Ctrl+C,
 which interrupts there), and install.md lists copy-on-select under
 "Optional extras". But nothing tells the user. Proposed: in terminals, speak
 the clipboard only if it changed recently, as the VS Code path already does
-(`LastClipTick`), and otherwise show a tooltip. Not decided.
+(`LastClipTick`), and otherwise show a tooltip. **Fixed the same day,
+better than proposed: the next entry reads the selection through UIA.**
 
 **A tester incident, now in troubleshooting.md.** `env\Scripts\python.exe`
 was emptied to 0 bytes twice ("This app can't run on your PC", then
@@ -4058,6 +4063,78 @@ python.exe tts_server.py`, and cmd took the `>` as a redirection into
   `python.exe`.
 - **The checklist:** item 0 installs the runtime; item 3 names the error.
 
+### DEPLOYED 2026-10-19: terminal selections are read through UI Automation; Windows Terminal highlights in place
+
+Measured in the same Windows 11 VM as the retest above, the same day.
+Nothing below is a timing number.
+
+**The bug.** In pure terminals Ctrl+Alt+R read the clipboard, which only
+held the selection with copy-on-select on. Windows Terminal ships with it
+off, and then the hotkey **silently read whatever old text was on the
+clipboard**.
+
+**The change (`read_aloud.ahk`).** For the `TERMINALS` processes,
+`FocusedSelection()` asks UIA for the selection:
+`GetFocusedElement` → `GetCurrentPatternAs(TextPattern)` → `GetSelection`
+→ `GetText`, as raw `ComCall` vtable calls (AutoHotkey has no UIA wrapper).
+If UIA gives nothing, the clipboard is used **only if it changed < 10 s
+ago** (`TERM_CLIP_FRESH_MS`); otherwise a "no selection found" tooltip.
+Still no ^c is ever sent there.
+
+**Hotkey checks** (`"copyOnSelect": false`, confirmed in WT's
+`settings.json`), all reported passing by the user:
+
+| Check | Result |
+|---|---|
+| Copy "OLD CLIPBOARD TEXT", wait 15 s, select one WT line, Ctrl+Alt+R | reads the line, not the clipboard |
+| Several lines in WT | all read |
+| `ping -t`, click to clear the selection, Ctrl+Alt+R | tooltip, nothing read, ping keeps running |
+| Notepad selection | read; clipboard restored (unchanged path) |
+| conhost.exe | reported passing; whether via UIA or the tooltip was not recorded |
+
+**The surprise: the highlighter worked in Windows Terminal.** §6 said
+in-place terminal highlighting was impossible, but that was proven only on
+xterm.js (VS Code), whose accessible text sits off-screen. Windows
+Terminal's `TermControl` is a different implementation. Probed with UIA
+(`GetVisibleRanges` → per-line/word `GetBoundingRectangles`), window at
+`x=-7..1267 y=0..678`:
+
+- lines at `x=9`, `y=49, 68, …` (19 px rows), all inside the window;
+- the word `Windows ` at `(9, 49, 72×19)` = 8 cells of 9 px.
+
+**The highlighter log** (`KOKORO_HL_DEBUG` on, 6 reads, utt 40–45):
+
+- every read anchored on `cand[0] … who=WindowsTerminal.exe [TermControl]`,
+  `route=focus`, on try #1, ≤ 0.05 s after the utterance began; 5 by
+  `via=selection`, 1 by `findtext` of the head;
+- `MODE findtext (findtext 8/8, offset 5/8 | 0/8)`: **WT is a `findtext`
+  surface**; `offset` is unreliable there;
+- **the rects are geometrically exact**: every width is the token's length ×
+  9 px (`ItemNotFoundException` 189, `Microsoft` 81, `PowerShell` 90,
+  `SetLocationCommand` 162), consecutive tokens are contiguous with one 9 px
+  separator (`Microsoft` 396+81 → `.` → `PowerShell` 486), and a read that
+  wraps moves to the next row (`y=372` → `y=391`, `x=63`);
+- no `WRONG`, `stuck=0 dead=0`; `rewinds=0` on 5 reads. **One miss:**
+  utt 43, a one-token read of `env\`, logged `found=0 rewinds=1`; not
+  diagnosed.
+
+**Not measured:** scrolling during a read (no read in the log scrolled),
+long prose (the longest read was 10 tokens), conhost/OpenConsole
+highlighting, and the user's visual confirmation for this logged run (the
+first, unlogged run was reported as "the highlighter worked on the
+terminal"). `painted=` was 100% on 5 reads, which by itself proves nothing
+(§8, 2026-08-12); the width arithmetic above is the evidence.
+
+**Docs updated:** §1, §6 (narrowed to xterm.js), §9, the 2026-07-16 and
+2026-07-22 entries, `highlighter.py`'s docstring, `docs/windows.md`,
+`docs/install.md`, `docs/windows-test-checklist.md`, the README, CLAUDE.md.
+
+**`highlighter.py`'s docstring had been garbled since `ca750c3`**
+(2026-08-18): its "The point" paragraph was spliced into fragments ("Ton't
+let one process…", "gets ahe point…"). It is restored word for word from
+`ca750c3~1`. The lines that commit removed elsewhere (overlay, server)
+read as a deliberate rewrite, not splices, on a read-through.
+
 ---
 
 ## 9. Accepted trade-offs (settled — reopen only with new information)
@@ -4065,8 +4142,9 @@ python.exe tts_server.py`, and cmd took the `>` as a redirection into
 - **Bottom caption strip — NARROWLY REOPENED 2026-07-22.** "No bottom
   transcript" (2026-07-17) still stands for everything the in-place
   highlighter can reach. The user has since asked for a caption box **as a
-  fallback for the surfaces it cannot reach** — terminals (§6, proven
-  impossible) and pages where anchoring fails: a few lines of text at the
+  fallback for the surfaces it cannot reach** — VS Code's terminal (§6, proven
+  impossible; Windows Terminal is reachable, §8 2026-10-19) and pages where
+  anchoring fails: a few lines of text at the
   bottom of the screen with the **sentence** being read highlighted. Deferred,
   not started; the requirements and the open design questions are in
   `plan.md` → "Deferred work" → D1. The load-bearing constraint: it must
