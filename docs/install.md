@@ -235,11 +235,11 @@ It keeps your settings in `~/.config/kokoro-read-aloud/` unless you pass
 
 ## Optional extras
 
-**Reading terminal text on Windows.** Turn on copy-on-select:
-`"terminal.integrated.copyOnSelection": true` in VS Code, or
-`"copyOnSelect": true` in Windows Terminal. The hotkey cannot send Ctrl+C in a
-terminal, because there it means interrupt. On Linux this is not needed: the
-hotkey reads the selection itself.
+**Reading terminal text on Windows.** The hotkey cannot send Ctrl+C in a
+terminal, because there it means interrupt. Windows Terminal needs nothing:
+the hotkey asks it for the selection directly. In VS Code's terminal, turn on
+copy-on-select: `"terminal.integrated.copyOnSelection": true`. On Linux this
+is not needed: the hotkey reads the selection itself.
 
 **A mouse button that reads what you drag over.** Hold the button to
 drag-select, and the selection is read when you let go.

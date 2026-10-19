@@ -140,8 +140,9 @@ What setup does, where the files go, and the Windows details are in
 
 The hotkeys work wherever text can be selected, including terminals and
 PDFs. On Linux the selection is read without copying it. On Windows the
-hotkey copies it and then puts your clipboard back; in a terminal there, turn
-on [copy-on-select](docs/install.md#optional-extras).
+hotkey copies it and then puts your clipboard back; Windows Terminal needs no
+setting, and in VS Code's terminal you turn on
+[copy-on-select](docs/install.md#optional-extras).
 
 - **The Omarchy bar icon:**
   - left click opens the panel: GPU / CPU / Off, voice, speed, captions;
