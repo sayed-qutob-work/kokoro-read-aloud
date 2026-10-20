@@ -10,7 +10,7 @@ day, and a game or a local LLM may need that VRAM.
 [`kokoroctl`](#kokoroctl), the command the widget runs, works on any Linux
 install.
 
-<img src="img/omarchy-widget.png" width="385" alt="The Kokoro panel open under its bar icon, reading on the GPU: the sentence being spoken with the read part highlighted, the GPU / CPU / Off switch, Kokoro's share of GPU memory, the live voice and speed, and six action buttons">
+<img src="img/omarchy-widget.png" width="383" alt="The Kokoro panel, ready on the GPU at 67 times realtime: the GPU / CPU / Off switch, Kokoro's share of GPU memory, a voice list set to American female Heart with a star, a reading-speed slider at 2.07x with a play button and the speed this machine keeps up with, the output device, and six action buttons">
 
 ## The icon
 

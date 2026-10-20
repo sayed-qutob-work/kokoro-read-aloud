@@ -3902,9 +3902,9 @@ player, AMD and Intel GPUs. Each gets one line, described from its own README.
 
 **Still to do:**
 - ~~**Record the demo GIF.**~~ Done 2026-10-20, see the entry below.
-- **Re-shoot `docs/img/omarchy-widget.png`.** It still shows the read-only
-  voice/speed lines from before the settings rows, and its alt text describes
-  that.
+- ~~**Re-shoot `docs/img/omarchy-widget.png`.**~~ Done 2026-10-20 by the
+  user: the panel at rest on the GPU, with the voice list and speed slider.
+  Its alt text in `omarchy.md` describes the new shot.
 - **The "latest release" badge shows "no releases"** until v0.2.0 is
   published as a GitHub Release: `v0.1.0-beta` is only a tag.
 
