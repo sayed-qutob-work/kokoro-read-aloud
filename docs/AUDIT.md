@@ -3901,7 +3901,7 @@ Several have what this project lacks: nine languages, a word-highlighting
 player, AMD and Intel GPUs. Each gets one line, described from its own README.
 
 **Still to do:**
-- **Record the demo GIF.**
+- ~~**Record the demo GIF.**~~ Done 2026-10-20, see the entry below.
 - **Re-shoot `docs/img/omarchy-widget.png`.** It still shows the read-only
   voice/speed lines from before the settings rows, and its alt text describes
   that.
@@ -4134,6 +4134,40 @@ terminal"). `painted=` was 100% on 5 reads, which by itself proves nothing
 let one process…", "gets ahe point…"). It is restored word for word from
 `ca750c3~1`. The lines that commit removed elsewhere (overlay, server)
 read as a deliberate rewrite, not splices, on a read-through.
+
+### RECORDED 2026-10-20: the README's demo GIF
+
+**The take.** The user recorded it by hand on Omarchy: a real drag over the
+first two sentences of Wikipedia's "Speech synthesis" article, then the real
+Ctrl+Alt+R, with the caption strip on the Samsung (DP-2). The recording is
+a region of the screen (1452×1126, 60 fps, 11.8 s), so the bar is not in it.
+The README's alt text said the bar icon animates. It now describes what the
+GIF shows.
+
+**The encoding.** The first GIF export painted Wikipedia's near-black
+background `#002400`, a dark green, with heavy dithering. Re-encoded from
+the source MP4 with ffmpeg: 15 fps, 1100 px wide (GitHub shows the README
+at about 880), one palette made from the whole clip
+(`palettegen=stats_mode=full`), `paletteuse=dither=bayer:bayer_scale=5`.
+The background now samples `#0f1216`. 2.0 MB.
+
+**Before that, automating the take failed:**
+- **Selection.** Chromium drags sent over CDP (`Input.dispatchMouseEvent`)
+  stopped extending the selection once the pointer crossed a link. They
+  worked with `a { pointer-events: none }`, then failed again in the next
+  run.
+- **PRIMARY.** A selection made that way never reached Wayland's PRIMARY:
+  `wl-paste --primary` kept the old content. The compositor only accepts a
+  selection backed by a real input event.
+
+  A recording of the hotkey therefore needs a real hand.
+
+**Found on the way, not fixed: on Hyprland, `caption_monitor: "primary"`
+now means DP-3.** `_monitors_from_hyprctl()` promotes the first monitor that
+`hyprctl monitors -j` lists. On this desktop that is now DP-3 (the
+GS27QXA, id 1); the 2026-10-06 entry found DP-2. So the strip opened on the
+other screen. For the take it ran with `KOKORO_CAPTION_MONITOR=DP-2`. A
+better rule (the focused monitor, or the one under the selection) is open.
 
 ---
 

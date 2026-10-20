@@ -16,7 +16,7 @@ and your text never leaves the machine.
 [![Latest release](https://img.shields.io/github/v/release/sayed-qutob-work/kokoro-read-aloud?include_prereleases&sort=semver)](https://github.com/sayed-qutob-work/kokoro-read-aloud/releases)
 [![Platforms: Linux and Windows 11](https://img.shields.io/badge/platforms-Linux%20%7C%20Windows%2011-blue)](#install)
 
-![Text is selected in a web page on Omarchy. After Ctrl+Alt+R, the caption strip at the bottom of the screen shows the sentence being read, and the Kokoro icon in the bar animates while it speaks.](docs/img/demo.gif)
+![Two sentences of a Wikipedia article are selected. After Ctrl+Alt+R, a caption strip appears over the page and underlines each sentence as it is read aloud.](docs/img/demo.gif)
 
 ## Why this one
 
