@@ -39,7 +39,10 @@ affects nothing else.
    - On Linux, `read_aloud.sh` reads the PRIMARY selection, the text you just
      selected, without copying it. Wayland gives a background process no way
      to send Ctrl+C to another app, and this way the clipboard is never
-     touched.
+     touched. On Hyprland a small watcher (`kokoro-selection`) notes which
+     window each selection came from. When it came from another window
+     than the one you are in, the hotkey waits up to 0.3 s for this window's
+     selection, which some apps publish a moment after you let go.
    - On Windows, AutoHotkey copies the selection and then puts your previous
      clipboard back.
 

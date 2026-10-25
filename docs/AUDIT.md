@@ -2541,7 +2541,9 @@ synthetic owners had both read back empty beforehand:
   and `xselection.py` rc=1.
 
 That was the test method, not Hyprland. Don't use either one to diagnose
-PRIMARY here.
+PRIMARY here. **Corrected 2026-10-25:** `wl-copy --primary` now does set
+PRIMARY here (read back by `wl-paste --primary` and seen by a
+`--watch`), and Claude Code relies on it (§8 2026-10-25).
 
 **Strip monitor enumeration.** Neither xrandr nor mutter exists here, so
 the strip fell back to the 4480×1440 union and centred itself across the
@@ -4168,6 +4170,87 @@ now means DP-3.** `_monitors_from_hyprctl()` promotes the first monitor that
 GS27QXA, id 1); the 2026-10-06 entry found DP-2. So the strip opened on the
 other screen. For the take it ran with `KOKORO_CAPTION_MONITOR=DP-2`. A
 better rule (the focused monitor, or the one under the selection) is open.
+
+### DEPLOYED 2026-10-25: a terminal read spoke another window's old selection — the owner wait (Hyprland)
+
+**Symptom (user report).** "The first time in the terminal it reads the last
+thing copied, not the selected text; it happens again each time I come back
+to the terminal." It came back after leaving the PC idle for an hour. The
+terminal is foot 1.28.0. Each one runs Claude Code 2.1.303 (Omarchy,
+Hyprland 0.56.2).
+
+**Mechanism, measured.**
+- **foot is not the cause.** Under `WAYLAND_DEBUG=1`, foot sends
+  `zwp_primary_selection_device_v1.set_selection` in the same millisecond
+  as the button release. The first read got it, `try=0 stale=0`.
+- **Claude Code captures the mouse**, so foot never selects. Claude Code
+  draws its own selection, and after the release its copy-on-select
+  awaits `wl-copy` (the clipboard), then runs `wl-copy --primary`. Found in
+  the binary, and seen by `wl-paste --watch`: CLIPBOARD, CLIPBOARD (its
+  OSC 52 through foot), then PRIMARY, about 14ms apart.
+- **The side-button macro sends Ctrl+Alt+R 10ms after the release**
+  (`wait(10)`), and the read takes 18ms. With the new wait in place,
+  real reads saw Claude Code's PRIMARY land **22ms after the hotkey**, on a
+  warm system (22:03:09 and 22:03:36; see Checks below).
+- **The settle loop misses it.** It retries only when the read matches
+  `last-spoken`. An old PRIMARY from another window that was never spoken
+  passes on try 0.
+
+**Caught in normal use.** At 21:57:01 the side button over text in one Claude
+Code terminal spoke `replies were too slow. The findings are in
+~/voice-latency-report.md…`. That was an earlier selection in the *other*
+Claude Code terminal, never spoken. Omarchy's
+`~/.local/state/omarchy/clipboard-history.json` saved the real selection at
+21:57:01.825, after the read. The same pattern followed every new Claude
+session that day: 14:45:27 then 14:45:29, 16:30:10 (`stale=1`, saved by
+try=1 at +94ms), 19:58:24 then 19:58:27. The delay is longer after idle or
+in a new session. It could not be reproduced on a warm system, where the
+write lands inside the 28ms. **The slow delay itself is not measured**: the
+two fresh-session reproductions were cancelled.
+
+**Fix: the owner wait.**
+- **The watcher.** A new unit, `kokoro-selection`
+  (`linux/kokoro-selection.service.in`, installed and enabled by
+  `install-hyprland.sh`), runs `read_aloud.sh watch`, which execs
+  `wl-paste --primary --watch read_aloud.sh primary-changed`. Data-control,
+  so no focus is taken. On every change it writes `<hyprctl activewindow
+  address> <wl-paste pid>` to `$XDG_RUNTIME_DIR/kokoro-read-aloud/primary-owner`.
+- **The wait.** A selection read compares that window with the focused one.
+  If they differ, it polls the file every 20ms, for up to **300ms**
+  (`KOKORO_OWNER_TRIES`/`_SLEEP`), until the focused window owns PRIMARY,
+  and then runs the settle loop as before. If the timeout passes, it reads
+  what is there, so selecting in the browser and then pressing the hotkey
+  over a terminal still reads the browser text, 300ms late.
+- **Why 300ms.** It is a ceiling, not a delay: a wait ends as soon as the
+  selection lands (22ms in both real waits). The full cost is paid only when
+  nothing new comes, which focus-follows-mouse makes common. The only slow
+  case measured, 16:30:10, landed within 94ms of the hotkey, so 300ms gives
+  about 3× that. The first version had 1.5s, an unmeasured guess, and the
+  user rightly called it too long. `owner never arrived` in the log means a
+  timeout; if those show up with the right text arriving later, raise it.
+  After a timeout whose text is also `last-spoken`, the settle loop adds its
+  own ~320ms, so the worst case is about 650ms.
+- **When it does nothing.** A dead watcher (`kill -0` on the pid) or a
+  non-Hyprland session gives no wait. On GNOME, `watch` exits 0 at once.
+
+**Checks.**
+- **No sound, faked owner** (closed server port, stub `notify-send`):
+  - foreign owner, then a selection 300ms later: waited, arrived at +339ms,
+    read the new text;
+  - foreign owner, nothing new: gave up at +321ms and read the old text
+    (+1554ms with the first 1.5s cap); a selection 100ms late was read at
+    +149ms;
+  - same window: no wait, read at +21ms (18ms before the change; the 3ms
+    is `hyprctl`);
+  - dead watcher pid: logged `watcher 999999 is not running`, no wait.
+- **By hand, 3/3 right:** browser read, a read in another terminal (waited
+  22ms), a Ctrl+Alt+R in the same terminal (no wait). `NRestarts=0`.
+- `uninstall` removes the unit: `kokoro-selection.service` was added to
+  `SERVICES`, and its Description contains "Kokoro read-aloud".
+
+**Not covered.** A Claude Code selection that replaces an *unspoken* one
+in the **same** window, read before the copy lands, still reads the old
+one: the owner is the same window. Not seen yet.
 
 ---
 
