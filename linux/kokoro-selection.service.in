@@ -1,0 +1,19 @@
+[Unit]
+Description=Kokoro read-aloud selection watcher
+Documentation=https://github.com/sayed-qutob-work/kokoro-read-aloud
+# Hyprland only (install-hyprland.sh installs it). Notes which window each
+# PRIMARY change came from, so read_aloud.sh can tell a selection that has
+# not landed yet from an old one left by another window (AUDIT 2026-10-25).
+# wl-paste can watch PRIMARY without taking focus because Hyprland has the
+# data-control protocol; GNOME has not, and there it exits at once.
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=@ROOT@/read_aloud.sh watch
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

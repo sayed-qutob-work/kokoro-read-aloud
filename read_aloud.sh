@@ -21,7 +21,16 @@
 # nothing on a normal read (first try is accepted); only a stale/blank first
 # read pays the ~460ms budget.
 #
-# Usage:  read_aloud.sh [selection|clipboard|stop]
+# THE OWNER WAIT (2026-10-25, Hyprland only) -- see AUDIT.
+# The settle loop only catches a stale PRIMARY that we spoke last. Claude Code
+# draws its own selection and publishes it with wl-copy after the mouse
+# release, which after idle or in a new session lands later than the hotkey;
+# the read then got whatever another window had left in PRIMARY, text never
+# spoken, so it was accepted. `watch` (the kokoro-selection unit) records the
+# focused window at every PRIMARY change; when that is not the window focused
+# now, the selection made here has not landed yet, so wait for it.
+#
+# Usage:  read_aloud.sh [selection|clipboard|stop|watch]
 # Wire to GNOME Settings > Keyboard > View and Customize > Custom Shortcuts.
 
 set -uo pipefail
@@ -34,6 +43,20 @@ LOG="${KOKORO_READ_LOG-${XDG_STATE_HOME:-$HOME/.local/state}/kokoro-read-aloud/r
 STATE="${XDG_RUNTIME_DIR:-/tmp}/kokoro-read-aloud"
 SETTLE_TRIES="${KOKORO_SETTLE_TRIES:-5}"        # incl. the first read
 SETTLE_SLEEP="${KOKORO_SETTLE_SLEEP:-0.06}"
+OWNER_TRIES="${KOKORO_OWNER_TRIES:-15}"         # x OWNER_SLEEP = 300ms at most
+OWNER_SLEEP="${KOKORO_OWNER_SLEEP:-0.02}"
+OWNER="$STATE/primary-owner"                    # "<window address> <watcher pid>"
+
+# Called by `watch` (below) on every PRIMARY change, with the text on stdin:
+# note which window was focused. Browsers republish PRIMARY while you drag,
+# so this does nothing else and logs nothing.
+if [[ ${1:-} == primary-changed ]]; then
+  cat >/dev/null               # drain it, so the owner's write does not fail
+  read -r _ addr _ < <(hyprctl activewindow 2>/dev/null)
+  mkdir -p "$STATE" && printf '%s %s\n' "${addr:-none}" "$PPID" >"$OWNER.$$" &&
+    mv -f "$OWNER.$$" "$OWNER"
+  exit 0
+fi
 
 T0=$(date +%s%3N)
 [[ $LOG != */* || -d ${LOG%/*} ]] || mkdir -p -- "${LOG%/*}"
@@ -86,6 +109,25 @@ digest() { printf '%s' "$1" | sha256sum | cut -c1-12; }
 blank()  { [[ -z ${1//[[:space:]]/} ]]; }
 peek()   { printf '%.48s' "${1//[$'\n\t']/ }"; }   # log excerpt, one line
 
+# If PRIMARY was last set in another window than the focused one, wait for
+# this window's selection to land (THE OWNER WAIT, above). Without a live
+# watcher, or off Hyprland, it does nothing and the read goes ahead as before.
+wait_owner() {
+  local owner pid active t
+  [[ -n ${HYPRLAND_INSTANCE_SIGNATURE:-} && -r $OWNER ]] || return 0
+  read -r owner pid <"$OWNER" || return 0
+  kill -0 "$pid" 2>/dev/null || { log "owner: watcher $pid is not running"; return 0; }
+  read -r _ active _ < <(hyprctl activewindow 2>/dev/null)
+  [[ -n $active && $owner != "$active" ]] || return 0
+  log "owner=$owner active=$active waiting"
+  for (( t = 0; t < OWNER_TRIES; t++ )); do
+    sleep "$OWNER_SLEEP"
+    read -r owner pid <"$OWNER"
+    if [[ $owner == "$active" ]]; then log "owner arrived"; return 0; fi
+  done
+  log "owner never arrived, reading what is there"
+}
+
 mode=${1:-selection}
 log "RUN mode=$mode"
 
@@ -103,9 +145,17 @@ case "$mode" in
     grab clipboard; text=$GRAB_OUT
     log "clipboard via=$GRAB_VIA rc=$GRAB_RC len=${#text}${GRAB_ERR:+ err=$GRAB_ERR} [$(peek "$text")]"
     ;;
+  watch)
+    # The kokoro-selection unit (install-hyprland.sh). Data-control lets
+    # wl-paste watch without taking focus; GNOME has none, so do nothing there.
+    rm -f "$ERRF"
+    [[ -n ${HYPRLAND_INSTANCE_SIGNATURE:-} ]] || { log "watch: not Hyprland, nothing to do"; exit 0; }
+    exec wl-paste --primary --watch "$HERE/read_aloud.sh" primary-changed
+    ;;
   selection)
     last=''
     [[ -r $STATE/last-spoken ]] && last=$(<"$STATE/last-spoken")
+    wait_owner
     text=''
     for (( try = 0; try < SETTLE_TRIES; try++ )); do
       (( try )) && sleep "$SETTLE_SLEEP"

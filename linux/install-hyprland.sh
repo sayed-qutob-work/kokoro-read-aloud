@@ -8,6 +8,10 @@
 # original is backed up first). Needs Hyprland's Lua config. Tested on
 # Omarchy 4.0.4 / Hyprland 0.56.2.
 #
+# Also installs and enables the kokoro-selection unit, the PRIMARY watcher
+# behind read_aloud.sh's owner wait. Only Hyprland can run it, hence here
+# and not in install-systemd.sh.
+#
 # Per-user, no root needed. Re-run after moving the folder: the paths are
 # baked in at install time from wherever this script lives.
 
@@ -59,6 +63,16 @@ if command -v hyprctl >/dev/null && [[ -n ${HYPRLAND_INSTANCE_SIGNATURE:-} ]]; t
     exit 1
   fi
 fi
+
+UNITS="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+mkdir -p "$UNITS"
+sed "s|@ROOT@|$ROOT|g" "$ROOT/linux/kokoro-selection.service.in" > "$UNITS/kokoro-selection.service"
+chmod 644 "$UNITS/kokoro-selection.service"
+echo "installed $UNITS/kokoro-selection.service"
+systemctl --user daemon-reload
+systemctl --user enable kokoro-selection.service
+# restart, not start: one already running may point at an old folder
+systemctl --user restart kokoro-selection.service
 
 echo
 echo "  Ctrl+Alt+R  read the selection"

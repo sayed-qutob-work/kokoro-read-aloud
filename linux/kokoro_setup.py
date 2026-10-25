@@ -524,7 +524,7 @@ def read_progress():
 
 # ---------------------------------------------------------------- uninstall
 
-SERVICES = ("kokoro-server.service", "kokoro-overlay.service")
+SERVICES = ("kokoro-server.service", "kokoro-overlay.service", "kokoro-selection.service")
 
 
 def _rmtree(path):
