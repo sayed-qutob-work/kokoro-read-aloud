@@ -4252,6 +4252,89 @@ two fresh-session reproductions were cancelled.
 in the **same** window, read before the copy lands, still reads the old
 one: the owner is the same window. Not seen yet.
 
+### MEASURED & BUILT 2026-11-01: Paradee-8M, Kokoro distilled to 7.9M parameters — ten times Kokoro's speed on the CPU (step 1 of the CPU-model plan)
+
+**What it is.** [Paradee-8M](https://github.com/sahilmahendrakar/paradee)
+v1.2 (Apache 2.0, one author; v1.2 published 2026-10-28) is Kokoro-82M distilled
+to 7.88M parameters: Kokoro's own code at smaller widths, trained on
+Kokoro's audio, the text side and the decoder each against the frozen
+teacher. Same misaki phonemes, same 178-symbol vocabulary, 24 kHz, at most
+512 tokens per call (510 phonemes, as Kokoro). One int8 ONNX file, 8.5 MB
+(Kokoro: 326 MB), holds its **four voices**: af_heart, am_puck,
+bf_isabella, bm_fable. Its card reports UTMOS 4.40 vs Kokoro 4.52 on
+af_heart, 4.06 vs 4.41 on bf_isabella (the furthest from its teacher), with
+the same WER. Not measured here.
+
+**Listened, by the user, at 2.01x effective:** "almost indistinguishable".
+Four text pairs, Kokoro then Paradee, af_heart, through the server's own
+`time_stretch` at 1.748 over model speed 1.15.
+
+**Speed, measured (Omarchy desktop, i5-12400F, no GPU):** same four texts,
+same misaki phonemes, model speed 1.15, median of 5 runs.
+
+| | Kokoro, torch CPU, 6 threads | Paradee, onnxruntime, 1 thread | Paradee, 6 threads |
+|---|---|---|---|
+| x realtime (median of texts) | **4.6x** | **39.9x** | **79.6x** |
+| 98 chars, 5.7s audio | 1369 ms | 145 ms | 79 ms |
+| 174 chars, 10.4s audio | 2196 ms | 260 ms | 115 ms |
+
+misaki's G2P: 2–3 ms a sentence, warm. So Paradee on the CPU is faster
+than Kokoro on the RTX 4060 Ti (calibrated 44x).
+
+**Word timestamps survive.** The published graph outputs only `waveform`,
+but Kokoro's duration predictor is still in it: `/Clip_output_0` is the
+rounded frames per phoneme (Kokoro's `pred_dur`; Round → Clip, then cast).
+Exposed as a second output, **frames x 600 = samples exactly** on all four
+texts, and Kokoro's own `KPipeline.join_timestamps` gives per-word times
+close to Kokoro's ("brown" 0.525–0.850s vs 0.525–0.887s). The server adds
+the output itself (`_onnx_with_output`: a stdlib protobuf edit, appending
+one ValueInfoProto to GraphProto field 12). Its durations are identical to
+an `onnx.helper` edit of the same file.
+
+**Built (behind `KOKORO_ENGINE=paradee`; the default is unchanged):**
+- `ParadeeEngine` in `tts_server.py`. KPipeline with `model=False` does the
+  G2P and the 510-phoneme split, and onnxruntime synthesizes. A voice
+  Paradee lacks falls back to the one of its kind (`af_` → af_heart,
+  `bf_` → bf_isabella...), logged once per voice. Calibration is saved
+  under its own key, `paradee`, so Kokoro's `cpu` value is untouched.
+  `GET /config` now reports `engine`.
+- `model_files.py` pins Paradee too: revision `ed2934d`, `config.json` and
+  `onnx/paradee_int8.onnx`, with SHA-256, in
+  `~/.local/share/kokoro-read-aloud/models/Paradee-8M-v1.2`. `fetch`
+  and `verify` cover both models (+8.1 MiB); `complete()` is still
+  Kokoro's alone, so `kokoroctl status`'s `installed` means what it did.
+- `onnxruntime==1.31.1` in `pyproject.toml`. The relock added only it,
+  flatbuffers and protobuf, and moved nothing else. The lock has both
+  wheels (manylinux x86_64, win_amd64), and the requirements were
+  re-exported.
+
+**Live, measured: the Paradee server (drop-in in `$XDG_RUNTIME_DIR`, then
+removed).**
+
+| | Kokoro on the GPU (before) | Paradee on the CPU |
+|---|---|---|
+| VRAM | **2222 MiB** (grown since its restart) | **0** (not in `nvidia-smi`) |
+| RSS | 2.4 GB | 1.0 GB (torch and spaCy still imported, by kokoro) |
+| Warm-up | — | 25 ms |
+| START | 64–99 ms (2026-10-07) | **31, 33, 37 ms** |
+| Synthesis | — | **53–72x RT** on 16–238-char chunks |
+| GAP | — | **none**, on 47-, 157- and 655-char reads |
+
+`/now` advanced word by word during a read ("two" → "four" → "five", −1
+between chunks, "eight" → … → "twelve"), so the caption strip's timing
+works.
+
+**Not covered yet.**
+- **cutfix** never fired: every chunk ended at a clause. Whether Paradee
+  lengthens a cut chunk's last word as Kokoro does (§4) is unmeasured.
+- **British voices** were not tried live. Only af_heart was.
+- **The panels** still list 28 voices, which fall back silently.
+- **The highlighter on Windows** was not run against Paradee.
+- **torch is still loaded**, because KPipeline comes from the `kokoro`
+  package. A torch-free install needs the G2P without it (misaki[en]
+  declares torch through spacy-curated-transformers, though
+  `misaki/en.py` never imports it).
+
 ---
 
 ## 9. Accepted trade-offs (settled — reopen only with new information)
