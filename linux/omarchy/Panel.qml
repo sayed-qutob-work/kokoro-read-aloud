@@ -72,15 +72,16 @@ Panel {
     var c = kokoro.config
     if (key === "gpu") {
       return kokoro.lastVramMib > 0
-        ? "Kokoro, all 28 voices. Holds about " + kokoro.gb(kokoro.lastVramMib) + " of VRAM while it is on."
-        : "Kokoro, all 28 voices. Holds the model in VRAM while it is on."
+        ? "Kokoro: all 28 voices, the cleanest sound. Holds about " + kokoro.gb(kokoro.lastVramMib) + " of VRAM while it is on."
+        : "Kokoro: all 28 voices, the cleanest sound. Holds the model in VRAM while it is on."
     }
     if (key === "cpu") {
       var rt = c && c.device === "cpu" && c.measured_rt && c.rt_known !== false
         ? Number(c.measured_rt).toFixed(0) + "× realtime" : ""
       // Paradee-8M, measured 2026-11-01 on the i5-12400F: START 31-37ms
       // (the GPU's was 64-99ms), 53-72x realtime, no gaps
-      return "No VRAM at all. Paradee, a small copy of Kokoro: just as quick, four voices"
+      // and a hiss on in-ear monitors, measured as noisier voicing above 4 kHz (2026-11-01)
+      return "No VRAM at all. Paradee, a small copy of Kokoro: just as quick, four voices, a slight hiss on headphones"
         + (rt ? ". Synthesizing at " + rt + "." : ".")
     }
     return "VRAM and RAM are free. Hotkeys stay quiet until it is back on."
@@ -366,15 +367,15 @@ Panel {
             // (2026-10-07), and Paradee on the i5-12400F (29-38ms).
             readonly property var choices: kokoro.hasGpu ? [
               { variant: "cpu", icon: 0xF0EE0, label: "CPU build · about 0.2 GB",         // md-cpu_64_bit
-                note: "Paradee, a small copy of Kokoro, with four voices: speech starts in under "
-                  + "0.1 s and it never uses the GPU. About 0.6 GB on disk." },
+                note: "Paradee, a small copy of Kokoro: four voices and a slight hiss on headphones. "
+                  + "Speech starts in under 0.1 s, and it never uses the GPU. About 0.6 GB on disk." },
               { variant: "cuda", icon: 0xF08AE, label: "GPU build · about 4 GB",          // md-expansion_card
-                note: "Adds Kokoro on the GPU, with all 28 voices. It switches to Paradee on the "
-                  + "CPU when a game needs the VRAM. About 7 GB on disk." }
+                note: "Adds Kokoro on the GPU: all 28 voices and a cleaner sound. It switches to "
+                  + "Paradee on the CPU when a game needs the VRAM. About 7 GB on disk." }
             ] : [
               { variant: "cpu", icon: 0xF01DA, label: "Set up · about 0.2 GB",            // md-download
-                note: "Paradee, a small copy of Kokoro, with four voices: speech starts in "
-                  + "under 0.1 s. About 0.6 GB on disk." }
+                note: "Paradee, a small copy of Kokoro: four voices and a slight hiss on headphones. "
+                  + "Speech starts in under 0.1 s. About 0.6 GB on disk." }
             ]
 
             Column {

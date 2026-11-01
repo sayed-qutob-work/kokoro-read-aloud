@@ -112,6 +112,7 @@ writes to that folder. It needs no root; only the system packages above do.
 | Download | about 4 GB | about 0.2 GB |
 | On disk | about 7 GB | about 0.6 GB |
 | Voice model | Kokoro, 28 voices | Paradee-8M, 4 voices |
+| Sound | Kokoro | A slight hiss on headphones |
 | First sound after the hotkey | about 0.1 s | under 0.1 s on an i5-12400F |
 
 Most of the time is the download. A fresh NVIDIA install took 1 min 46 s on a

@@ -4267,7 +4267,9 @@ the same WER. Not measured here.
 
 **Listened, by the user, at 2.01x effective:** "almost indistinguishable".
 Four text pairs, Kokoro then Paradee, af_heart, through the server's own
-`time_stretch` at 1.748 over model speed 1.15.
+`time_stretch` at 1.748 over model speed 1.15. **That was through speakers.
+On IEMs Paradee is clearly worse: see the correction entry below
+("Paradee sounds worse on IEMs").**
 
 **Speed, measured (Omarchy desktop, i5-12400F, no GPU):** same four texts,
 same misaki phonemes, model speed 1.15, median of 5 runs.
@@ -4520,6 +4522,47 @@ The GPU build is described as being for Kokoro's 28 voices, not speed.
 platform table say the new CPU build is untested there, instead of letting
 the old date cover it. The Omarchy row adds what was run today: the CPU
 build's steps 1–4 and live reads, not a full `kokoroctl setup --cpu`.
+
+---
+
+### CORRECTED 2026-11-01: Paradee sounds worse on IEMs — a hiss on the voice, measured as noisier voicing above 4 kHz
+
+**The user, on IEMs:** "When I used my IEMs it is obviously worse, not too
+bad, but saying it is the same is not accurate. It has a hissing kind of
+sound and the quality is worse overall." Through speakers the difference
+was audible but small. **Their verdict:** still the right choice on the CPU
+(delay × quality), and that decision stands. **Judge voice quality on IEMs**,
+not speakers.
+
+**Measured** with Kokoro and Paradee on the same phonemes (af_heart, speed
+1.0) and four texts, one of them full of sibilants. Kokoro was run on the
+CPU with the GPU hidden.
+
+| Measure | Kokoro | Paradee | Reading |
+|---|---|---|---|
+| Energy 4–8 kHz / 8–12 kHz, share of total | −18.7 / −17.5 dB | −18.5 / −17.7 dB | **same**: not more treble overall |
+| Floor in the leading silence | −91.4 dBFS | −92.2 dBFS | **same**: no hiss in the silences |
+| HNR of voiced frames, median | 8.6 dB | 8.6 dB | same (low frequencies dominate it) |
+| **Spectral flatness 4–8 kHz in voiced frames**, median per text | 0.089 0.077 0.104 0.069 | **0.117 0.123 0.127 0.138** | **noisier on every text** |
+| Spectral flatness 2–4 kHz, voiced | 0.171 0.145 0.168 0.199 | 0.239 0.186 0.158 0.252 | noisier on 3 of 4 |
+
+So the hiss rides on voiced sound: the upper harmonics are partly replaced by
+noise, in a band IEMs reproduce clearly and speakers soften. That fits
+Paradee's v1.1+ decoder head, "sine waves at the pitch and its multiples,
+plus shaped noise for everything else", but the cause is not established. Its
+card's buzz measure (2–4 kHz) and UTMOS do not capture this. Flatness is a
+proxy, not a perceptual score.
+
+**Docs corrected:** README, `how-it-works.md`, `omarchy.md`, `install.md`, and
+the widget's hints and setup notes. The GPU build is for "28 voices and a
+cleaner sound", and Paradee has "a slight hiss on headphones".
+
+**Upstream:** the duration output became
+[sahilmahendrakar/paradee#8](https://github.com/sahilmahendrakar/paradee/pull/8),
+`with_timestamps()` in Paradee's Python API. The loader adds `/Clip_output_0`
+as an output. Checked on all six released files (int8 and fp32 of 1.0, 1.1
+and 1.2), every voice: frames × 600 = samples, and word times identical to
+Kokoro's `join_timestamps`.
 
 ---
 

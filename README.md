@@ -50,9 +50,10 @@ The details behind each of these are in
 - **Download size.** The CPU build downloads about 0.2 GB and takes about
   0.6 GB on disk. The GPU build, which adds Kokoro's 28 voices, downloads
   about 4 GB and takes about 7 GB.
-- **The GPU build needs NVIDIA.** It is for Kokoro's 28 voices, not for speed:
-  on an i5-12400F the CPU build starts speaking as fast as the GPU does
-  ([measurements](docs/how-it-works.md#cpu-or-gpu)).
+- **The GPU build needs NVIDIA.** It is for Kokoro's 28 voices and its cleaner
+  sound, not for speed. Paradee has an audible hiss on headphones and sounds a
+  little worse overall, but on an i5-12400F it starts speaking as fast as the
+  GPU does ([measurements](docs/how-it-works.md#cpu-or-gpu)).
 - **No in-place highlighting on Linux,** only the caption strip.
 
 | Platform | Tested |

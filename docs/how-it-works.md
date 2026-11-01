@@ -96,6 +96,11 @@ playback):
   Kokoro distilled to 7.9M parameters, about ten times as fast on the same
   CPU, with four of Kokoro's voices. The Kokoro rows on a CPU are from before
   that. Paradee has not been measured on the laptop yet.
+- **Paradee sounds worse than Kokoro.** On in-ear monitors its voice has an
+  audible hiss, and the overall quality is lower. Through speakers the
+  difference is hard to hear. Measured on four texts, its voiced sound is
+  noisier above 4 kHz: spectral flatness 0.12–0.14, against Kokoro's
+  0.07–0.10. In the silences the two are the same.
 
 - **Linux is slower than Windows on the same laptop.** The cause is not known
   yet, but both are well above break-even.
