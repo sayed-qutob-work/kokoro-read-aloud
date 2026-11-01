@@ -74,8 +74,9 @@ Measured on an RTX 4060 Ti with an i5-12400F (CPU row: 2026-11-01):
   again.
 - **A hotkey pressed while Kokoro is off** shows a notification and does not
   start the model, so a game keeps its VRAM.
-- **On the CPU build** (chosen at setup), GPU mode is greyed out: that build
-  of PyTorch cannot use the GPU. `kokoroctl setup --cuda` switches builds.
+- **On the CPU build** (the default at setup), GPU mode is greyed out: that
+  build has Paradee alone, no Kokoro or PyTorch. `kokoroctl setup --cuda`
+  switches builds.
 
 ## kokoroctl
 

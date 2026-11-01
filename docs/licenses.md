@@ -13,10 +13,10 @@ says which model this uses, not who made it.
 | [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M), weights and voices | Apache-2.0 | The voice | Hugging Face, during setup (on Windows, on the first run) |
 | [Paradee-8M](https://huggingface.co/sahilmahendrakar/Paradee-8M-v1.2), Kokoro distilled by sahilmahendrakar | Apache-2.0 | The voice on the CPU | Hugging Face, during setup (on Windows, `model_files.py fetch`) |
 | [ONNX Runtime](https://onnxruntime.ai) | MIT | Running Paradee-8M | PyPI |
-| [kokoro](https://github.com/hexgrad/kokoro) and [misaki](https://github.com/hexgrad/misaki), by hexgrad | Apache-2.0 | Running the model, turning text into phonemes | PyPI |
+| [kokoro](https://github.com/hexgrad/kokoro) and [misaki](https://github.com/hexgrad/misaki), by hexgrad | Apache-2.0 | Running Kokoro (GPU build), turning text into phonemes. `english_g2p.py` adapts part of kokoro's `pipeline.py`, with its notice | PyPI |
 | [eSpeak NG](https://github.com/espeak-ng/espeak-ng) | GPL-3.0 | Phonemes for words misaki's dictionary doesn't know | PyPI, as a library inside `espeakng-loader`. misaki always loads that copy, never a system install |
 | [phonemizer-fork](https://pypi.org/project/phonemizer-fork/) | GPL-3.0+ | misaki's interface to eSpeak NG | PyPI |
-| [PyTorch](https://pytorch.org) | BSD-3-Clause | Running the model | PyTorch's own index, download.pytorch.org |
+| [PyTorch](https://pytorch.org) | BSD-3-Clause | Running Kokoro, GPU build only | PyTorch's own index, download.pytorch.org |
 | NVIDIA CUDA libraries | NVIDIA proprietary | GPU support, CUDA installs only | PyPI, pulled in by the CUDA build of PyTorch |
 | [spaCy](https://spacy.io) and `en_core_web_sm` | MIT | English text analysis inside misaki | spaCy from PyPI, `en_core_web_sm` from spaCy's GitHub releases, pinned with its hash |
 | [num2words](https://github.com/savoirfairelinux/num2words) | LGPL-2.1 | Reading numbers as words | PyPI |

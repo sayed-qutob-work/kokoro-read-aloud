@@ -4,6 +4,7 @@
 - [Reads stall or stutter partway through](#reads-stall-or-stutter-partway-through)
 - [The hotkey says "Kokoro is off" or "still loading"](#the-hotkey-says-kokoro-is-off-or-still-loading)
 - ["No matching distribution found for kokoro"](#no-matching-distribution-found-for-kokoro)
+- [The server stops at "Error processing file ... phontab"](#the-server-stops-at-error-processing-file--phontab)
 - [`WinError 126` loading `c10.dll` (Windows)](#winerror-126-loading-c10dll)
 - ["This app can't run on your PC" for `python.exe` (Windows)](#this-app-cant-run-on-your-pc-for-pythonexe)
 - [Changes to the server or the widget don't show up](#changes-to-the-server-or-the-widget-dont-show-up)
@@ -57,6 +58,23 @@ of `Requires-Python`, which left only the 0.7.x line. Rebuild the venv on
 Don't relax the pin to a 0.7.x `kokoro`. That is a different model and voice
 API, and every number in [AUDIT.md](AUDIT.md) was measured on the versions
 pinned in `uv.lock`.
+
+## The server stops at "Error processing file ... phontab"
+
+```text
+Error processing file '/home/runner/work/espeakng-loader/espeakng-loader/espeak-ng/_dynamic/share/espeak-ng-data/phontab': No such file or directory.
+```
+
+The server ends right after this line. eSpeak NG reads the words misaki's
+dictionary does not know, and its data folder is inside the venv, at
+`venv/lib/python3.12/site-packages/espeakng_loader/espeak-ng-data`. When the
+full path to that folder is 160 characters or longer, eSpeak NG ignores it
+and looks in the folder it was built in, which does not exist on your
+machine. Measured on Linux: 159 characters works, 160 fails.
+
+With setup's folders that path is your home folder plus about 96
+characters, so this needs a home folder (or `XDG_DATA_HOME`) of about 60
+characters or more. Install under a shorter one.
 
 ## `WinError 126` loading `c10.dll`
 

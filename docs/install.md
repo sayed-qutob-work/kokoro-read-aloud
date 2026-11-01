@@ -29,8 +29,8 @@ shell, and asks you to confirm. With `--enable` it then asks which bar section
 to use. A Kokoro icon appears there, as five dim dots.
 
 Click it, and the panel offers setup:
-- **GPU build,** about 4 GB, the default on a machine with an NVIDIA GPU;
-- **CPU build,** about 0.7 GB.
+- **CPU build,** about 0.2 GB, the default: Paradee-8M, four voices;
+- **GPU build,** about 4 GB, NVIDIA only: adds Kokoro and its 28 voices.
 
 The panel shows each step, and a notification says when Kokoro is ready. From
 a terminal, run this instead:
@@ -92,12 +92,13 @@ writes to that folder. It needs no root; only the system packages above do.
 2. **Gets uv.** It uses yours if it is 0.12.10 or newer. Otherwise it
    downloads uv 0.12.24 and checks it against a pinned SHA-256.
 3. **Installs Python 3.12 and the server's packages** at the versions and
-   hashes recorded in `uv.lock`. It picks the GPU (CUDA) build when
-   `nvidia-smi` finds a GPU, and the CPU build otherwise. `--cuda` and `--cpu`
-   override that.
-4. **Downloads the voice model:** 326 MiB from Hugging Face, every file
-   checked against its pinned SHA-256. From then on the server loads it from
-   disk and makes no network connection.
+   hashes recorded in `uv.lock`. A new install gets the CPU build, which has
+   no PyTorch; `--cuda` asks for the GPU build. Run again, it keeps the build
+   already installed, so a repair never swaps it.
+4. **Downloads the voice model** from Hugging Face, every file checked against
+   its pinned SHA-256: Paradee-8M's 8 MiB, and for the GPU build Kokoro's
+   326 MiB too. From then on the server loads them from disk and makes no
+   network connection.
 5. **Installs the rest:**
    - autostart for the server;
    - the hotkeys, on Hyprland;
@@ -108,8 +109,8 @@ writes to that folder. It needs no root; only the system packages above do.
 
 | | GPU build | CPU build |
 |---|---|---|
-| Download | about 4 GB | about 0.7 GB |
-| On disk | about 7 GB | about 2 GB |
+| Download | about 4 GB | about 0.2 GB |
+| On disk | about 7 GB | about 0.6 GB |
 | Voice model | Kokoro, 28 voices | Paradee-8M, 4 voices |
 | First sound after the hotkey | about 0.1 s | under 0.1 s on an i5-12400F |
 
@@ -142,10 +143,11 @@ You need:
 - **[AutoHotkey v2](https://www.autohotkey.com/),** per-user or
   machine-wide. The hotkeys come from it.
 - **The [Visual C++ runtime](https://aka.ms/vs/17/release/vc_redist.x64.exe)
-  (x64),** or `winget install Microsoft.VCRedist.2015+.x64`. torch's DLLs
-  need it. Many apps and games install it, so most PCs have it, but a fresh
-  Windows does not: without it the server stops at `import torch` with
-  `WinError 126` (tested 2026-10-19, on a fresh Windows 11).
+  (x64),** or `winget install Microsoft.VCRedist.2015+.x64`. The GPU build's
+  torch DLLs need it. Many apps and games install it, so most PCs have it,
+  but a fresh Windows does not: without it the server stops at `import torch`
+  with `WinError 126` (tested 2026-10-19, on a fresh Windows 11). The CPU
+  build has no torch; whether it runs without the runtime is not tested.
 
 You don't need to install eSpeak NG: `espeakng-loader`, pulled in by
 `misaki[en]`, ships the DLL and its data inside the venv.
@@ -186,9 +188,9 @@ Things to know:
   `env\Scripts\python.exe model_files.py fetch` once. The server then loads
   the pinned files from `models\` and makes no network connection. Tested
   on Linux, and on Windows on 2026-10-19.
-- **Without a GPU,** the server reads with Paradee-8M once `model_files.py
-  fetch` has downloaded it (8 MB), and with Kokoro on the CPU until then.
-  Paradee has not been tested on Windows yet.
+- **`requirements.txt` is the CPU build:** Paradee-8M alone, with no torch.
+  The server downloads Paradee's 8 MB on its first start if `model_files.py
+  fetch` has not. Paradee has not been tested on Windows yet.
 - **PowerShell traps:** use `py -3.12 -m venv`, not `python -m venv`, and
   `env\Scripts\python.exe -m pip`, never a bare `pip`.
 

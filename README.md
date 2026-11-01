@@ -40,8 +40,9 @@ The details behind each of these are in
 - **English only.** There are 28 American and British voices, four on the CPU. Other languages
   in the Latin alphabet get English pronunciation, and other scripts and emoji
   are skipped.
-- **A large download.** The GPU build downloads about 4 GB and takes about
-  7 GB on disk. The CPU build downloads about 0.7 GB and takes about 2 GB.
+- **Download size.** The CPU build downloads about 0.2 GB and takes about
+  0.6 GB on disk. The GPU build, which adds Kokoro's 28 voices, downloads
+  about 4 GB and takes about 7 GB.
 - **The GPU build needs NVIDIA.** Elsewhere the CPU build runs
   [Paradee-8M](https://github.com/sahilmahendrakar/paradee), a small copy of
   Kokoro with four voices. On an i5-12400F it starts speaking as fast as the
@@ -70,7 +71,7 @@ omarchy plugin add https://github.com/sayed-qutob-work/kokoro-read-aloud --enabl
 1. Omarchy asks you to confirm, because plugins run unsandboxed in the shell.
    Then it asks which bar section to use.
 2. A Kokoro icon appears there, as five dim dots. Click it, and pick a build:
-   **GPU** (about 4 GB, the default on NVIDIA) or **CPU** (about 0.7 GB).
+   **CPU** (about 0.2 GB, the default) or **GPU** (about 4 GB, NVIDIA only).
 3. A notification says when Kokoro is ready. Ctrl+Alt+R, T and S are bound
    for you.
 
@@ -106,7 +107,7 @@ what happens.
 You need [Python 3.12](https://www.python.org/downloads/) (exactly 3.12),
 [AutoHotkey v2](https://www.autohotkey.com/) and the
 [Visual C++ runtime](https://aka.ms/vs/17/release/vc_redist.x64.exe), which
-torch needs and a fresh Windows lacks
+the GPU build's torch needs and a fresh Windows lacks
 (`winget install Microsoft.VCRedist.2015+.x64`).
 
 In PowerShell or Command Prompt:
