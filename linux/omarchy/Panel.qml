@@ -72,15 +72,15 @@ Panel {
     var c = kokoro.config
     if (key === "gpu") {
       return kokoro.lastVramMib > 0
-        ? "Fastest. Holds about " + kokoro.gb(kokoro.lastVramMib) + " of VRAM while it is on."
-        : "Fastest. Holds the model in VRAM while it is on."
+        ? "Kokoro, all 28 voices. Holds about " + kokoro.gb(kokoro.lastVramMib) + " of VRAM while it is on."
+        : "Kokoro, all 28 voices. Holds the model in VRAM while it is on."
     }
     if (key === "cpu") {
       var rt = c && c.device === "cpu" && c.measured_rt && c.rt_known !== false
-        ? Number(c.measured_rt).toFixed(1) + "× realtime" : ""
-      // measured 2026-10-07: START ~350-500ms vs <100ms on the GPU, and one
-      // 380ms gap after a one-clause opening sentence
-      return "No VRAM at all. Slower to start, and a short first sentence can leave a brief pause"
+        ? Number(c.measured_rt).toFixed(0) + "× realtime" : ""
+      // Paradee-8M, measured 2026-11-01 on the i5-12400F: START 31-37ms
+      // (the GPU's was 64-99ms), 53-72x realtime, no gaps
+      return "No VRAM at all. Paradee, a small copy of Kokoro: just as quick, four voices"
         + (rt ? ". Synthesizing at " + rt + "." : ".")
     }
     return "VRAM and RAM are free. Hotkeys stay quiet until it is back on."
@@ -362,19 +362,20 @@ Panel {
             // The builds setup can install, the default first. Measured
             // 2026-10-18: a fresh GPU install received 3.8 GiB (4.1 GB); the
             // CPU build's files add up to 0.74 GB by the same count. First
-            // sound and speed are the RTX 4060 Ti / i5-12400F rows of AUDIT
-            // §8 (2026-10-07); the GTX 1650 laptop's CPU managed only 1.77x.
+            // sound is the RTX 4060 Ti row of AUDIT §8 (2026-10-07) and the
+            // i5-12400F's with Paradee (2026-11-01, 31-37ms). On the CPU the
+            // server reads with Paradee-8M, which has four voices.
             readonly property var choices: kokoro.hasGpu ? [
               { variant: "cuda", icon: 0xF08AE, label: "GPU build · about 4 GB",          // md-expansion_card
-                note: "Fastest: speech starts in about 0.1 s. It can still switch to the CPU "
-                  + "from this panel when a game needs the VRAM. About 7 GB on disk." },
+                note: "All 28 voices: speech starts in about 0.1 s. It can still switch to the CPU, "
+                  + "with four voices, when a game needs the VRAM. About 7 GB on disk." },
               { variant: "cpu", icon: 0xF0EE0, label: "CPU build · about 0.7 GB",         // md-cpu_64_bit
-                note: "Smaller and slower: speech starts in about 0.4 s, and a slower CPU may "
-                  + "need a lower reading speed. It cannot use the GPU. About 2 GB on disk." }
+                note: "Smaller, with four voices: speech starts in under 0.1 s. "
+                  + "It cannot use the GPU. About 2 GB on disk." }
             ] : [
               { variant: "cpu", icon: 0xF01DA, label: "Set up · about 0.7 GB",            // md-download
-                note: "No NVIDIA GPU was found, so it installs the CPU build: speech starts "
-                  + "in about 0.4 s. About 2 GB on disk." }
+                note: "No NVIDIA GPU was found, so it installs the CPU build, with four voices: "
+                  + "speech starts in under 0.1 s. About 2 GB on disk." }
             ]
 
             Column {

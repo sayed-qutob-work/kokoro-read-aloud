@@ -27,12 +27,13 @@ Usage:  kokoroctl <command>
                        --purge also deletes your settings
 
 Why the modes are process lifecycles (AUDIT 2026-10-07): on this desktop
-the server holds ~1.6 GB of VRAM and ~3 GB of RAM all day, and a game or a
-local LLM wants that VRAM back. A CUDA context lives as long as its process,
-so the only way to give the memory back is to end the process. CPU mode
-restarts it with CUDA_VISIBLE_DEVICES empty: no VRAM at all, and the
-i5-12400F still synthesizes at 4.4-5.2x realtime -- above the 1.8x
-playback speed, so reads keep working while the GPU is busy.
+the server holds ~1.6-2.2 GB of VRAM and ~2.4 GB of RAM all day, and a game
+or a local LLM wants that VRAM back. A CUDA context lives as long as its
+process, so the only way to give the memory back is to end the process.
+CPU mode restarts it with CUDA_VISIBLE_DEVICES empty, and a server that
+sees no GPU reads with Paradee-8M, Kokoro distilled to 7.9M parameters: no
+VRAM, ~1 GB of RAM, 53-72x realtime and the first sound in ~35ms on the
+i5-12400F, with four voices instead of 28 (AUDIT 2026-11-01).
 
 CPU mode is a systemd drop-in in $XDG_RUNTIME_DIR, which is wiped at
 logout: the next login is back on the GPU without anyone remembering to
@@ -289,7 +290,8 @@ def write_dropin(cpu):
         with open(DROPIN, "w", encoding="utf-8") as f:
             f.write("# Written by kokoroctl: CPU mode, for this login only\n"
                     "# ($XDG_RUNTIME_DIR is wiped at logout). An empty\n"
-                    "# CUDA_VISIBLE_DEVICES hides every GPU from torch.\n"
+                    "# CUDA_VISIBLE_DEVICES hides every GPU from torch, and\n"
+                    "# without one the server reads with Paradee-8M.\n"
                     "[Service]\nEnvironment=CUDA_VISIBLE_DEVICES=\n")
     else:
         os.remove(DROPIN)
@@ -399,10 +401,12 @@ def settings_json(live=None):
     rt = live.get("measured_rt") if live and live.get("rt_known") else None
     return {
         "server": bool(live),
-        "voice": src.get("voice"),
+        # the voice being read: on the CPU, Paradee reads a voice it lacks
+        # with the one of its kind, while settings.json keeps the choice
+        "voice": (live.get("reading_voice") if live else None) or src.get("voice"),
         "speed": speed,
         "speed_min": ks.SPEED_MIN, "speed_max": ks.SPEED_MAX, "speed_step": ks.SPEED_STEP,
-        "voices": ks.voice_catalog(),
+        "voices": ks.voice_catalog(live.get("voices") if live else None),
         "sustain": {"rt": rt,
                     "ceiling": round(ks.sustain_ceiling(rt, model), 1) if rt else None,
                     "level": ks.sustain_level(speed, model, rt)},

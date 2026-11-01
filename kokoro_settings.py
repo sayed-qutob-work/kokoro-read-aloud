@@ -90,11 +90,15 @@ SAMPLE = ("This is how the reading voice sounds at the speed you just chose. "
           "than this machine can synthesize.")
 
 
-def voice_catalog():
+def voice_catalog(available=None):
     """The voices for a picker: grouped by accent and gender in VOICES
-    order, with a display label and the recommended mark."""
+    order, with a display label and the recommended mark. `available` (the
+    server's GET /config `voices`) narrows it to what the running engine
+    reads: on the CPU that is Paradee-8M, with four (AUDIT 2026-11-01)."""
     out = []
     for name, accent, gender, grade in _VOICES:
+        if available is not None and name not in available:
+            continue
         rec = grade in RECOMMENDED_GRADES
         best_male = gender == "male" and grade == BEST_MALE_GRADE and not rec
         out.append({"name": name, "group": f"{accent} {gender}",

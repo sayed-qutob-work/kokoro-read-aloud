@@ -355,7 +355,7 @@ class App:
         if not cfg:
             return "Server: NOT RUNNING", None
         return (f"Server: running  -  {cfg.get('effective_speed', '?')}x, "
-                f"{cfg.get('voice', '?')}",
+                f"{cfg.get('reading_voice') or cfg.get('voice', '?')}",
                 f"Output: {cfg.get('output_device_name') or '?'}")
 
     def stop_speaking(self):
@@ -389,13 +389,11 @@ class App:
         if save:
             save_settings(cfg)
 
-    def measured(self):
-        """(rt, density, ok) from the server. rt is the number that decides
-        whether a chosen speed is physically sustainable on this machine."""
-        d = api("/config", timeout=1.0)
-        if not d:
-            return None, None, False
-        return d.get("measured_rt"), d.get("measured_density"), True
+    def live_config(self):
+        """GET /config, or None when the server is not running. Its
+        measured_rt decides whether a chosen speed is physically sustainable
+        on this machine; its voices are what the running engine reads."""
+        return api("/config", timeout=1.0)
 
     # ---- the panel
     def _open_settings(self):
@@ -446,10 +444,15 @@ class App:
         # --- voice
         r = next(rows)
         ttk.Label(frm, text="Voice").grid(row=r, column=0, sticky="w", **pad)
-        self.v_voice = tk.StringVar(value=self.cfg["voice"])
-        ttk.Combobox(frm, textvariable=self.v_voice, values=VOICES,
-                     state="readonly", width=18
-                     ).grid(row=r, column=1, columnspan=2, sticky="e", **pad)
+        # The choice that is saved. The box shows the voice being read,
+        # which differs on the CPU when Paradee lacks the chosen one.
+        self._voice = self.cfg["voice"]
+        self.v_voice = tk.StringVar(value=self._voice)
+        self.cmb_voice = ttk.Combobox(frm, textvariable=self.v_voice,
+                                      values=VOICES, state="readonly", width=18)
+        self.cmb_voice.grid(row=r, column=1, columnspan=2, sticky="e", **pad)
+        self.cmb_voice.bind("<<ComboboxSelected>>",
+                            lambda _e: setattr(self, "_voice", self.v_voice.get()))
 
         # --- output device
         r = next(rows)
@@ -611,7 +614,7 @@ class App:
 
     def _apply_live(self):
         model, playback = self._split(self.v_speed.get(), self.v_model.get())
-        cfg = {"voice": self.v_voice.get(), "model_speed": round(model, 3),
+        cfg = {"voice": self._voice, "model_speed": round(model, 3),
                "playback_speed": round(playback, 3),
                "pause": round(self.v_pause.get(), 3),
                "first_chunk_audio": round(self.v_first.get(), 2),
@@ -735,15 +738,18 @@ class App:
         goes on -- which is exactly why this repeats rather than sampling
         once when the panel opens."""
         def work():
-            rt, _dens, ok = self.measured()
-            self.ui(lambda: self._sustain_ready(rt, ok))
+            live = self.live_config()
+            self.ui(lambda: self._live_ready(live))
         threading.Thread(target=work, daemon=True).start()
         if self.win is not None:
             self.win.after(4000, self._refresh_sustain)
 
-    def _sustain_ready(self, rt, ok):
+    def _live_ready(self, live):
         if self.win is None:
             return
+        self._show_voices(live)
+        ok = live is not None
+        rt = live.get("measured_rt") if ok else None
         self._rt = rt if ok else None
         if not ok or not rt:
             self.lbl_sustain.config(text="Server not running - cannot measure.")
@@ -753,6 +759,17 @@ class App:
                 text=(f"This machine synthesizes at {rt:.2f}x realtime, so it "
                       f"sustains about {ceiling:.2f}x reading speed."))
         self._check_sustain()
+
+    def _show_voices(self, live):
+        """Offer only the voices the running engine reads: four on the CPU
+        (Paradee-8M), all 28 on the GPU or with the server off."""
+        voices = live.get("voices") if live else None
+        names = [v for v in VOICES if v in voices] if voices else VOICES
+        self.cmb_voice.config(values=names)
+        if self._voice in names:
+            self.v_voice.set(self._voice)
+        else:
+            self.v_voice.set(live.get("reading_voice") or names[0])
 
     def _check_sustain(self):
         rt = getattr(self, "_rt", None)
@@ -802,6 +819,7 @@ class App:
         self.v_model.set(DEFAULTS["model_speed"])
         self.v_pause.set(DEFAULTS["pause"])
         self.v_first.set(DEFAULTS["first_chunk_audio"])
+        self._voice = DEFAULTS["voice"]
         self.v_voice.set(DEFAULTS["voice"])
         self.v_device.set(DEVICE_DEFAULT_LABEL)
         self.v_cap_style.set(DEFAULTS["caption_style"])
