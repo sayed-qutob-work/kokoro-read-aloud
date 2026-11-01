@@ -1,11 +1,11 @@
 # The server's dependencies, for uv. Install one variant:
 #
-#   uv sync --extra cuda    NVIDIA GPU (torch built for CUDA 12.6)
-#   uv sync --extra cpu     everything else
+#   uv sync --extra cpu     Paradee-8M on the CPU: no torch, no kokoro
+#   uv sync --extra cuda    adds Kokoro on an NVIDIA GPU (torch for CUDA 12.6)
 #
-# Always pass one. kokoro itself requires torch, so a bare `uv sync` still
-# installs one: an untested build from PyPI. uv cannot point that case at
-# the CPU index too ("conflicting indexes for package torch").
+# The cpu extra is empty: a bare `uv sync` installs the same set. Setup
+# always names one. The CPU build reads with Paradee alone, through
+# english_g2p, so it needs neither kokoro nor torch (AUDIT 2026-11-01).
 #
 # uv.lock pins every package, with hashes, to the set measured in
 # docs/AUDIT.md. Only the server uses this environment: the settings panel
@@ -22,10 +22,15 @@ license = "MIT"
 # kokoro 0.9.4 needs >=3.10,<3.13; every measurement is on 3.12.
 requires-python = "==3.12.*"
 dependencies = [
-    "kokoro==0.9.4",
-    # kokoro asks for misaki[en]>=0.9.4 with no upper bound; the G2P is
-    # what turns text into speech, so it is pinned to what was measured.
-    "misaki[en]==0.9.4",
+    # The G2P, which turns text into the phonemes both models read, pinned
+    # to what was measured. Not misaki[en]: that extra adds
+    # spacy-curated-transformers, which needs torch, for a transformer
+    # model the server never loads (trf=False). The rest of the extra:
+    "misaki==0.9.4",
+    "num2words==0.5.14",
+    "spacy==3.8.16",
+    "phonemizer-fork==3.3.2",
+    "espeakng-loader==0.2.4",
     # misaki installs this spaCy model with pip on first use, and a uv venv
     # has no pip, so it is a dependency instead. Must match spaCy's 3.8.
     "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
@@ -39,8 +44,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-cpu = ["torch==2.13.0"]
-cuda = ["torch==2.13.0"]
+cpu = []
+# kokoro asks for misaki[en]>=0.9.4 with no upper bound; it is held at the
+# one above. misaki[en] is kokoro's own requirement, so it stays here.
+cuda = ["kokoro==0.9.4", "misaki[en]==0.9.4", "torch==2.13.0"]
 
 [tool.uv]
 package = false             # an application: nothing to build or install
@@ -71,18 +78,12 @@ environments = [
     "sys_platform == 'win32' and platform_machine == 'AMD64'",
 ]
 
-# Both torch variants come from PyTorch's own indexes. PyPI's Linux torch
-# is not a CPU build: it pulls in the CUDA 13 libraries (AUDIT 2026-10-17).
+# torch comes from PyTorch's own index. PyPI's Linux torch pulls in the
+# CUDA 13 libraries, which nothing here was measured with (AUDIT 2026-10-17).
 [tool.uv.sources]
 torch = [
-    { index = "pytorch-cpu", extra = "cpu" },
     { index = "pytorch-cu126", extra = "cuda" },
 ]
-
-[[tool.uv.index]]
-name = "pytorch-cpu"
-url = "https://download.pytorch.org/whl/cpu"
-explicit = true
 
 [[tool.uv.index]]
 name = "pytorch-cu126"

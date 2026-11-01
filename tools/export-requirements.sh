@@ -19,7 +19,7 @@ set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 UV="${UV:-$(command -v uv || echo "${XDG_DATA_HOME:-$HOME/.local/share}/kokoro-read-aloud/bin/uv")}"
 
-export_one() {  # $1 = extra, $2 = output file, $3 = PyTorch index, $4 = what
+export_one() {  # $1 = extra, $2 = output file, $3 = PyTorch index or "", $4 = what
   {
     cat <<HEADER
 # $4.
@@ -31,9 +31,9 @@ export_one() {  # $1 = extra, $2 = output file, $3 = PyTorch index, $4 = what
 # Generated from uv.lock by tools/export-requirements.sh -- do not edit.
 # On Linux, linux/kokoroctl setup installs the same set with uv.
 --index-url https://pypi.org/simple
---extra-index-url $3
-
 HEADER
+    [[ -n $3 ]] && echo "--extra-index-url $3"
+    echo
     env -u VIRTUAL_ENV UV_NO_CONFIG=1 "$UV" export --frozen --extra "$1" \
       --no-header --no-annotate --format requirements-txt
   } > "$2.tmp"
@@ -41,7 +41,7 @@ HEADER
   echo "wrote $2 ($(grep -c '^[a-z0-9]' "$2") packages)"
 }
 
-export_one cpu requirements.txt https://download.pytorch.org/whl/cpu \
-  "CPU install (no NVIDIA GPU)"
+export_one cpu requirements.txt "" \
+  "CPU install: Paradee-8M, no torch (no NVIDIA GPU needed)"
 export_one cuda requirements-cuda.txt https://download.pytorch.org/whl/cu126 \
   "NVIDIA GPU install (torch built for CUDA 12.6)"
