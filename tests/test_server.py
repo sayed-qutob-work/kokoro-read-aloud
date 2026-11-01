@@ -49,7 +49,7 @@ USER_TYPED_URL = {"Sec-Fetch-Site": "none"}
 
 
 class FakeEngine:
-    voice, model_speed, device = "af_heart", 1.15, "cpu"
+    name, voice, model_speed, device = "kokoro", "af_heart", 1.15, "cpu"
 
 
 class FakePlayer:

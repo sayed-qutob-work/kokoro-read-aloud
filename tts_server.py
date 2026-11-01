@@ -41,6 +41,11 @@ ENGINE = "torch"          # "torch" = kokoro (PyTorch)  -> 4.03x RT
                           # Both measured on the ORIGINAL desktop and NOT
                           # transferable -- see docs/AUDIT.md 4. What holds is
                           # the ordering: onnx was never faster.
+                          # "paradee" = Paradee-8M on the CPU: 40x RT on one
+                          # thread of the i5-12400F, Kokoro 4.6x on all six
+                          # (AUDIT 2026-11-01). Four voices.
+                          # The KOKORO_ENGINE environment variable overrides
+                          # this for one run (a systemd drop-in, like CPU mode).
 
 ONNX_MODEL  = os.path.join(_ROOT, "kokoro-v1.0.onnx")
 ONNX_VOICES = os.path.join(_ROOT, "voices-v1.0.bin")
@@ -567,11 +572,149 @@ class KokoroEngine:
             if r.audio is None:
                 continue
             a = np.asarray(r.audio, dtype=np.float32)
-            for t in (r.tokens or []):
-                if (t.start_ts is not None and t.end_ts is not None
-                        and any(c.isalnum() for c in t.text)):
-                    words.append((t.text, len(t.phonemes or ""),
-                                  offset + t.start_ts, offset + t.end_ts))
+            words += _spoken_words(r.tokens, offset)
+            offset += len(a) / 24000
+            parts.append(a)
+        if not parts:
+            return None, 24000, []
+        return np.concatenate(parts), 24000, words
+
+
+def _spoken_words(tokens, offset):
+    """(text, n_phonemes, start_ts, end_ts) for each timed token that is a
+    word, shifted `offset` seconds into the sentence's audio."""
+    return [(t.text, len(t.phonemes or ""), offset + t.start_ts, offset + t.end_ts)
+            for t in (tokens or [])
+            if t.start_ts is not None and t.end_ts is not None
+            and any(c.isalnum() for c in t.text)]
+
+
+def _onnx_with_output(model, name):
+    """`model` (the bytes of an ONNX file) with one more graph output: the
+    float tensor called `name`.
+
+    An ONNX file is a protobuf: ModelProto.graph is field 7, and the graph's
+    outputs are its repeated field 12. So one ValueInfoProto is appended to
+    the graph and the graph's length prefix rewritten; every other byte is
+    left as it was. This is what onnx.helper would do, without needing the
+    onnx package at runtime."""
+    def varint(n):
+        out = bytearray()
+        while True:
+            out.append((n & 0x7F) | (0x80 if n > 0x7F else 0))
+            n >>= 7
+            if not n:
+                return bytes(out)
+
+    def read_varint(i):
+        n = shift = 0
+        while True:
+            b = model[i]
+            i += 1
+            n |= (b & 0x7F) << shift
+            shift += 7
+            if b < 0x80:
+                return n, i
+
+    def field(num, payload):            # a length-delimited field
+        return varint(num << 3 | 2) + varint(len(payload)) + payload
+
+    i = 0
+    while i < len(model):
+        start = i
+        key, i = read_varint(i)
+        kind = key & 7
+        if kind == 0:
+            _, i = read_varint(i)
+        elif kind == 1:
+            i += 8
+        elif kind == 5:
+            i += 4
+        elif kind == 2:
+            n, body = read_varint(i)
+            i = body + n
+            if key >> 3 == 7:
+                # ValueInfoProto{name, type: TypeProto{tensor_type: {elem_type: FLOAT}}}
+                info = field(1, name.encode()) + field(2, field(1, b"\x08\x01"))
+                return model[:start] + field(7, model[body:i] + field(12, info)) + model[i:]
+        else:
+            break
+    raise ValueError("no graph found in the ONNX model")
+
+
+class ParadeeEngine:
+    """Paradee-8M v1.2 (AUDIT 2026-11-01): Kokoro distilled to 7.9M
+    parameters, run on the CPU by onnxruntime. It reads Kokoro's own misaki
+    phonemes and vocabulary, so KPipeline still does the G2P and the
+    510-phoneme split, with no model behind it.
+
+    The published graph returns only the waveform, but it still holds
+    Kokoro's duration predictor: `/Clip_output_0` is the rounded frames per
+    phoneme, Kokoro's pred_dur (frames x 600 = samples, exactly, on every
+    text measured). Exposing it gives per-word timestamps through Kokoro's
+    own join_timestamps, so the caption strip and the highlighter work
+    unchanged."""
+    name = "paradee"
+    calib_key = "paradee"      # its own rt, ~10x Kokoro's on the same CPU
+    DURATIONS = "/Clip_output_0"
+
+    def __init__(self):
+        import onnxruntime as ort
+        folder = model_files.PARADEE_DIR
+        if not model_files.complete(folder, model_files.PARADEE_FILES):
+            raise SystemExit("[paradee] model files missing: run "
+                             "`python3 model_files.py fetch`")
+        with open(model_files.path("config.json", folder), encoding="utf-8") as f:
+            cfg = json.load(f)
+        self.vocab, self.voices = cfg["vocab"], cfg["voices"]
+        with open(model_files.path("onnx/paradee_int8.onnx", folder), "rb") as f:
+            graph = _onnx_with_output(f.read(), self.DURATIONS)
+        self.session = ort.InferenceSession(graph, providers=["CPUExecutionProvider"])
+        self.pipes = {}
+        self.voice = KOKORO_VOICE
+        self.model_speed = MODEL_SPEED
+        self.device = "cpu"
+        self._told = set()
+        print(f"[paradee] model: {folder}", flush=True)
+        self._pipe_for(self.voices[self._voice_id()])
+
+    def _voice_id(self):
+        """The voice's index in the model. Paradee has one voice per accent
+        and gender (af_heart, am_puck, bf_isabella, bm_fable), so any other
+        Kokoro voice is read by the one of its kind."""
+        if self.voice in self.voices:
+            return self.voices.index(self.voice)
+        kind = [v for v in self.voices if v[:2] == self.voice[:2]] or self.voices[:1]
+        if self.voice not in self._told:
+            self._told.add(self.voice)
+            print(f"[paradee] has no {self.voice}, reading with {kind[0]}", flush=True)
+        return self.voices.index(kind[0])
+
+    def _pipe_for(self, voice):
+        code = "b" if voice.startswith("b") else "a"
+        if code not in self.pipes:
+            from kokoro import KPipeline
+            self.pipes[code] = KPipeline(lang_code=code, repo_id=model_files.REPO,
+                                         model=False)
+        return self.pipes[code]
+
+    def synth(self, sentence):
+        """Same contract as KokoroEngine.synth."""
+        from kokoro import KPipeline
+        vid = self._voice_id()
+        pipe = self._pipe_for(self.voices[vid])
+        feed = {"speed": np.array([self.model_speed], np.float32),
+                "voice": np.array([vid], np.int64)}
+        parts, words, offset = [], [], 0.0
+        for r in pipe(sentence):
+            ids = [self.vocab[p] for p in r.phonemes if p in self.vocab]
+            if not ids:
+                continue
+            feed["input_ids"] = np.array([[0, *ids, 0]], np.int64)
+            wav, dur = self.session.run(None, feed)
+            a = wav.reshape(-1).astype(np.float32)
+            KPipeline.join_timestamps(r.tokens, np.rint(dur.reshape(-1)).astype(np.int64))
+            words += _spoken_words(r.tokens, offset)
             offset += len(a) / 24000
             parts.append(a)
         if not parts:
@@ -613,7 +756,9 @@ class Player:
         # optimistic on this laptop. Over-estimating rt over-fills chunks and
         # starves playback, so a missing/absurd value falls back LOW, which
         # only costs a slightly choppier ramp.
-        dens, rt = load_calibration(engine.device)
+        # per device for Kokoro; Paradee keeps its own (calib_key)
+        self.calib_key = getattr(engine, "calib_key", engine.device)
+        dens, rt = load_calibration(self.calib_key)
         self.density = dens if dens else 0.075
         self.rt = min(rt, 8.0) if rt else 2.0
         # False while rt is the hardcoded seed, so /config consumers don't
@@ -887,7 +1032,7 @@ class Player:
             # conservative seed forever.
             self._calib_n += 1
             if self._calib_n <= 3 or self._calib_n % 20 == 0:
-                save_calibration(self.density, self.rt, self.engine.device)
+                save_calibration(self.density, self.rt, self.calib_key)
             if VERBOSE:
                 print(f"synth {len(buf):3d}ch {w:3d}w -> {d:5.1f}s audio in "
                       f"{dt*1000:6.0f}ms ({d_raw/max(dt,1e-6):5.1f}x RT) "
@@ -1216,6 +1361,7 @@ def config():
             if want != player.device_spec:
                 player.set_device(want)
     return jsonify(voice=player.engine.voice,
+                   engine=player.engine.name,
                    device=player.engine.device,
                    model_speed=player.engine.model_speed,
                    playback_speed=PLAYBACK_SPEED,
@@ -1245,7 +1391,9 @@ if __name__ == "__main__":
     paths.prepare()
     # before the engine: it reads KOKORO_VOICE and MODEL_SPEED at construction
     load_user_settings()
-    engine = KokoroOnnxEngine() if ENGINE == "onnx" else KokoroEngine()
+    which = os.environ.get("KOKORO_ENGINE") or ENGINE
+    engine = (ParadeeEngine() if which == "paradee" else
+              KokoroOnnxEngine() if which == "onnx" else KokoroEngine())
     # the first synth after model load runs 2-3x slower than steady state
     # (measured: 2.4-3.1x RT vs 4.0x warm). Pay that cost now, not on the
     # first hotkey press of the day.
