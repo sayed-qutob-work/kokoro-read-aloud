@@ -29,6 +29,9 @@ dependencies = [
     # misaki installs this spaCy model with pip on first use, and a uv venv
     # has no pip, so it is a dependency instead. Must match spaCy's 3.8.
     "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
+    # Runs Paradee-8M, the small CPU model (AUDIT 2026-11-01). The PyPI
+    # build is CPU-only, on both platforms.
+    "onnxruntime==1.31.1",
     "flask==3.1.3",
     "sounddevice==0.5.5",
     "numpy==2.5.1",
