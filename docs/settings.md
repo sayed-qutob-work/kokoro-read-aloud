@@ -47,6 +47,11 @@ shipped defaults.
 All 28 English voices of Kokoro-82M. The grade is the overall grade in
 Kokoro's own [VOICES.md](https://huggingface.co/hexgrad/Kokoro-82M/blob/main/VOICES.md),
 at the pinned revision.
+
+On the CPU the server reads with Paradee-8M, which has four of them:
+af_heart, am_puck, bf_isabella and bm_fable. The panels then offer only
+those. A voice it lacks is read by the one of the same accent and gender,
+and `voice` in `settings.json` keeps your choice for the GPU.
 - **★ recommended:** graded B- or better.
 - **"best male":** no male voice is graded that high, so this marks the best
   male grade, C+.

@@ -110,7 +110,8 @@ writes to that folder. It needs no root; only the system packages above do.
 |---|---|---|
 | Download | about 4 GB | about 0.7 GB |
 | On disk | about 7 GB | about 2 GB |
-| First sound after the hotkey | about 0.1 s | about 0.4 s |
+| Voice model | Kokoro, 28 voices | Paradee-8M, 4 voices |
+| First sound after the hotkey | about 0.1 s | under 0.1 s on an i5-12400F |
 
 Most of the time is the download. A fresh NVIDIA install took 1 min 46 s on a
 fast connection, and 31 minutes at 2 MB/s.
@@ -185,6 +186,9 @@ Things to know:
   `env\Scripts\python.exe model_files.py fetch` once. The server then loads
   the pinned files from `models\` and makes no network connection. Tested
   on Linux, and on Windows on 2026-10-19.
+- **Without a GPU,** the server reads with Paradee-8M once `model_files.py
+  fetch` has downloaded it (8 MB), and with Kokoro on the CPU until then.
+  Paradee has not been tested on Windows yet.
 - **PowerShell traps:** use `py -3.12 -m venv`, not `python -m venv`, and
   `env\Scripts\python.exe -m pip`, never a bare `pip`.
 

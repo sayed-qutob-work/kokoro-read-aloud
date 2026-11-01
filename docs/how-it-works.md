@@ -86,9 +86,15 @@ playback):
 |---|---|---|
 | GTX 1650 laptop, Windows (2026-08-11) | 25.0x realtime | 14x headroom |
 | Same laptop, Fedora (2026-08-18) | 13.3x realtime | 7.4x headroom |
-| Same laptop, i7-11370H, CPU build | 1.77x realtime | Below break-even, stalls |
+| Same laptop, i7-11370H, CPU build, Kokoro | 1.77x realtime | Below break-even, stalls |
 | RTX 4060 Ti desktop, Omarchy (2026-10-07) | 20–87x realtime per chunk, short chunks lowest | 11x or more |
-| Same desktop, i5-12400F, GPU hidden | 4.4–5.3x realtime | 2.4x headroom |
+| Same desktop, i5-12400F, GPU hidden, Kokoro | 4.4–5.3x realtime | 2.4x headroom |
+| Same desktop, i5-12400F, GPU hidden, Paradee-8M (2026-11-01) | 53–72x realtime per chunk | 29x or more |
+
+- **On the CPU the server reads with Paradee-8M,** since 2026-11-01. It is
+  Kokoro distilled to 7.9M parameters, about ten times as fast on the same
+  CPU, with four of Kokoro's voices. The Kokoro rows on a CPU are from before
+  that. Paradee has not been measured on the laptop yet.
 
 - **Linux is slower than Windows on the same laptop.** The cause is not known
   yet, but both are well above break-even.

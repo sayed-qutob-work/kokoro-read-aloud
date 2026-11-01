@@ -37,14 +37,15 @@ The details behind each of these are in
 
 ## Before you install
 
-- **English only.** There are 28 American and British voices. Other languages
+- **English only.** There are 28 American and British voices, four on the CPU. Other languages
   in the Latin alphabet get English pronunciation, and other scripts and emoji
   are skipped.
 - **A large download.** The GPU build downloads about 4 GB and takes about
   7 GB on disk. The CPU build downloads about 0.7 GB and takes about 2 GB.
-- **The GPU build needs NVIDIA.** Elsewhere the CPU build runs, and a slow CPU
-  limits how fast you can listen
-  ([measurements](docs/how-it-works.md#cpu-or-gpu)).
+- **The GPU build needs NVIDIA.** Elsewhere the CPU build runs
+  [Paradee-8M](https://github.com/sahilmahendrakar/paradee), a small copy of
+  Kokoro with four voices. On an i5-12400F it starts speaking as fast as the
+  GPU does ([measurements](docs/how-it-works.md#cpu-or-gpu)).
 - **No in-place highlighting on Linux,** only the caption strip.
 
 | Platform | Tested |
@@ -259,6 +260,8 @@ From each project's own README, October 2026.
 The code here is MIT-licensed. It builds on, and redistributes none of:
 - [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) and
   [kokoro](https://github.com/hexgrad/kokoro) by hexgrad (Apache-2.0);
+- [Paradee-8M](https://github.com/sahilmahendrakar/paradee) by
+  sahilmahendrakar (Apache-2.0), the CPU voice;
 - PyTorch;
 - eSpeak NG (GPL-3.0);
 - and more.

@@ -30,12 +30,15 @@ and the panel offers setup instead of the controls below.
 ## The panel
 
 - **GPU / CPU / Off.** CPU mode restarts the server with the GPU hidden from
-  it. It uses no VRAM, and reads keep working.
+  it, and it reads with [Paradee-8M](https://github.com/sahilmahendrakar/paradee),
+  a small copy of Kokoro: no VRAM, just as quick, four voices.
 - **Kokoro's share of the GPU's memory,** next to every other process, plus
   the RAM it holds.
 - **The sentence being read,** with the part already spoken shown brighter.
 - **Voice.** All 28 English voices, grouped by accent and gender, applied
-  and saved as soon as you pick one. A ★ marks the four that Kokoro's authors
+  and saved as soon as you pick one. On the CPU, only Paradee's four:
+  af_heart, am_puck, bf_isabella and bm_fable. A voice it lacks is read by
+  the one of the same accent and gender, and your choice is kept for the GPU. A ★ marks the four that Kokoro's authors
   grade B- or better. No male voice is graded that high, so the three best
   male voices (all C+) are marked "best male". The full list and grades are in
   [settings.md](settings.md#voices).
@@ -55,19 +58,18 @@ and the panel offers setup instead of the controls below.
 
 ## What each mode costs
 
-Measured on an RTX 4060 Ti with an i5-12400F:
+Measured on an RTX 4060 Ti with an i5-12400F (CPU row: 2026-11-01):
 
-| Mode | VRAM | RAM | First sound | Synthesis speed |
-|---|---|---|---|---|
-| GPU | 0.8 GB after a start, up to 1.6 GB with use | ~2 GB | 0.06–0.1 s | 20–87x realtime |
-| CPU | none | 1.5–1.8 GB | 0.35–0.5 s | 4.4–5.3x realtime |
-| Off | none | none | n/a | n/a |
+| Mode | Voices | VRAM | RAM | First sound | Synthesis speed |
+|---|---|---|---|---|---|
+| GPU (Kokoro) | 28 | 0.8 GB after a start, up to 2.2 GB with use | 2–2.4 GB | 0.06–0.1 s | 20–87x realtime |
+| CPU (Paradee) | 4 | none | ~1 GB | 0.03–0.04 s | 53–72x realtime |
+| Off | | none | none | n/a | n/a |
 
-- **Switching** to GPU or CPU takes about 6 s, the time it takes to load the
+- **Switching** to GPU or CPU takes 4–6 s, the time it takes to load the
   model. Switching off is immediate.
-- **On the CPU,** a very short first sentence can be followed by a brief
-  pause. The next chunk takes longer to synthesize than the first one takes to
-  play.
+- **The first read in a British voice** starts about 0.5 s late, on the GPU
+  and the CPU alike: its pronunciation dictionary loads on first use.
 - **CPU mode lasts until you log out.** The next login starts on the GPU
   again.
 - **A hotkey pressed while Kokoro is off** shows a notification and does not
@@ -82,7 +84,7 @@ on any Linux install. Setup puts it in `~/.local/bin`.
 
 ```bash
 kokoroctl off       # stop the server: VRAM and RAM freed, hotkeys go quiet
-kokoroctl cpu       # run on the CPU: no VRAM, reads keep working
+kokoroctl cpu       # run on the CPU, with Paradee: no VRAM, four voices
 kokoroctl gpu       # back on the GPU
 kokoroctl restart   # same device as now
 kokoroctl status    # JSON: state, device, VRAM/RAM, live config
