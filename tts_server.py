@@ -36,14 +36,15 @@ import model_files                 # noqa: E402
 _ROOT = os.path.dirname(os.path.abspath(__file__))
 
 # ======================= TUNE THESE =======================
-ENGINE = "torch"          # "torch" = kokoro (PyTorch)  -> 4.03x RT
-                          # "onnx"  = kokoro-onnx       -> 3.89x RT (slower)
-                          # Both measured on the ORIGINAL desktop and NOT
-                          # transferable -- see docs/AUDIT.md 4. What holds is
-                          # the ordering: onnx was never faster.
+ENGINE = "auto"           # "auto" = Kokoro on the GPU when torch sees one,
+                          # else Paradee-8M. Kokoro no longer runs on the CPU:
+                          # Paradee does that ~10x faster (AUDIT 2026-11-01).
                           # "paradee" = Paradee-8M on the CPU: 40x RT on one
-                          # thread of the i5-12400F, Kokoro 4.6x on all six
-                          # (AUDIT 2026-11-01). Four voices.
+                          # thread of the i5-12400F, Kokoro 4.6x on all six.
+                          # Four voices.
+                          # "torch" = kokoro (PyTorch), wherever torch puts it
+                          # "onnx"  = kokoro-onnx: 3.89x RT vs torch's 4.03x,
+                          # on the ORIGINAL desktop (AUDIT 4); never faster.
                           # The KOKORO_ENGINE environment variable overrides
                           # this for one run (a systemd drop-in, like CPU mode).
 
@@ -524,6 +525,8 @@ class KokoroEngine:
     def __init__(self):
         self.pipes = {}
         self.voice = KOKORO_VOICE
+        self.voices = [n[len("voices/"):-len(".pt")] for n, _size, _sha in model_files.FILES
+                       if n.startswith("voices/")]
         self.model_speed = MODEL_SPEED
         # With model_files.py's verified files all in place, the model and
         # the voices load by path, and HF_HUB_OFFLINE stops anything else
@@ -557,6 +560,9 @@ class KokoroEngine:
             self.pipes[code] = KPipeline(lang_code=code, repo_id=model_files.REPO,
                                          model=self.model)
         return self.pipes[code]
+
+    def reading_voice(self):
+        return self.voice
 
     def _voice_ref(self):
         """The voice by path when its file is here, else by name, which
@@ -662,8 +668,8 @@ class ParadeeEngine:
         import onnxruntime as ort
         folder = model_files.PARADEE_DIR
         if not model_files.complete(folder, model_files.PARADEE_FILES):
-            raise SystemExit("[paradee] model files missing: run "
-                             "`python3 model_files.py fetch`")
+            raise FileNotFoundError("model files missing: run "
+                                    "`python3 model_files.py fetch`")
         with open(model_files.path("config.json", folder), encoding="utf-8") as f:
             cfg = json.load(f)
         self.vocab, self.voices = cfg["vocab"], cfg["voices"]
@@ -689,6 +695,9 @@ class ParadeeEngine:
             self._told.add(self.voice)
             print(f"[paradee] has no {self.voice}, reading with {kind[0]}", flush=True)
         return self.voices.index(kind[0])
+
+    def reading_voice(self):
+        return self.voices[self._voice_id()]
 
     def _pipe_for(self, voice):
         code = "b" if voice.startswith("b") else "a"
@@ -1360,7 +1369,12 @@ def config():
             want = d["output_device"] or None
             if want != player.device_spec:
                 player.set_device(want)
-    return jsonify(voice=player.engine.voice,
+    e = player.engine
+    return jsonify(voice=e.voice,
+                   # what is read: Paradee reads a voice it lacks with the
+                   # one of its kind. The panels show this, and save `voice`.
+                   reading_voice=e.reading_voice() if hasattr(e, "reading_voice") else e.voice,
+                   voices=getattr(e, "voices", None),
                    engine=player.engine.name,
                    device=player.engine.device,
                    model_speed=player.engine.model_speed,
@@ -1392,8 +1406,23 @@ if __name__ == "__main__":
     # before the engine: it reads KOKORO_VOICE and MODEL_SPEED at construction
     load_user_settings()
     which = os.environ.get("KOKORO_ENGINE") or ENGINE
-    engine = (ParadeeEngine() if which == "paradee" else
-              KokoroOnnxEngine() if which == "onnx" else KokoroEngine())
+    engine = None
+    if which == "auto":
+        import torch
+        # An empty CUDA_VISIBLE_DEVICES (kokoroctl's CPU mode) and the CPU
+        # build of torch both answer False here.
+        if not torch.cuda.is_available():
+            try:
+                engine = ParadeeEngine()
+            except Exception as e:
+                # an install from before Paradee: no onnxruntime, or no model
+                # files until `model_files.py fetch` (Linux setup runs it)
+                print(f"[paradee] cannot load ({e}); Kokoro reads on the CPU",
+                      flush=True)
+        which = "torch"            # the GPU, or Kokoro when Paradee failed
+    if engine is None:
+        engine = (ParadeeEngine() if which == "paradee" else
+                  KokoroOnnxEngine() if which == "onnx" else KokoroEngine())
     # the first synth after model load runs 2-3x slower than steady state
     # (measured: 2.4-3.1x RT vs 4.0x warm). Pay that cost now, not on the
     # first hotkey press of the day.
