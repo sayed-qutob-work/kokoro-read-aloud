@@ -4335,6 +4335,72 @@ works.
   declares torch through spacy-curated-transformers, though
   `misaki/en.py` never imports it).
 
+### DEPLOYED 2026-11-01: CPU mode is Paradee — Kokoro no longer runs on the CPU (step 2)
+
+**The rule.** `ENGINE = "auto"`: a server whose torch sees a GPU runs
+Kokoro there, and one that does not runs Paradee. Kokoro's CPU mode is
+gone because Paradee does the same job ~10x faster with the same timing
+pipeline. `kokoroctl cpu` is unchanged, since its drop-in (empty
+`CUDA_VISIBLE_DEVICES`) is exactly "torch sees no GPU", and so is the CPU
+build of torch. `KOKORO_ENGINE=torch` still forces Kokoro anywhere.
+
+**Fail-safe, tested.** If Paradee cannot load, auto falls back to Kokoro
+on the CPU and logs `[paradee] cannot load (...)`. This happens on an
+install from before 2026-11-01 (no onnxruntime, or no Paradee files until
+`model_files.py fetch`), and on Windows, whose install never ran `fetch`.
+Tested by hiding the model folder and running `kokoroctl cpu`: the log line
+appeared, then `engine: kokoro`, `device: cpu`, 28 voices. With the folder
+back, `kokoroctl restart` came up on Paradee. An explicit
+`KOKORO_ENGINE=paradee` still fails loudly.
+
+**Voices in the panels.** `GET /config` adds `voices` (what the engine
+reads: Kokoro's 28 pinned files, Paradee's four) and `reading_voice`. Both
+panels offer only `voices` and show `reading_voice`, but **save `voice`**,
+the user's choice. Otherwise the whole-config save would turn a GPU choice
+of af_bella into af_heart after one speed drag on the CPU.
+- **`kokoroctl settings --json`** (the widget): `voice_catalog(voices)`,
+  plus `voice` = `reading_voice`.
+- **Tk panel:** `_show_voices` on its 4s `/config` poll, so the list
+  follows a mode switch while it is open. `_voice` holds the choice, set
+  only when the user picks one.
+- **Checked:** on a stand-in for all four cases, and live
+  (`kokoroctl set voice=bf_emma --no-save` → the widget showed bf_isabella;
+  `settings.json`'s hash was unchanged across the run).
+
+**Live, measured (i5-12400F / RTX 4060 Ti, af_heart unless named).**
+
+| | Paradee (CPU mode) | Kokoro (GPU) |
+|---|---|---|
+| `kokoroctl restart` to `/config` answering | 4.2 s | — |
+| RSS | 962 MiB | — |
+| First read in a British voice (bf_emma → bf_isabella), START | 586 ms | 508 ms |
+| Comma-free 400-char sentence, START | 206 ms | 222 ms |
+| cutfix on that sentence's bare cut | `'has' 0.48s / 2.39` | `'has' 0.46s / 2.16` |
+
+- **The British START is the pipeline, not the model.** Its first synth
+  ran at 3.9x (Paradee) and 4.5x (Kokoro), the next ones at 62–67x. The 'b'
+  KPipeline and misaki's British dictionary are built on first use, by
+  both engines. Building it when the voice changes would remove it. Not
+  done.
+- **Paradee lengthens a cut chunk's last word as Kokoro does** (§4: "Bare
+  word-boundary cut"), and cutfix compresses it the same way. That closes
+  the step-1 open item.
+- The 206/222 ms START is the clause packing (§5 item 7): a sentence with
+  no comma is one atom, so the first chunk was 232 chars.
+
+**Wording.** The widget's GPU hint no longer says "Fastest". In this
+setup Paradee's START (31–37 ms) is lower than the GPU's (64–99 ms).
+It says what the GPU still gives: Kokoro and its 28 voices. The setup
+notes, README, `install.md`, `omarchy.md`, `settings.md`,
+`how-it-works.md` and `licenses.md` (Paradee and ONNX Runtime, both
+Apache-2.0/MIT) were updated with these numbers.
+
+**Not covered.**
+- **The widget's QML text change** was not viewed: it needs
+  `install-omarchy.sh`, which restarts the shell.
+- **Paradee on the GTX 1650 laptop** and on Windows was not tried.
+- **torch is still imported** in CPU mode (step 3).
+
 ---
 
 ## 9. Accepted trade-offs (settled — reopen only with new information)
