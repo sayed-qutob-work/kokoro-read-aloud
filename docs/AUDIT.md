@@ -4500,6 +4500,27 @@ commands, not the code.
 - **No full end-to-end `kokoroctl setup --cpu`** with step 5: that would
   re-point this desktop's units.
 
+### DOCUMENTED 2026-11-01: the README leads with the light build (step 4)
+
+The intro and "Why this one" now open with the CPU build. Each number
+traces to the entries above, on the i5-12400F:
+
+| README claim | Source |
+|---|---|
+| 0.2 GB download | the fresh light install: 187–200 MiB |
+| 0.6 GB on disk | the same install |
+| 0.35–0.7 GB RAM | the light server: 353 MB idle, 695 MB after reads |
+| "starts speaking about 30 ms after it gets the text" | START 29–38 ms. START is measured from the server's receipt of the POST (§9), so the README does not say "after the hotkey" |
+| "50 to 70 times faster than it plays" | 53–72x over both live runs |
+| 8.5 MB model | `paradee_int8.onnx` is 8,462,119 bytes |
+
+The GPU build is described as being for Kokoro's 28 voices, not speed.
+
+**Windows:** the 2026-10-19 retest predates Paradee. The README and the
+platform table say the new CPU build is untested there, instead of letting
+the old date cover it. The Omarchy row adds what was run today: the CPU
+build's steps 1–4 and live reads, not a full `kokoroctl setup --cpu`.
+
 ---
 
 ## 9. Accepted trade-offs (settled — reopen only with new information)

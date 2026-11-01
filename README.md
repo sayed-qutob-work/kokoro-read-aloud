@@ -3,10 +3,13 @@
 **Select text in any app, press Ctrl+Alt+R, and a neural voice running on your
 own machine reads it aloud.**
 
-A small local server keeps the [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M)
-voice model loaded, and starts speaking while the rest of the text is still
-being synthesized. It runs on Linux (Omarchy, Fedora GNOME) and Windows 11,
-and your text never leaves the machine.
+No GPU needed: the default build is a 0.2 GB download that runs
+[Paradee-8M](https://github.com/sahilmahendrakar/paradee), an 8.5 MB copy of
+[Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M), on the CPU. On an
+i5-12400F it starts speaking about 30 ms after it gets the text, and
+synthesizes 50 to 70 times faster than it plays. With an NVIDIA GPU, the GPU build adds
+Kokoro itself and its 28 voices. It runs on Linux (Omarchy, Fedora GNOME) and
+Windows 11, and your text never leaves the machine.
 
 [Install](#install) • [Usage](#usage) • [Settings](#settings) •
 [Troubleshooting](docs/troubleshooting.md) •
@@ -20,17 +23,21 @@ and your text never leaves the machine.
 
 ## Why this one
 
+- **Light.** 0.2 GB to download, 0.6 GB on disk, about 0.35–0.7 GB of RAM
+  while it runs, and no PyTorch. Four voices; the GPU build has 28.
 - **Fast listening that stays clear.** Listen at up to 3× with the voice's
   pitch kept, and see the fastest speed your machine keeps up with.
 - **It shows where you are.** A caption strip shows the sentence being read,
   whatever app the text came from.
-- **The VRAM back when you need it.** On Omarchy, the bar switches the model
-  between GPU, CPU and off, so a game or a local LLM can have the GPU.
+- **The VRAM back when you need it.** With the GPU build on Omarchy, the bar
+  switches between Kokoro on the GPU, Paradee on the CPU and off, so a game
+  or a local LLM can have the GPU.
 - **Pinned and offline.** Packages and model files are pinned to tested
   versions and hashes, and on Linux the server makes no network connection
   after setup.
-- **Windows 11 support (retested 2026-10-19 in a VM, without a GPU).** The same
-  server, hotkeys and settings as on Linux.
+- **Windows 11 support.** The same server, hotkeys and settings as on Linux.
+  Retested 2026-10-19 in a VM without a GPU, before the CPU build became
+  Paradee; the new CPU build is not tested on Windows yet.
 
 The details behind each of these are in
 [how it works](docs/how-it-works.md).
@@ -43,17 +50,16 @@ The details behind each of these are in
 - **Download size.** The CPU build downloads about 0.2 GB and takes about
   0.6 GB on disk. The GPU build, which adds Kokoro's 28 voices, downloads
   about 4 GB and takes about 7 GB.
-- **The GPU build needs NVIDIA.** Elsewhere the CPU build runs
-  [Paradee-8M](https://github.com/sahilmahendrakar/paradee), a small copy of
-  Kokoro with four voices. On an i5-12400F it starts speaking as fast as the
-  GPU does ([measurements](docs/how-it-works.md#cpu-or-gpu)).
+- **The GPU build needs NVIDIA.** It is for Kokoro's 28 voices, not for speed:
+  on an i5-12400F the CPU build starts speaking as fast as the GPU does
+  ([measurements](docs/how-it-works.md#cpu-or-gpu)).
 - **No in-place highlighting on Linux,** only the caption strip.
 
 | Platform | Tested |
 |---|---|
-| Omarchy 4.0.4 (Hyprland), NVIDIA | Clean install from this repository, 2026-10-18 |
+| Omarchy 4.0.4 (Hyprland), NVIDIA | Clean GPU install from this repository, 2026-10-18; the CPU build's packages and model installed and read aloud, 2026-11-01 |
 | Fedora 44 (GNOME), NVIDIA | Last run 2026-09-30; the installer not yet run there |
-| Windows 11 | Fresh install in a VM without a GPU, 2026-10-19; the GPU path last tested mid-August 2026 |
+| Windows 11 | Fresh install in a VM without a GPU, 2026-10-19, before the CPU build became Paradee; the GPU path last tested mid-August 2026 |
 
 ## Install
 
@@ -123,7 +129,7 @@ env\Scripts\python.exe tts_server.py
 Without an NVIDIA GPU, install `requirements.txt` instead of
 `requirements-cuda.txt`.
 
-When it prints `[kokoro] ready on http://127.0.0.1:5111`, start
+When it prints `ready on http://127.0.0.1:5111`, start
 `read_aloud.ahk`. To start everything at login, put a shortcut to
 `start_tts.vbs` in `shell:startup`.
 
@@ -216,7 +222,7 @@ unless you pass `--purge`. More in [install.md](docs/install.md#removing).
 - **Reads stall or stutter:** lower the reading speed until the panel's
   warning clears, or use the GPU.
 - **"Kokoro is off" or "still loading":** turn it on from the bar, or with
-  `kokoroctl gpu`. Loading takes about 6 s.
+  `kokoroctl cpu` (or `gpu`). Loading takes 4–6 s.
 - **"No matching distribution found for kokoro" on Windows:** the venv isn't
   Python 3.12.
 
@@ -225,8 +231,8 @@ More cases, and what each log holds, are in
 
 ## How it works
 
-A Flask server on 127.0.0.1:5111 keeps Kokoro-82M loaded. The hotkey script
-sends it the text. The server splits it at commas and full stops, synthesizes
+A Flask server on 127.0.0.1:5111 keeps the model loaded: Paradee-8M on the
+CPU, or Kokoro-82M on an NVIDIA GPU. The hotkey script sends it the text. The server splits it at commas and full stops, synthesizes
 ahead of playback, time-stretches without changing pitch, and plays it. The
 caption strip, the Windows highlighter and the bar widget only read the
 server's state.

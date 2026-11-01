@@ -21,6 +21,7 @@ record, with the reasoning and the dead ends, is in [AUDIT.md](AUDIT.md).
 | `highlighter.py` | Windows | Tints the spoken word in the source app, using UI Automation and a click-through layered window |
 | `overlay.py` | both | The caption strip. Polls `/now` and shows the sentence being read |
 | `tray.py` | both | The Settings panel. Windows also gets a tray icon (`tray_win32.py`) |
+| `english_g2p.py` | both | Turns text into Kokoro's phonemes for Paradee without PyTorch: Kokoro's own pipeline code, minus the `kokoro` package |
 | `kokoro_settings.py` | both | The voices, the speed rules and `settings.json`, shared by the Settings panel and the widget |
 | `extension/` | both | Chromium in-page highlighter, loaded unpacked |
 | `linux/kokoroctl` | Linux | Off / CPU / GPU / restart / status, voice and speed, setup and uninstall |

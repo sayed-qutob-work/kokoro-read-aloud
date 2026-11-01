@@ -166,7 +166,7 @@ env\Scripts\python.exe tts_server.py
 `python.exe -V` must print `3.12.x`. Without an NVIDIA GPU, install
 `requirements.txt` instead of `requirements-cuda.txt`.
 
-Wait for `[kokoro] ready on http://127.0.0.1:5111`. Then start
+Wait for `ready on http://127.0.0.1:5111` (`[paradee]` or `[kokoro]` before it). Then start
 `read_aloud.ahk`, select some text and press Ctrl+Alt+R.
 
 **To start everything at login,** put a shortcut to `start_tts.vbs` in
