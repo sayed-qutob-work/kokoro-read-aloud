@@ -4525,12 +4525,15 @@ build's steps 1–4 and live reads, not a full `kokoroctl setup --cpu`.
 
 ---
 
-### CORRECTED 2026-11-01: Paradee sounds worse on IEMs — a hiss on the voice, measured as noisier voicing above 4 kHz
+### CORRECTED 2026-11-01: Paradee sounds worse on IEMs — measured as noisier voicing above 4 kHz
 
 **The user, on IEMs:** "When I used my IEMs it is obviously worse, not too
 bad, but saying it is the same is not accurate. It has a hissing kind of
 sound and the quality is worse overall." Through speakers the difference
-was audible but small. **Their verdict:** still the right choice on the CPU
+was audible but small. **Refined by the user the same day:** "it's more of a
+noise than hiss". **User-facing text says only "slightly lower quality"**
+and names no artifact: telling listeners what to hear would prime them to
+hear it (a placebo effect). **Their verdict:** still the right choice on the CPU
 (delay × quality), and that decision stands. **Judge voice quality on IEMs**,
 not speakers.
 
@@ -4541,12 +4544,12 @@ CPU with the GPU hidden.
 | Measure | Kokoro | Paradee | Reading |
 |---|---|---|---|
 | Energy 4–8 kHz / 8–12 kHz, share of total | −18.7 / −17.5 dB | −18.5 / −17.7 dB | **same**: not more treble overall |
-| Floor in the leading silence | −91.4 dBFS | −92.2 dBFS | **same**: no hiss in the silences |
+| Floor in the leading silence | −91.4 dBFS | −92.2 dBFS | **same**: no noise in the silences |
 | HNR of voiced frames, median | 8.6 dB | 8.6 dB | same (low frequencies dominate it) |
 | **Spectral flatness 4–8 kHz in voiced frames**, median per text | 0.089 0.077 0.104 0.069 | **0.117 0.123 0.127 0.138** | **noisier on every text** |
 | Spectral flatness 2–4 kHz, voiced | 0.171 0.145 0.168 0.199 | 0.239 0.186 0.158 0.252 | noisier on 3 of 4 |
 
-So the hiss rides on voiced sound: the upper harmonics are partly replaced by
+So the noise rides on voiced sound: the upper harmonics are partly replaced by
 noise, in a band IEMs reproduce clearly and speakers soften. That fits
 Paradee's v1.1+ decoder head, "sine waves at the pitch and its multiples,
 plus shaped noise for everything else", but the cause is not established. Its
@@ -4555,7 +4558,9 @@ proxy, not a perceptual score.
 
 **Docs corrected:** README, `how-it-works.md`, `omarchy.md`, `install.md`, and
 the widget's hints and setup notes. The GPU build is for "28 voices and a
-cleaner sound", and Paradee has "a slight hiss on headphones".
+better sound quality", and Paradee has "slightly lower sound quality". A
+first wording, "a slight hiss on headphones", was replaced the same day, for
+the reason above.
 
 **Upstream:** the duration output became
 [sahilmahendrakar/paradee#8](https://github.com/sahilmahendrakar/paradee/pull/8),

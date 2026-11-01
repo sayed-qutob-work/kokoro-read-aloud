@@ -31,8 +31,8 @@ and the panel offers setup instead of the controls below.
 
 - **GPU / CPU / Off.** CPU mode restarts the server with the GPU hidden from
   it, and it reads with [Paradee-8M](https://github.com/sahilmahendrakar/paradee),
-  a small copy of Kokoro: no VRAM, just as quick, four voices, and a slight
-  hiss on headphones.
+  a small copy of Kokoro: no VRAM, just as quick, four voices, and slightly
+  lower sound quality.
 - **Kokoro's share of the GPU's memory,** next to every other process, plus
   the RAM it holds.
 - **The sentence being read,** with the part already spoken shown brighter.
