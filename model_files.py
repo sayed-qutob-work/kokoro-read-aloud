@@ -1,14 +1,16 @@
-"""The Kokoro model files, pinned: which files, from which revision, and
-their SHA-256.
+"""The model files, pinned: which files, from which revision, and their
+SHA-256. Two models: Kokoro-82M, and Paradee-8M, Kokoro distilled to 7.9M
+parameters (AUDIT 2026-11-01).
 
     python3 model_files.py fetch     download what is missing, verified
     python3 model_files.py verify    check every file against its SHA-256
-    python3 model_files.py where     print the folder
+    python3 model_files.py where     print the folders
 
-Once all of them are in place the server loads the model and voices by
+Once all of Kokoro's are in place the server loads the model and voices by
 path and never touches the network (tts_server.KokoroEngine). Without them
 kokoro downloads into the Hugging Face cache, as it always has, and checks
-huggingface.co for updates on every start (AUDIT 2026-10-17).
+huggingface.co for updates on every start (AUDIT 2026-10-17). Paradee has
+no such fallback: tts_server.ParadeeEngine reads only these files.
 
 A download is written to <name>.part and only takes its real name once its
 size and SHA-256 match, so a file under its real name is a verified one.
@@ -64,17 +66,31 @@ FILES = [
     ("voices/bm_lewis.pt", 523425, "b5204750dcba01029d2ac9cec17aec3b20a6d64073c579d694a23cb40effbd0e"),
 ]
 
+# Paradee-8M v1.2: one int8 ONNX file holds all four of its voices, and
+# config.json maps phonemes and voice names to the model's input IDs.
+PARADEE_REPO = "sahilmahendrakar/Paradee-8M-v1.2"
+PARADEE_REVISION = "ed2934d4df8a4fd891e29584c5e1104649409765"
+PARADEE_DIR = os.path.join(paths.DATA, "models", "Paradee-8M-v1.2")
+PARADEE_FILES = [
+    ("config.json", 1827, "002535cf8dd08a434cdddb13372da8a7b4844152bdf9b5b4e7342e12ec30bcfb"),
+    ("onnx/paradee_int8.onnx", 8462119, "a6989796692ac173597e15d405c971989202d5c73cfad65f22e90bd7b6c97da1"),
+]
 
-def path(name):
-    return os.path.join(DIR, *name.split("/"))
+# What fetch() and verify() cover: (repo, revision, folder, files).
+MODELS = [(REPO, REVISION, DIR, FILES),
+          (PARADEE_REPO, PARADEE_REVISION, PARADEE_DIR, PARADEE_FILES)]
 
 
-def complete():
+def path(name, folder=DIR):
+    return os.path.join(folder, *name.split("/"))
+
+
+def complete(folder=DIR, files=FILES):
     """Every file present at its pinned size. No hashing, so it is cheap
     enough for each server start; a file only ever gets its real name after
-    its SHA-256 matched (fetch)."""
-    return all(os.path.isfile(path(n)) and os.path.getsize(path(n)) == size
-               for n, size, _ in FILES)
+    its SHA-256 matched (fetch). Kokoro's files unless told otherwise."""
+    return all(os.path.isfile(path(n, folder)) and os.path.getsize(path(n, folder)) == size
+               for n, size, _ in files)
 
 
 def voice(name):
@@ -83,8 +99,8 @@ def voice(name):
     return p if os.path.isfile(p) else None
 
 
-def _matches(name, size, sha):
-    p = path(name)
+def _matches(folder, name, size, sha):
+    p = path(name, folder)
     if not os.path.isfile(p) or os.path.getsize(p) != size:
         return False
     h = hashlib.sha256()
@@ -95,22 +111,24 @@ def _matches(name, size, sha):
 
 
 def verify():
-    """Names of the files that are missing or do not match their SHA-256."""
-    return [n for n, size, sha in FILES if not _matches(n, size, sha)]
+    """Names of the files that are missing or do not match their SHA-256,
+    each under its model's folder name (Kokoro-82M/config.json)."""
+    return [f"{os.path.basename(folder)}/{n}" for _r, _v, folder, files in MODELS
+            for n, size, sha in files if not _matches(folder, n, size, sha)]
 
 
 def fetch(progress=None):
     """Download every file that is missing or wrong. progress(done, total,
     name) is called as bytes arrive. Raises on a file that does not match
     its SHA-256, leaving nothing under its real name."""
-    todo = [(n, size, sha) for n, size, sha in FILES
-            if not _matches(n, size, sha)]
-    total, done = sum(size for _, size, _ in todo), 0
-    for name, size, sha in todo:
-        dest = path(name)
+    todo = [(repo, rev, folder, n, size, sha) for repo, rev, folder, files in MODELS
+            for n, size, sha in files if not _matches(folder, n, size, sha)]
+    total, done = sum(t[4] for t in todo), 0
+    for repo, rev, folder, name, size, sha in todo:
+        dest = path(name, folder)
         os.makedirs(os.path.dirname(dest), exist_ok=True)
         part = dest + ".part"
-        url = f"https://huggingface.co/{REPO}/resolve/{REVISION}/{name}"
+        url = f"https://huggingface.co/{repo}/resolve/{rev}/{name}"
         req = urllib.request.Request(url, headers={"User-Agent": "kokoro-read-aloud"})
         h = hashlib.sha256()
         with urllib.request.urlopen(req, timeout=30) as r, open(part, "wb") as f:
@@ -131,7 +149,8 @@ def fetch(progress=None):
 def main(argv):
     cmd = argv[1] if len(argv) > 1 else "verify"
     if cmd == "where":
-        print(DIR)
+        for _r, _v, folder, _f in MODELS:
+            print(folder)
     elif cmd == "verify":
         bad = verify()
         print("ok" if not bad else "missing or wrong: " + ", ".join(bad))
@@ -146,7 +165,8 @@ def main(argv):
                 print(f"\r{pct:3d}%  {done / 2**20:6.1f} / {total / 2**20:.1f} MiB  {name:28}",
                       end="", flush=True)
         n = fetch(show)
-        print(("\n" if n else "") + f"ok: {n} downloaded, {len(FILES) - n} already in place")
+        count = sum(len(files) for _r, _v, _d, files in MODELS)
+        print(("\n" if n else "") + f"ok: {n} downloaded, {count - n} already in place")
     else:
         print(__doc__.split("\n\n")[1], file=sys.stderr)
         return 2
