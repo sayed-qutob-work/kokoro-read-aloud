@@ -4401,6 +4401,105 @@ Apache-2.0/MIT) were updated with these numbers.
 - **Paradee on the GTX 1650 laptop** and on Windows was not tried.
 - **torch is still imported** in CPU mode (step 3).
 
+### DEPLOYED 2026-11-01: the CPU build is Paradee alone — no torch, 0.2 GB instead of 0.74 (step 3)
+
+**Why torch was there.** Two paths, both now cut:
+- **kokoro.** The Paradee engine used `KPipeline(model=False)` for the G2P,
+  and `import kokoro` imports torch.
+- **misaki[en].** That extra adds spacy-curated-transformers, which needs
+  torch. It serves only `trf=True`, and KPipeline passes `trf=False`
+  (spaCy's small model).
+
+Even inside the full venv, `english_g2p` alone loads torch: spaCy picks up
+the installed curated-transformers plugin. That is where the ~1 GB RSS of
+the step-1/2 Paradee server came from.
+
+**`english_g2p.py`** is KPipeline's English path, without kokoro: the misaki
+G2P with its eSpeak fallback, `en_tokenize`'s 510-phoneme split with
+`waterfall_last`, and `join_timestamps`. It is adapted from kokoro 0.9.4,
+Apache-2.0, with the notice in the file. **Identical to KPipeline,
+measured:** same phonemes, tokens and chunks on 7 texts in both accents,
+including an 856-phoneme text split in two. Word times matched on random
+durations too. `tests/test_english_g2p.py` keeps that check: it compares
+where kokoro is installed, and checks the limits everywhere.
+
+**Packaging.**
+- **pyproject:** base deps = misaki (no extra) plus its English packages
+  pinned one by one (num2words 0.5.14, spacy 3.8.16, phonemizer-fork
+  3.3.2, espeakng-loader 0.2.4, the lock's versions), and onnxruntime.
+- **Extras:** `cpu = []`, `cuda = [kokoro, misaki[en], torch]`. The
+  PyTorch CPU index is gone.
+- **Relock:** the CUDA export is **identical**, 121/121 packages at the same
+  versions. The CPU set went from 102 to 84, with 18 removed (torch,
+  kokoro, transformers, huggingface-hub, curated-*, sympy...) and none
+  added or moved.
+- **Live venv:** `uv sync --extra cuda --dry-run` against it: "Would make no
+  changes".
+- **`requirements.txt`** has no PyTorch index any more.
+
+**Setup.**
+- **Which build:** with no flag, setup keeps the installed one
+  (`installed_build()`, moved from kokoroctl; no torch = cpu). A new
+  install gets cpu, as the plan agreed. Without this, a repair run of
+  `kokoroctl setup` on a GPU install would have stripped torch.
+- **Check after sync:** for cpu, onnxruntime and *no* torch.
+- **Models:** step 4 fetches only Paradee's for cpu
+  (`model_files.fetch(models=)`, CLI `fetch paradee`).
+- **Space:** `NEED_GIB["cpu"]` 3 → 1.
+- **kokoroctl:** `installed` = the venv plus that build's model files.
+  Kokoro's alone would leave a light install on the first-run view forever.
+- **Widget:** the setup view lists the CPU build first (the default
+  button and `setup` IPC), with the measured sizes.
+
+**A fresh light install, measured** with setup's own steps 1–4 and empty
+caches, into a separate XDG tree. Step 5 was skipped (units).
+
+| | Light CPU build | CPU build before | GPU build |
+|---|---|---|---|
+| Received | **187–200 MiB** (incl. Python 3.12) | 0.74 GB | 4.1 GB |
+| On disk | **600 MB** (uv cache 427, Python 107, models 8; the venv hard-links the cache) | ~2 GB | ~7 GB |
+| Steps 1–4 | 7 s and 38 s (two runs) | — | 1 min 46 s |
+
+**The light server, live** (the unit stopped, the light venv on port 5111):
+- **Loaded:** `torch` mapped 0 times, onnxruntime 10.
+- **RSS:** 353 MB after warm-up, 695 MB after three reads. The Paradee
+  server inside the full venv had ~1 GB at idle.
+- **START:** 29, 35, 38 ms. **Synthesis:** 53–67x, no GAP. The same as
+  Paradee in the full venv: identical code and model.
+
+**Found on the way: eSpeak NG drops a data path of 160+ characters.**
+- **Symptom:** the first light install, in the scratchpad (data path 196
+  chars), died at warm-up with only `Error processing file
+  '/home/runner/work/espeakng-loader/.../phontab'`, the folder the library
+  was built in.
+- **Measured:** `espeak_Initialize` through ctypes with copies of the same
+  data folder at 150 and 159 chars returns 22050. At 160, 161, 170 and 180
+  it fails and `exit()`s the process, so Python's buffered output is lost.
+- **Not the light build:** the full venv fails the same at that length.
+  A symlink does not help, since phonemizer `resolve()`s the path.
+- **Real installs:** the path is `$HOME` + 96 chars, 106 here. It
+  bites only with a home or `XDG_DATA_HOME` of ~60+ chars, which
+  `troubleshooting.md` now says.
+
+**Mistakes during the test, for the record.** These were in my test
+commands, not the code.
+- **A `pkill -f` pattern matched its own shell.** The command died before
+  restarting the unit, which was then started by hand.
+- **`setsid` forked**, so the saved PID was a parent that exited at once.
+  Reads went out before the server was up, and a `systemctl start` then
+  collided on port 5111 (the unit's server restart-looped until the light
+  one was stopped).
+- **The reader was down for about 3 minutes in all.** It is on Kokoro GPU
+  again (one process).
+
+**Not covered.**
+- **Windows:** the light build was not run there, including whether it still
+  needs the Visual C++ runtime without torch.
+- **The widget's new setup view** was not viewed. It shows only on a machine
+  without an install.
+- **No full end-to-end `kokoroctl setup --cpu`** with step 5: that would
+  re-point this desktop's units.
+
 ---
 
 ## 9. Accepted trade-offs (settled — reopen only with new information)
