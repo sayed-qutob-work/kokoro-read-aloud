@@ -651,8 +651,8 @@ def _onnx_with_output(model, name):
 class ParadeeEngine:
     """Paradee-8M v1.2 (AUDIT 2026-11-01): Kokoro distilled to 7.9M
     parameters, run on the CPU by onnxruntime. It reads Kokoro's own misaki
-    phonemes and vocabulary, so KPipeline still does the G2P and the
-    510-phoneme split, with no model behind it.
+    phonemes and vocabulary, through english_g2p: KPipeline's English path
+    without the kokoro package, so neither imports torch.
 
     The published graph returns only the waveform, but it still holds
     Kokoro's duration predictor: `/Clip_output_0` is the rounded frames per
@@ -668,8 +668,11 @@ class ParadeeEngine:
         import onnxruntime as ort
         folder = model_files.PARADEE_DIR
         if not model_files.complete(folder, model_files.PARADEE_FILES):
-            raise FileNotFoundError("model files missing: run "
-                                    "`python3 model_files.py fetch`")
+            # 8 MB, pinned and SHA-256-checked. Setup fetches them; this is
+            # for an install that never ran it (Windows, or one from before
+            # Paradee). The CPU build has no Kokoro to fall back to.
+            print("[paradee] downloading the model files (8 MB)", flush=True)
+            model_files.fetch(models=[model_files.PARADEE])
         with open(model_files.path("config.json", folder), encoding="utf-8") as f:
             cfg = json.load(f)
         self.vocab, self.voices = cfg["vocab"], cfg["voices"]
@@ -700,30 +703,29 @@ class ParadeeEngine:
         return self.voices[self._voice_id()]
 
     def _pipe_for(self, voice):
-        code = "b" if voice.startswith("b") else "a"
-        if code not in self.pipes:
-            from kokoro import KPipeline
-            self.pipes[code] = KPipeline(lang_code=code, repo_id=model_files.REPO,
-                                         model=False)
-        return self.pipes[code]
+        british = voice.startswith("b")
+        if british not in self.pipes:
+            from english_g2p import EnglishG2P
+            self.pipes[british] = EnglishG2P(british=british)
+        return self.pipes[british]
 
     def synth(self, sentence):
         """Same contract as KokoroEngine.synth."""
-        from kokoro import KPipeline
+        from english_g2p import join_timestamps
         vid = self._voice_id()
         pipe = self._pipe_for(self.voices[vid])
         feed = {"speed": np.array([self.model_speed], np.float32),
                 "voice": np.array([vid], np.int64)}
         parts, words, offset = [], [], 0.0
-        for r in pipe(sentence):
-            ids = [self.vocab[p] for p in r.phonemes if p in self.vocab]
+        for phonemes, tokens in pipe(sentence):
+            ids = [self.vocab[p] for p in phonemes if p in self.vocab]
             if not ids:
                 continue
             feed["input_ids"] = np.array([[0, *ids, 0]], np.int64)
             wav, dur = self.session.run(None, feed)
             a = wav.reshape(-1).astype(np.float32)
-            KPipeline.join_timestamps(r.tokens, np.rint(dur.reshape(-1)).astype(np.int64))
-            words += _spoken_words(r.tokens, offset)
+            join_timestamps(tokens, np.rint(dur.reshape(-1)).astype(np.int64))
+            words += _spoken_words(tokens, offset)
             offset += len(a) / 24000
             parts.append(a)
         if not parts:
@@ -1408,15 +1410,19 @@ if __name__ == "__main__":
     which = os.environ.get("KOKORO_ENGINE") or ENGINE
     engine = None
     if which == "auto":
-        import torch
-        # An empty CUDA_VISIBLE_DEVICES (kokoroctl's CPU mode) and the CPU
-        # build of torch both answer False here.
-        if not torch.cuda.is_available():
+        try:
+            import torch           # absent from the CPU build: Paradee only
+        except ImportError:
+            torch = None
+        # An empty CUDA_VISIBLE_DEVICES (kokoroctl's CPU mode) answers False
+        if torch is None or not torch.cuda.is_available():
             try:
                 engine = ParadeeEngine()
             except Exception as e:
-                # an install from before Paradee: no onnxruntime, or no model
-                # files until `model_files.py fetch` (Linux setup runs it)
+                if torch is None:
+                    raise
+                # a GPU install from before Paradee (no onnxruntime), or
+                # offline with its files missing: Kokoro reads on the CPU
                 print(f"[paradee] cannot load ({e}); Kokoro reads on the CPU",
                       flush=True)
         which = "torch"            # the GPU, or Kokoro when Paradee failed
