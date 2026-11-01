@@ -8,11 +8,14 @@ code folder.
      install them; it prints the one command that does.
   2. uv: the system's, when it is at least UV_MIN, else the pinned
      UV_VERSION from GitHub, checked against its SHA-256.
-  3. Python 3.12 and the server's packages, `uv sync --frozen` from uv.lock:
-     the CUDA variant when nvidia-smi works, else the CPU one. Then it checks
-     that torch really is the build it asked for -- a bare `uv sync` would
-     have installed an untested one from PyPI (AUDIT 2026-10-17).
-  4. The model files (model_files.py), each checked against its SHA-256.
+  3. Python 3.12 and the server's packages, `uv sync --frozen` from uv.lock.
+     The cpu variant is Paradee-8M alone, with no torch; the cuda variant
+     adds Kokoro and torch for an NVIDIA GPU. Without --cpu/--cuda it keeps
+     the build already installed, so a repair run never swaps it, and a new
+     install gets cpu (AUDIT 2026-11-01). Then it checks the result: no torch
+     in the cpu build, the CUDA torch in the cuda one.
+  4. The model files (model_files.py), each checked against its SHA-256:
+     Paradee's for cpu, Kokoro's and Paradee's for cuda.
   5. The systemd units, the launcher entry, under Hyprland the hotkeys, and
      a `kokoroctl` command in ~/.local/bin. Then it restarts the server and
      waits until it answers.
@@ -33,6 +36,7 @@ Stdlib only: it runs on the system Python, before any venv exists.
 
 import ctypes.util
 import fcntl
+import glob
 import hashlib
 import json
 import os
@@ -77,7 +81,8 @@ STEPS = ["Checking system packages", "Getting uv",
          "Starting Kokoro"]
 # Free space needed for a first install. CUDA measured at 6.6 GB of venv on
 # btrfs, where uv's cache shares its blocks; elsewhere the cache hardlinks.
-NEED_GIB = {"cuda": 8, "cpu": 3}
+# The cpu build (Paradee, no torch) measured 0.6 GB in all (AUDIT 2026-11-01).
+NEED_GIB = {"cuda": 8, "cpu": 1}
 
 
 class SetupError(Exception):
@@ -201,9 +206,33 @@ def check_system(variant):
                              f"needs about {NEED_GIB[variant]} GiB")
 
 
+def installed_build(python=VENV_PYTHON):
+    """"cuda", "cpu" or None (no venv yet): the build in a venv, read from
+    torch's version.py (`cuda = '12.6'` or `None`) instead of importing
+    torch, which takes seconds. No torch at all is the cpu build (Paradee
+    only) since 2026-11-01; a torch built without CUDA is the cpu build from
+    before, which reads with Paradee too."""
+    if not os.path.exists(python):
+        return None
+    prefix = os.path.dirname(os.path.dirname(python))
+    for f in glob.glob(os.path.join(prefix, "lib", "python3.*", "site-packages",
+                                    "torch", "version.py")):
+        try:
+            with open(f, encoding="utf-8") as fh:
+                m = re.search(r"^cuda\b[^=]*=\s*(.+)$", fh.read(), re.M)
+        except OSError:
+            continue
+        if m:
+            return "cpu" if m.group(1).strip() == "None" else "cuda"
+    return "cpu"
+
+
 def pick_variant():
-    """cuda when nvidia-smi can talk to a GPU, else cpu."""
-    return "cuda" if shutil.which("nvidia-smi") and _ok(["nvidia-smi", "-L"]) else "cpu"
+    """The build already installed, so a repair run keeps it, else cpu.
+    The GPU build is asked for by name (--cuda), not picked for a machine
+    with NVIDIA: Paradee on the CPU starts speaking as soon as Kokoro on
+    the GPU, with no VRAM (AUDIT 2026-11-01)."""
+    return installed_build() or "cpu"
 
 
 # -------------------------------------------------------------------- 2. uv
@@ -319,14 +348,26 @@ def install_packages(uv, variant, progress):
     if p.wait() != 0:
         raise SetupError("uv sync failed:\n" + "\n".join(tail))
 
-    # The build that came out, not the one asked for: without an extra, or
-    # with a stray index, uv would quietly install another torch.
+    # The build that came out, not the one asked for: with a stray extra or
+    # index, uv would quietly install another torch, or one at all.
     env.pop("CUDA_VISIBLE_DEVICES", None)
+    if variant == "cpu":
+        r = subprocess.run([VENV_PYTHON, "-c", "import importlib.util, onnxruntime; "
+                            "print(onnxruntime.__version__); "
+                            "print(importlib.util.find_spec('torch') is None)"],
+                           env=env, capture_output=True, text=True)
+        lines = r.stdout.split()
+        if r.returncode != 0 or lines[-1:] != ["True"]:
+            raise SetupError("expected onnxruntime and no torch, got: "
+                             f"{(r.stdout + r.stderr).strip()[-300:]}")
+        note = f"onnxruntime {lines[0]}, no torch"
+        progress.update(note)
+        return note
     r = subprocess.run([VENV_PYTHON, "-c", "import torch; print(torch.__version__); "
                         "print(torch.cuda.is_available())"],
                        env=env, capture_output=True, text=True)
     lines = r.stdout.split()
-    want = "+cu126" if variant == "cuda" else "+cpu"
+    want = "+cu126"
     if r.returncode != 0 or not lines or not lines[0].endswith(want):
         raise SetupError(f"expected a torch ending in {want}, got: "
                          f"{(r.stdout + r.stderr).strip()[-300:]}")
@@ -341,8 +382,10 @@ def install_packages(uv, variant, progress):
 
 # ------------------------------------------------------------------ 4. model
 
-def fetch_model(progress):
-    if not model_files.verify():
+def fetch_model(progress, variant):
+    # the cpu build has no Kokoro, so Kokoro's 326 MB would be dead weight
+    models = [model_files.PARADEE] if variant == "cpu" else None
+    if not model_files.verify(models):
         progress.update("all files in place and verified")
         return
 
@@ -350,7 +393,7 @@ def fetch_model(progress):
         progress.update(f"{name}: {done / 2**20:.0f} of {total / 2**20:.0f} MiB",
                         done / total)
     try:
-        model_files.fetch(show)
+        model_files.fetch(show, models)
     except (urllib.error.URLError, OSError) as e:
         raise SetupError(f"could not download the model from huggingface.co "
                          f"({getattr(e, 'reason', e)}). Check the connection, "
@@ -458,7 +501,7 @@ def run(variant=None):
         progress.step(3)
         install_packages(uv, variant, progress)
         progress.step(4)
-        fetch_model(progress)
+        fetch_model(progress, variant)
         progress.step(5)
         msg = install_services(progress)
     except Exception as e:      # SetupError, but network and disk too: report it

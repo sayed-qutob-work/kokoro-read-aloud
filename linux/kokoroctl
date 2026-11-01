@@ -21,7 +21,9 @@ Usage:  kokoroctl <command>
   log [setup]          follow server.log (or setup.log) in a terminal
   setup [--cpu|--cuda] [--background]
                        install the server's Python, packages and model
-                       (linux/kokoro_setup.py); run again to repair
+                       (linux/kokoro_setup.py); run again to repair. cpu =
+                       Paradee alone, no torch; cuda adds Kokoro for an
+                       NVIDIA GPU. Without either, the build installed now
   uninstall [--yes] [--purge]
                        remove all of that, the services and the hotkeys;
                        --purge also deletes your settings
@@ -44,10 +46,8 @@ Stdlib only, so the system python3 runs it in ~50ms. Importing anything
 from the venv would pull in torch and take seconds per call.
 """
 
-import glob
 import json
 import os
-import re
 import shutil
 import signal
 import subprocess
@@ -190,23 +190,13 @@ def gpu_info(pid):
     return gpu, vram
 
 
-def torch_build(python=PY):
-    """"cuda" or "cpu": which torch the server's venv holds, read from
-    torch's version.py (`cuda = '12.6'` or `None`) instead of importing
-    torch, which takes seconds. None when there is no venv yet. The panel
-    and `gpu` need it since setup offers the CPU build on NVIDIA machines
-    too, and that torch cannot use the GPU at all."""
-    prefix = os.path.dirname(os.path.dirname(python))
-    for f in glob.glob(os.path.join(prefix, "lib", "python3.*", "site-packages",
-                                    "torch", "version.py")):
-        try:
-            with open(f, encoding="utf-8") as fh:
-                m = re.search(r"^cuda\b[^=]*=\s*(.+)$", fh.read(), re.M)
-        except OSError:
-            continue
-        if m:
-            return "cpu" if m.group(1).strip() == "None" else "cuda"
-    return None
+def installed():
+    """The venv, and the model files its build reads: Paradee's for the cpu
+    build, Kokoro's for the cuda one (its CPU mode fetches Paradee's)."""
+    build = kokoro_setup.installed_build(PY)
+    if build == "cpu":
+        return model_files.complete(model_files.PARADEE_DIR, model_files.PARADEE_FILES)
+    return build == "cuda" and model_files.complete()
 
 
 def status():
@@ -247,8 +237,9 @@ def status():
         "captions": bool(pids("overlay.py")),
         "root": ROOT,
         # what the widget needs to offer setup, and to show it running
-        "installed": os.path.exists(PY) and model_files.complete(),
-        "build": torch_build(),
+        "installed": installed(),
+        # "cpu" = Paradee alone, no torch: the GPU mode cannot work there
+        "build": kokoro_setup.installed_build(PY),
         "setup": kokoro_setup.read_progress(),
     }
 
@@ -511,9 +502,10 @@ def main(argv):
             print("usage: kokoroctl uninstall [--yes] [--purge]", file=sys.stderr)
             return 2
         return kokoro_setup.uninstall("--yes" in args, "--purge" in args)
-    if cmd == "gpu" and torch_build() == "cpu":
-        print("This is the CPU build of Kokoro, which cannot use the GPU. "
-              "`kokoroctl setup --cuda` installs the GPU build.", file=sys.stderr)
+    if cmd == "gpu" and kokoro_setup.installed_build(PY) == "cpu":
+        print("This is the CPU build, Paradee alone, which cannot use the GPU. "
+              "`kokoroctl setup --cuda` installs the GPU build, with Kokoro.",
+              file=sys.stderr)
         return 1
     if cmd in ("gpu", "cpu", "off"):
         msg = set_mode(cmd)

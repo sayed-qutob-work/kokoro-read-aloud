@@ -359,23 +359,22 @@ Panel {
               lineHeight: 1.1
             }
 
-            // The builds setup can install, the default first. Measured
-            // 2026-10-18: a fresh GPU install received 3.8 GiB (4.1 GB); the
-            // CPU build's files add up to 0.74 GB by the same count. First
-            // sound is the RTX 4060 Ti row of AUDIT §8 (2026-10-07) and the
-            // i5-12400F's with Paradee (2026-11-01, 31-37ms). On the CPU the
-            // server reads with Paradee-8M, which has four voices.
+            // The builds setup can install, the default first. Measured: a
+            // fresh GPU install received 3.8 GiB (4.1 GB, 2026-10-18); the CPU
+            // build, Paradee with no torch, about 0.2 GB and 0.6 GB on disk
+            // (2026-11-01). First sound: the RTX 4060 Ti row of AUDIT §8
+            // (2026-10-07), and Paradee on the i5-12400F (29-38ms).
             readonly property var choices: kokoro.hasGpu ? [
+              { variant: "cpu", icon: 0xF0EE0, label: "CPU build · about 0.2 GB",         // md-cpu_64_bit
+                note: "Paradee, a small copy of Kokoro, with four voices: speech starts in under "
+                  + "0.1 s and it never uses the GPU. About 0.6 GB on disk." },
               { variant: "cuda", icon: 0xF08AE, label: "GPU build · about 4 GB",          // md-expansion_card
-                note: "All 28 voices: speech starts in about 0.1 s. It can still switch to the CPU, "
-                  + "with four voices, when a game needs the VRAM. About 7 GB on disk." },
-              { variant: "cpu", icon: 0xF0EE0, label: "CPU build · about 0.7 GB",         // md-cpu_64_bit
-                note: "Smaller, with four voices: speech starts in under 0.1 s. "
-                  + "It cannot use the GPU. About 2 GB on disk." }
+                note: "Adds Kokoro on the GPU, with all 28 voices. It switches to Paradee on the "
+                  + "CPU when a game needs the VRAM. About 7 GB on disk." }
             ] : [
-              { variant: "cpu", icon: 0xF01DA, label: "Set up · about 0.7 GB",            // md-download
-                note: "No NVIDIA GPU was found, so it installs the CPU build, with four voices: "
-                  + "speech starts in under 0.1 s. About 2 GB on disk." }
+              { variant: "cpu", icon: 0xF01DA, label: "Set up · about 0.2 GB",            // md-download
+                note: "Paradee, a small copy of Kokoro, with four voices: speech starts in "
+                  + "under 0.1 s. About 0.6 GB on disk." }
             ]
 
             Column {

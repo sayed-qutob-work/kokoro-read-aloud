@@ -250,11 +250,11 @@ Item {
 
   // Setup runs as its own systemd unit, so closing the panel, or the shell
   // reloading, does not stop it; this only starts it and then polls.
-  // variant "cuda" (the GPU build) or "cpu"; anything else picks the GPU
-  // build when there is an NVIDIA GPU, as `kokoroctl setup` would
+  // variant "cuda" (the GPU build) or "cpu" (Paradee, no torch); anything
+  // else is cpu, as `kokoroctl setup` picks for a new install
   function runSetup(variant) {
     if (busy || setupRunning) return
-    var v = variant === "cpu" || variant === "cuda" ? variant : (hasGpu ? "cuda" : "cpu")
+    var v = variant === "cuda" ? "cuda" : "cpu"
     lastError = ""
     setup = { state: "running", step: 0, steps: 5, title: "Starting", detail: "", fraction: null, variant: v }
     runControl(["setup", "--background", "--" + v])
