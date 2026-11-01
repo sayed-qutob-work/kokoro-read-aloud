@@ -2,9 +2,11 @@
 SHA-256. Two models: Kokoro-82M, and Paradee-8M, Kokoro distilled to 7.9M
 parameters (AUDIT 2026-11-01).
 
-    python3 model_files.py fetch     download what is missing, verified
-    python3 model_files.py verify    check every file against its SHA-256
-    python3 model_files.py where     print the folders
+    python3 model_files.py fetch [kokoro|paradee]   download what is missing, verified
+    python3 model_files.py verify [kokoro|paradee]  check each file against its SHA-256
+    python3 model_files.py where                    print the folders
+
+Both models when none is named. The CPU build needs only Paradee's.
 
 Once all of Kokoro's are in place the server loads the model and voices by
 path and never touches the network (tts_server.KokoroEngine). Without them
@@ -77,8 +79,10 @@ PARADEE_FILES = [
 ]
 
 # What fetch() and verify() cover: (repo, revision, folder, files).
-MODELS = [(REPO, REVISION, DIR, FILES),
-          (PARADEE_REPO, PARADEE_REVISION, PARADEE_DIR, PARADEE_FILES)]
+KOKORO = (REPO, REVISION, DIR, FILES)
+PARADEE = (PARADEE_REPO, PARADEE_REVISION, PARADEE_DIR, PARADEE_FILES)
+MODELS = [KOKORO, PARADEE]
+BY_NAME = {"kokoro": KOKORO, "paradee": PARADEE}
 
 
 def path(name, folder=DIR):
@@ -110,18 +114,20 @@ def _matches(folder, name, size, sha):
     return h.hexdigest() == sha
 
 
-def verify():
+def verify(models=None):
     """Names of the files that are missing or do not match their SHA-256,
-    each under its model's folder name (Kokoro-82M/config.json)."""
-    return [f"{os.path.basename(folder)}/{n}" for _r, _v, folder, files in MODELS
+    each under its model's folder name (Kokoro-82M/config.json). All
+    models unless `models` names some (KOKORO, PARADEE)."""
+    return [f"{os.path.basename(folder)}/{n}" for _r, _v, folder, files in models or MODELS
             for n, size, sha in files if not _matches(folder, n, size, sha)]
 
 
-def fetch(progress=None):
-    """Download every file that is missing or wrong. progress(done, total,
-    name) is called as bytes arrive. Raises on a file that does not match
-    its SHA-256, leaving nothing under its real name."""
-    todo = [(repo, rev, folder, n, size, sha) for repo, rev, folder, files in MODELS
+def fetch(progress=None, models=None):
+    """Download every file that is missing or wrong, of all models unless
+    `models` names some. progress(done, total, name) is called as bytes
+    arrive. Raises on a file that does not match its SHA-256, leaving
+    nothing under its real name."""
+    todo = [(repo, rev, folder, n, size, sha) for repo, rev, folder, files in models or MODELS
             for n, size, sha in files if not _matches(folder, n, size, sha)]
     total, done = sum(t[4] for t in todo), 0
     for repo, rev, folder, name, size, sha in todo:
@@ -148,11 +154,15 @@ def fetch(progress=None):
 
 def main(argv):
     cmd = argv[1] if len(argv) > 1 else "verify"
+    if len(argv) > 2 and argv[2] not in BY_NAME:
+        print(__doc__.split("\n\n")[1], file=sys.stderr)
+        return 2
+    models = [BY_NAME[argv[2]]] if len(argv) > 2 else MODELS
     if cmd == "where":
         for _r, _v, folder, _f in MODELS:
             print(folder)
     elif cmd == "verify":
-        bad = verify()
+        bad = verify(models)
         print("ok" if not bad else "missing or wrong: " + ", ".join(bad))
         return 1 if bad else 0
     elif cmd == "fetch":
@@ -164,8 +174,8 @@ def main(argv):
                 last[0] = pct
                 print(f"\r{pct:3d}%  {done / 2**20:6.1f} / {total / 2**20:.1f} MiB  {name:28}",
                       end="", flush=True)
-        n = fetch(show)
-        count = sum(len(files) for _r, _v, _d, files in MODELS)
+        n = fetch(show, models)
+        count = sum(len(files) for _r, _v, _d, files in models)
         print(("\n" if n else "") + f"ok: {n} downloaded, {count - n} already in place")
     else:
         print(__doc__.split("\n\n")[1], file=sys.stderr)
