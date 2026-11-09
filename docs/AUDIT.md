@@ -4567,7 +4567,12 @@ the reason above.
 `with_timestamps()` in Paradee's Python API. The loader adds `/Clip_output_0`
 as an output. Checked on all six released files (int8 and fp32 of 1.0, 1.1
 and 1.2), every voice: frames × 600 = samples, and word times identical to
-Kokoro's `join_timestamps`.
+Kokoro's `join_timestamps`. Merged 2026-11-03 (`7628433`) and released the
+same day as v1.2.1, with only a version bump on top. The release notes report
+word starts a median of 40 ms from Whisper's across the four voices (the
+maintainer's measurement, not ours). This server is unaffected: it keeps its
+own `_onnx_with_output` and loads the pinned ONNX file directly, never the
+`paradee` package.
 
 ---
 
