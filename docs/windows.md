@@ -20,7 +20,7 @@ each app exposes to accessibility tools:
 | Where | Marker | Notes |
 |---|---|---|
 | Firefox | yes | Gecko exposes real text geometry |
-| Chrome / Edge | yes | Load `extension/` unpacked. In Chromium the extension is the reliable path, not UI Automation |
+| Chrome / Edge | yes | Load `extension/chromium/` unpacked. In Chromium the extension is the reliable path, not UI Automation |
 | Notepad and Win32 editors | yes | |
 | VS Code editor | partial | Needs `"editor.accessibilitySupport": "on"` in user settings, or no editor text is exposed at all |
 | Obsidian (`.md`) | partial | Works since 2026-08-12 |
@@ -46,7 +46,7 @@ tints every other occurrence of the word. To turn that off for markdown only:
 }
 ```
 
-**The Chromium extension** is in `extension/`. Load it in
+**The Chromium extension** is in `extension/chromium/`. Load it in
 `chrome://extensions` with Developer mode on, then "Load unpacked". It only
 reads the server's `/now`, so it should work on Linux too. That is untested.
 

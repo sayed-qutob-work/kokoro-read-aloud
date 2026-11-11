@@ -4574,6 +4574,31 @@ maintainer's measurement, not ours). This server is unaffected: it keeps its
 own `_onnx_with_output` and loads the pinned ONNX file directly, never the
 `paradee` package.
 
+
+### DEPLOYED 2026-11-11: the Chromium extension moved to `extension/chromium/` — the marketplace allows one manifest
+
+**Symptom:** the Omarchy plugin marketplace submission
+([omacom/omarchy-plugin-marketplace#14706](https://github.com/omacom/omarchy-plugin-marketplace/issues/14706))
+failed validation with "New submissions require one plugin with
+`manifest.json` in the repository root", although `manifest.json` is at the
+root and `omarchy plugin validate` passes.
+
+**Cause (read in the marketplace's code, `scripts/build-catalog.mjs`,
+`inspectPluginManifests`):** it lists every blob matching
+`^(?:[^/]+\/)?manifest\.json$`, so the root and one folder down, and a new
+submission must have exactly one, at the root. The Chromium extension's
+`extension/manifest.json` was the second. `omarchy plugin validate` does not
+apply this rule.
+
+**Fix:** the extension's three files moved to `extension/chromium/`, two
+folders deep, which the pattern does not reach. Chromium needs the file to be
+called `manifest.json`, so renaming it was not an option. The files refer to
+each other by bare name, so nothing inside them changed. User docs
+(`windows.md`, `how-it-works.md`, `windows-test-checklist.md`) give the new
+folder; the dated plans (`plan.md`, `RELEASE_PLAN.md`) keep the old one as
+history. **A Windows install that loaded the old folder unpacked has to load
+`extension/chromium` again after pulling.**
+
 ---
 
 ## 9. Accepted trade-offs (settled — reopen only with new information)

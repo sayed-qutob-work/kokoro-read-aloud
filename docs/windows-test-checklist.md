@@ -354,8 +354,8 @@ Follows [install.md](install.md#removing).
 
 - **The Chromium extension:**
   1. In Chrome or Edge, open `chrome://extensions` (or `edge://extensions`),
-     turn on Developer mode, and choose "Load unpacked" with the `extension`
-     folder.
+     turn on Developer mode, and choose "Load unpacked" with the
+     `extension/chromium` folder.
   2. Read a paragraph of a web page.
   - **Expect:** the word is marked inside the page.
   - **If not:** check the extension's worker console, under "Inspect views"
