@@ -8,15 +8,20 @@
 // paints the current word with the CSS Custom Highlight API - no DOM
 // mutation, so it cannot break page layout. Clears itself when speech ends.
 //
+// The relay (background.js) answers only while the text being read is this
+// frame's selection, so text read from other programs never reaches the page.
+// A frame with no selection does not poll at all.
+//
 // Limits: DOM text only - not PDFs in the built-in viewer, not canvas apps
-// like Google Docs. Text selected in OTHER apps simply won't match anything
-// here, and nothing happens (the overlay still covers those).
+// like Google Docs. Text selected in OTHER apps is never sent here, and
+// nothing happens (the overlay still covers those).
 
 const IDLE_MS = 400;
 const ACTIVE_MS = 60;
 const HL = "kokoro-word";
 
 let wordRanges = [];  // [{range, norm}] snapshot of the last real selection
+let selText = "";     // that selection's text, for the relay's check
 let cursor = 0;       // next unmatched snapshot word (reading order)
 let chunkKey = null;  // /now text of the chunk currently mapped
 let chunkMap = [];    // chunk token index -> snapshot index (-1 = no match)
@@ -52,6 +57,7 @@ document.addEventListener("selectionchange", () => {
   }
   if (ranges.length) {
     wordRanges = ranges;
+    selText = sel.toString();
     cursor = 0;
     chunkKey = null;
   }
@@ -86,8 +92,11 @@ function mark(idx) {
 }
 
 async function poll() {
+  if (!wordRanges.length) { setTimeout(poll, IDLE_MS); return; }
   let d = null;
-  try { d = await chrome.runtime.sendMessage("now"); } catch {}
+  try {
+    d = await chrome.runtime.sendMessage({ type: "now", selection: selText });
+  } catch {}
   if (d && d.active && wordRanges.length) {
     active = true;
     inactivePolls = 0;

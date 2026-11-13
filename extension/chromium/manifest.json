@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Kokoro Read-Aloud Highlighter",
-  "version": "1.0",
+  "version": "1.1",
   "description": "Highlights the word being spoken by the local Kokoro TTS server, in place on the page, Speechify-style.",
   "host_permissions": ["http://127.0.0.1:5111/*"],
   "background": { "service_worker": "background.js" },
