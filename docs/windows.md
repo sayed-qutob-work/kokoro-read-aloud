@@ -48,14 +48,22 @@ tints every other occurrence of the word. To turn that off for markdown only:
 
 **The Chromium extension** is in `extension/chromium/`. Load it in
 `chrome://extensions` with Developer mode on, then "Load unpacked". It only
-reads the server's `/now` and `/utterance`, so it should work on Linux too.
-That is untested. It marks words only in the page whose selection is being
-read: text read from another program never reaches a web page (AUDIT
-2026-11-13). After updating the repo, press the extension's reload button
-in `chrome://extensions`.
+reads the server's `/now` and `/utterance`, so it works on Linux too
+(Chromium on Omarchy, 2026-11-13). It marks words only in the page whose
+selection is being read: text read from another program never reaches a web
+page (AUDIT 2026-11-13). After updating the repo, press the extension's
+reload button in `chrome://extensions`.
 
-There is no in-place highlighter on Linux. UI Automation is a Windows API and
-Wayland has no equivalent, so Linux has the caption strip only.
+Its toolbar button opens its settings (pin it from the puzzle-piece menu to
+keep it in view): highlight the **word**, the **sentence**, or **both**, the
+**colour**, its **strength** and its **size**. A preview shows the result,
+and changes apply to open pages at once, mid-read too. While a read is on,
+the page's own selection colour is turned off so the highlight shows; the
+selection comes back when the read ends.
+
+Apart from this extension in Chromium, there is no in-place highlighter on
+Linux. UI Automation is a Windows API and Wayland has no equivalent, so other
+Linux apps have the caption strip only.
 
 ## Known issues
 

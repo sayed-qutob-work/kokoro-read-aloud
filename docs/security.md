@@ -269,6 +269,11 @@ process, the text of another program's read never reaches the page at all.
 The 10% margin is there because a copy includes images' alt text and
 `Selection.toString()` does not (measured).
 
+Since version 1.2, the same day, the extension no longer paints with
+`CSS.highlights` at all: to give the highlight padding it draws boxes
+inside a closed shadow root. The check in the relay is still what keeps
+another program's text away from the page.
+
 **The lesson.** A shared browser API has two sides. The extension writes
 `CSS.highlights` and the page can read it, so anything painted with it is
 told to the page. Decide what the page may learn before you paint.

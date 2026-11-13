@@ -4668,6 +4668,76 @@ clipboard on Windows) with the extension loaded in a desktop browser.
 **After pulling, reload the extension** in `chrome://extensions`: Chromium
 does not reload an unpacked extension on its own.
 
+**Tested by the user the same day** in Chromium on Omarchy: a real hotkey
+read of a page's selection highlighted in place. This is the first Linux use
+of the extension. Their verdict: it works, but the highlight is "very tight,
+vertically and horizontally".
+
+### DEPLOYED 2026-11-13: extension 1.2 — a padded highlight, sentence mode, and a settings popup
+
+**Request (user, after trying 1.1):** a roomier highlight, sentences as
+well as words, and settings in the extension itself for size, colour and
+word-or-sentence.
+
+**Why the drawing changed:** `::highlight()` takes colour properties only.
+It has no padding, margin, outline or border-radius, so it can only paint the
+glyphs' own box. That box is the tightness. `paint.js` now draws the
+highlight itself:
+- Translucent boxes in a fixed, click-through host element with a **closed
+  shadow root**, at the top z-index. The page's own elements are never moved
+  or restyled.
+- One box per line, padded in proportion to the text height (size 0–10) and
+  rounded.
+- Each layer is one group with the layer's opacity, so the boxes of a
+  sentence don't darken where they overlap.
+- Redrawn at each poll (60 ms) and on any scroll (capture listener, one per
+  frame), so the boxes follow reflow and scrolling containers.
+
+**Sentences:** `Intl.Segmenter` (ICU) splits the text of the selection's
+nodes, with a line break wherever the block element changes, so a heading or
+list item never runs into the next one. Measured in Node, ICU splits after
+"Dr." and "Mr." but not after "U.S.", "p.m." or "e.g.". A short list of
+titles and single initials never ends a sentence. This runs once per read,
+not per selection change, since it reads computed styles. "Both" draws the
+sentence at 45% of the word's strength, under the word.
+
+**The selection colour is off during a read.** The rendered pages showed the
+browser's blue selection under the new blue highlight, which hid the word.
+While a read is on, an adopted stylesheet sets
+`::selection{background-color:transparent}`. The selection itself stays and
+is painted again when the read ends (measured: the sheet is gone and the
+selection shows).
+
+**Settings:** the toolbar popup (`popup.html`, also the options page) has
+word / sentence / both, five colours plus a custom picker, strength 10–70%
+(default 35) and size 0–10 (default 3), with a live preview drawn by the same
+`paint.js`. The popup writes `chrome.storage.local` `highlight` and pages
+apply it at once through `storage.onChanged`. It uses `local`, not `sync`:
+an unpacked extension's ID comes from its folder, so `sync` would not follow
+it to another machine, and `local` has no write quota to trip while a slider
+is dragged. `Kokoro.settings()` validates whatever storage holds. New
+permission: `storage` (no install warning).
+
+**Measured** (headless Chromium 155, the mock server, light and dark pages,
+screenshots at 2x):
+- Word, sentence and both all render as intended.
+- The sentence numbering of "Dr. Smith opened the letter. It said … from J.
+  Lee. She sighed …" is 0 / 1 / 2, with the link and bold words inside
+  their sentence.
+- When the read ends, the boxes clear and the selection shows again.
+- The popup renders in light and dark.
+
+**Fixed on the way (own commit):** a selection inside **one text node**, such
+as a few words of a plain paragraph, gave the snapshot **0 words**: the
+TreeWalker never returns its root, and that text node was the root. Measured:
+0 words in 1.1, 2 in 1.2. Selections across elements (a whole paragraph, or
+one with a link) were unaffected, which is likely what the user's test used.
+
+**Tests:** `node tests/test_extension.mjs` now also checks the settings
+validation (12 pass).
+
+**Not tested:** 1.2 in the user's desktop Chromium, with a real read.
+
 ---
 
 ## 9. Accepted trade-offs (settled — reopen only with new information)
