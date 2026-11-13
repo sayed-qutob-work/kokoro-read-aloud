@@ -10,9 +10,10 @@
 // page layout. Clears itself when speech ends.
 //
 // The relay (background.js) answers only while the text being read is this
-// frame's selection, word for word, and this frame has had the focus during
-// the read, so text read from other programs never reaches the page. A frame
-// with no selection does not poll at all.
+// frame's selection, word for word, and this frame was let in: it held the
+// keyboard focus when the relay first judged its tab during the read. So
+// text read from other programs never reaches the page. A frame with no
+// selection does not poll at all.
 //
 // Limits: DOM text only - not PDFs in the built-in viewer, not canvas apps
 // like Google Docs. Text selected in OTHER apps is never sent here, and
@@ -123,6 +124,21 @@ function continues(text, pos, piece) {
   return i;
 }
 
+// Whether this frame holds the keyboard focus. document.hasFocus() is also
+// true in every frame above the one that holds it, where activeElement is
+// the frame's element (or the shadow host around it), and the relay judges
+// only one frame per tab and read.
+function holdsFocus() {
+  if (!document.hasFocus()) return false;
+  let a = document.activeElement;
+  for (;;) {
+    const root = a && (chrome.dom?.openOrClosedShadowRoot?.(a) ?? a.shadowRoot);
+    if (!root || !root.activeElement) break;
+    a = root.activeElement;
+  }
+  return !(a && /^(iframe|frame|object|embed)$/.test(a.localName));
+}
+
 document.addEventListener("selectionchange", () => {
   if (active) return; // don't drop the snapshot mid-read
   const sel = document.getSelection();
@@ -170,7 +186,7 @@ async function poll() {
   let d = null;
   try {
     d = await chrome.runtime.sendMessage(
-      { type: "now", selection: selTexts, focused: document.hasFocus() });
+      { type: "now", selection: selTexts, focused: holdsFocus() });
   } catch {}
   if (d && d.active && snap.length) {
     if (!active) selectionShown(false);

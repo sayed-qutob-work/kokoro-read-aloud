@@ -1,6 +1,7 @@
 // The Chromium extension's relay check (extension/chromium/background.js):
 // a frame is told what is being read only while that is its own selection,
-// word for word, and only once it has had the focus during the read.
+// word for word, and only if it was let in: it held the focus when its tab
+// was judged, once per tab and read.
 // No browser and no server: background.js runs in a Node vm with stand-ins
 // for chrome.runtime and fetch. Also the highlight settings' validation
 // (paint.js).
@@ -114,17 +115,45 @@ const cases = {
     assert.deepEqual(await ask(OWN), want);
     assert.deepEqual(await ask(OWN, { focused: false }), want);
   },
-  "... but no other frame gets in on it": async () => {
+  "... but no other frame of its tab gets in on it, focus or not": async () => {
     reading(OWN);
     assert.equal((await ask(OWN)).active, true);
     const other = { ...FRAME, frameId: 3, documentId: "D2" };
     assert.deepEqual(await ask(OWN, { focused: false, frame: other }), IDLE);
+    assert.deepEqual(await ask(OWN, { frame: other }), IDLE);
   },
   "... nor the same frame on the next read": async () => {
     reading(OWN);
     assert.equal((await ask(OWN)).active, true);
     reading(OWN);
     assert.deepEqual(await ask(OWN, { focused: false }), IDLE);
+  },
+  "a refused guess locks the tab for the rest of the read": async () => {
+    reading(SECRET);
+    assert.deepEqual(await ask("The code is four eight two two"), IDLE);
+    assert.deepEqual(await ask(SECRET), IDLE); // the right guess, too late
+  },
+  "... and the next read is judged afresh": async () => {
+    reading(SECRET);
+    assert.deepEqual(await ask("The code is four eight two two"), IDLE);
+    const want = reading(SECRET);
+    assert.deepEqual(await ask(SECRET), want);
+  },
+  "a frame without the focus does not use up its tab's verdict": async () => {
+    const want = reading(OWN);
+    const parent = { ...FRAME, frameId: 0, documentId: "P" };
+    assert.deepEqual(await ask("An old selection", { focused: false, frame: parent }), IDLE);
+    assert.deepEqual(await ask(OWN, { frame: { ...FRAME, frameId: 5 } }), want);
+  },
+  "another tab is judged on its own": async () => {
+    const want = reading(OWN);
+    assert.deepEqual(await ask("The code is four eight two two"), IDLE);
+    const tab2 = { tab: { id: 2, active: true }, frameId: 0, documentId: "T2" };
+    assert.deepEqual(await ask(OWN, { frame: tab2 }), want);
+  },
+  "a message from outside a tab is not told": async () => {
+    reading(OWN);
+    assert.deepEqual(await ask(OWN, { frame: { frameId: 0 } }), IDLE);
   },
   "a frame let in that changes its selection is not told": async () => {
     reading(OWN);
