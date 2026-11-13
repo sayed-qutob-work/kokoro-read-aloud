@@ -1,7 +1,8 @@
 # Every browser tab could talk to our "local" server
 
 *How three web-page attacks were measured against Kokoro Read-Aloud's
-localhost server, and how they were closed. 2026-10-18.*
+localhost server, and how they were closed. 2026-10-18. A postscript
+(2026-11-13) covers a fourth, through the browser extension.*
 
 Kokoro Read-Aloud keeps a text-to-speech model loaded in a small HTTP server.
 You press a hotkey, a script sends the selected text to
@@ -229,3 +230,45 @@ the exact headers Chromium sent:
 - **Never change state on a GET.**
 - **Test in a real browser.** Header behaviour differs by browser, by scheme
   and by host. A guess would have missed attack 3's missing headers.
+
+## Postscript, 2026-11-13: the extension told pages what was being read
+
+The three attacks above went at the server. A fourth went through our own
+browser extension, and a reviewer of the Omarchy plugin marketplace found
+it.
+
+**What it was.** The extension's content script runs in every page. It
+remembers the page's selection, asks the server what is being read, and
+tints the spoken word with the CSS Custom Highlight API. It asked about
+every read, whichever program had started it. And `CSS.highlights` is shared
+with the page's own scripts.
+
+So a page could select a hidden list of words, wait, and read back which of
+them lit up:
+
+```js
+const r = document.createRange();
+r.selectNodeContents(bait);  // off-screen: "zero one two ... nine", repeated
+getSelection().addRange(r);
+setInterval(() => {
+  for (const range of CSS.highlights.get("kokoro-word") ?? [])
+    seen.push(range.toString());
+}, 5);
+```
+
+Measured as above, in headless Chromium, with a mock server that read
+"The code is four eight two one" as if from another program. The page
+logged `four, eight, two, one`.
+
+**The fix.** The extension's background worker now answers a page only
+while the text being read is that page's own selection. At least 90% of the
+words have to agree, in order, both ways. The page logged nothing. A page
+that guessed the read one word off also got nothing. Its own selections
+still highlighted every word. Because the check runs in the extension's own
+process, the text of another program's read never reaches the page at all.
+The 10% margin is there because a copy includes images' alt text and
+`Selection.toString()` does not (measured).
+
+**The lesson.** A shared browser API has two sides. The extension writes
+`CSS.highlights` and the page can read it, so anything painted with it is
+told to the page. Decide what the page may learn before you paint.

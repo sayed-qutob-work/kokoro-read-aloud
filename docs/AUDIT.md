@@ -4599,6 +4599,75 @@ folder; the dated plans (`plan.md`, `RELEASE_PLAN.md`) keep the old one as
 history. **A Windows install that loaded the old folder unpacked has to load
 `extension/chromium` again after pulling.**
 
+### FIXED 2026-11-13: the Chromium extension showed any page every read — it now answers only the page whose selection is being read
+
+**Report:** a marketplace maintainer's review of #14706
+([comment](https://github.com/omacom/omarchy-plugin-marketplace/issues/14706#issuecomment-6857181473)),
+rated Low, with the label `needs-fixes`: "the optional Chromium extension
+maps global read-aloud words onto a retained page selection and exposes the
+matching ranges through CSS.highlights. A malicious page with such a
+selection can observe matching words, their order and reading activity when
+private text is subsequently spoken from another application."
+
+**Mechanism:** `content.js` runs in every frame of every page
+(`<all_urls>`, `all_frames`) and snapshots whatever selection the page
+holds, including one the page made itself on hidden text. The background
+worker relayed `/now` of **every** read to **every** frame that asked, so a
+read from a terminal or a password manager's clipboard was mapped onto that
+snapshot. Matching words were painted through `CSS.highlights`, which the
+page's own scripts share: `CSS.highlights.get("kokoro-word")` returns the
+Range, and the page reads its text.
+
+**Measured:** headless Chromium 155, throwaway profile, the extension copied
+with its URL pointed at a mock `/now` + `/utterance` on port 5199 (no model,
+no audio, the real server untouched), pages at `http://evil.test:8765`
+(`--host-resolver-rules`). Each page polled `CSS.highlights` every 5 ms and
+logged what it found.
+
+| Scenario | Before | After |
+|---|---|---|
+| A. The page selects an off-screen list of digit words; another program's text is read: "The code is four eight two one" | page logged `four, eight, two, one` | nothing |
+| B. The page's own selected paragraph is read | all 13 words | all 13 words |
+| C. Same, with a `user-select:none` "Copy" label inside the selection | all 23 words | all 23 words |
+| D. Own selection, the read differs by one word in 23 | – | 22 words (the missing one skipped) |
+| E. The page's bait is a guess one word off the 7-word read | – | nothing |
+| `/now` requests from a frame with no selection | 5 per 2 s | 0 |
+
+Probe, same browser: `Selection.toString()` and a copy (`execCommand`,
+clipboard read back) agree except that **the copy adds images' alt text**.
+Both leave out `user-select:none` and `display:none` text. That is why the
+check below tolerates a few words.
+
+**Fix (extension 1.1):**
+- `content.js` sends its selection's text (`toString()`) with each poll, and
+  a frame with no selection does not poll at all.
+- `background.js` fetches `/utterance` once per read (`utt`, which `/now`
+  shares) and answers with the chunk only if the selection's words and the
+  read's words agree, in order, on at least 90% of the longer of the two.
+  It uses the same bounded forward scan as `content.js`. Otherwise it answers
+  `{active: false}`. If a new read starts between the two requests, the
+  `utt` values differ and the frame gets `{active: false}` until the next
+  poll.
+- It relays only `active`, `text`, `words` and `word`, not the sentence
+  context.
+
+The check runs in the extension's process, so the text of another program's
+read never reaches the page's renderer at all.
+
+**What is still true:** a page whose own selection is read learns that it is
+being read and which word is current; that is the feature. To see anything of
+another read, a page must already know nine words in ten of it, in order.
+
+**Tests:** `node tests/test_extension.mjs` runs `background.js` in a Node vm
+with stand-ins for `chrome.runtime` and `fetch`: cases A, B, D and E, plus a
+whitespace/case case and the error paths. 9 pass; the previous
+`background.js` fails all of them.
+
+**Not tested:** a real read through the hotkey (PRIMARY on Linux, the
+clipboard on Windows) with the extension loaded in a desktop browser.
+**After pulling, reload the extension** in `chrome://extensions`: Chromium
+does not reload an unpacked extension on its own.
+
 ---
 
 ## 9. Accepted trade-offs (settled — reopen only with new information)

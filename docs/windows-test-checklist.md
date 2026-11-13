@@ -360,6 +360,10 @@ Follows [install.md](install.md#removing).
   - **Expect:** the word is marked inside the page.
   - **If not:** check the extension's worker console, under "Inspect views"
     on the extensions page.
+  3. Leave that paragraph selected, copy a line in Notepad, and press
+     Ctrl+Alt+T.
+  - **Expect:** the line is read and nothing is marked in the page. The
+    page is told only about reads of its own selection (AUDIT 2026-11-13).
 - **Terminal text:** with copy-on-select **off** in Windows Terminal (the
   default), select text in it and press Ctrl+Alt+R.
   - **Expect:** the selection is read and the marker follows it. With

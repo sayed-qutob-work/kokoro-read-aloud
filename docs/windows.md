@@ -48,7 +48,11 @@ tints every other occurrence of the word. To turn that off for markdown only:
 
 **The Chromium extension** is in `extension/chromium/`. Load it in
 `chrome://extensions` with Developer mode on, then "Load unpacked". It only
-reads the server's `/now`, so it should work on Linux too. That is untested.
+reads the server's `/now` and `/utterance`, so it should work on Linux too.
+That is untested. It marks words only in the page whose selection is being
+read: text read from another program never reaches a web page (AUDIT
+2026-11-13). After updating the repo, press the extension's reload button
+in `chrome://extensions`.
 
 There is no in-place highlighter on Linux. UI Automation is a Windows API and
 Wayland has no equivalent, so Linux has the caption strip only.
