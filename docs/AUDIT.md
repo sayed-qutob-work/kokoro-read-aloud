@@ -4788,12 +4788,20 @@ starts on it selects nothing.
   unselectable) do not advance the walk. There is no walk without an image.
 - `background.js` answers only if the read's words equal one of those
   texts' words, one for one. No margin.
-- It also needs `focused: document.hasFocus()` from the frame and
-  `sender.tab.active`, but only to let a frame in: a frame let in during a
-  read (`utt`) keeps it, so a read begun in the browser keeps its highlight
-  when you switch away. Another frame, or the same one on the next read,
-  needs the focus again. A frame let in that changes its selection is
-  refused at once (its words no longer equal the read).
+- **One verdict per tab and read.** The first frame of a tab to ask while
+  it holds the keyboard focus (`sender.tab.active`, and `focused` from the
+  content script) is let in if its words match, or refused, and that
+  verdict holds for the whole tab until the read (`utt`) ends. Frames that
+  ask without the focus are turned away without using up the verdict.
+- A frame let in keeps the read when the focus leaves, so a read begun in
+  the browser keeps its highlight when you switch away. If it changes its
+  selection, it is refused at once (its words no longer equal the read).
+- `focused` is `holdsFocus()`: `document.hasFocus()`, and `activeElement`
+  (through open or closed shadow roots, `chrome.dom.openOrClosedShadowRoot`)
+  is not an `iframe`/`frame`/`object`/`embed`. `hasFocus()` alone is also
+  true in every frame above the focused one (measured below). A parent
+  holding an old selection could then take the tab's verdict and lock out
+  the frame being read.
 - Version 1.3.
 
 **Measured** (headless Chromium 155, same mock `/now` + `/utterance`, pages at
@@ -4823,23 +4831,46 @@ Headless has no OS focus between windows: a second window does not clear
 `document.hasFocus()`, while another tab or a minimized window does
 (measured). A minimized window stands in for "a terminal is focused".
 
-**What is still true:** a page with the focus can test a guess of the whole
-text, word for word, while something else is read with the browser in front
-(the clipboard with Ctrl+Alt+T). That is one guess per idle poll (400 ms).
-It also applies if you switch to the browser while a read from another
+**Tightened the same day, before pushing: one verdict per tab and read.**
+The first cut of 1.3 (f01d261) judged a frame again at every poll until one
+matched. A focused page could swap in a new guess of the whole read between
+polls, one guess per idle poll (400 ms). For a short read, such as a code
+read from the clipboard with Ctrl+Alt+T, guessing the whole read is
+guessing the code. The user asked whether the reviewer would accept that,
+and the verdict is now kept per tab (above). Measured the same way:
+
+| Scenario | 1.3 first cut (f01d261) | 1.3 |
+|---|---|---|
+| G. A focused page selects a new guess of the whole read every 450 ms, 8 guesses round and round; "The code is four eight two one" read at 0.7 s a word | **let in** at the right guess: overlay added, sheet adopted | nothing |
+| I. The page holds an old selection of its own; the selection read is in a same-origin iframe | lit | lit |
+
+In I, after the drag inside the iframe, `document.hasFocus()` is true in
+**both** documents, and the parent still holds its selection.
+`holdsFocus()` is false in the parent and true in the iframe. All the
+scenarios of the first table give the same results with the tab lock.
+
+**What is still true:** a page with the focus can test **one** guess of the
+whole text, word for word, per read (per tab: another tab gets its own
+verdict once you bring it to the front). That applies while something else
+is read with the browser in front, for example the clipboard with
+Ctrl+Alt+T, or when you switch to the browser while a read from another
 program plays. A read started in another program with the browser behind it
 reaches no page. A page whose own selection is read learns that it is being
 read and which word is current: that is the feature.
 
-**Tests:** `node tests/test_extension.mjs`, 21 pass. New cases: the
+**Tests:** `node tests/test_extension.mjs`, 26 pass. New cases: the
 reviewer's case, one word missing, the alt-text text, U+FFFC, no focus, a
-background tab, a frame let in keeps the read, no other frame gets in on
-it, the next read needs the focus again, a frame that changes its selection
-is refused.
+background tab, a frame let in keeps the read, no other frame of its tab
+gets in (focus or not), the next read needs the focus again, a refused
+guess locks the tab for the read, the next read is judged afresh, a frame
+without the focus does not use up the verdict, another tab is judged on its
+own, no tab, and a frame that changes its selection is refused.
 
 **Not tested:** a real desktop. Two things only a desktop shows:
 - that `document.hasFocus()` is false while a terminal has the focus
-  (Wayland/Hyprland, and Windows);
+  (Wayland/Hyprland, and Windows). If it were not, a read from another
+  program would still need the page to hold its exact text, and the page
+  would still get one guess per read;
 - that real reads (PRIMARY on Linux, the copy on Windows) still highlight.
 
 The harness (mock server, pages, CDP driver) was in the session scratchpad,

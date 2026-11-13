@@ -287,11 +287,13 @@ So version 1.3 asks for two things:
   reads the PRIMARY selection, which has the same words as `toString()`
   (an image becomes U+FFFC there). A page that is told about a read learns
   nothing it did not already have.
-- **The focus.** A frame is let in only once it has the keyboard focus, in
-  the visible tab, while the read plays. When you read from a terminal, the
-  browser is not the focused window, so no page is told anything, not even
-  a page holding the very same text. Once let in, a frame keeps the read if
-  you switch away while it plays.
+- **The focus, and one try.** A frame is let in only if it holds the
+  keyboard focus, in the visible tab, while the read plays. When you read
+  from a terminal, the browser is not the focused window, so no page is
+  told anything, not even a page holding the very same text. Each tab is
+  judged once per read: if its first try does not match, the tab gets
+  nothing until the next read. Once let in, a frame keeps the read if you
+  switch away while it plays.
 
 Measured the same way: the guessing page logged nothing. A page's own
 selection still highlighted, and so did a selection with an image read
@@ -304,12 +306,17 @@ root. The page cannot see which word is lit any more, but it can still see
 that a read started and ended, since an element and a stylesheet appear. So
 the check in the relay is what keeps another program's text from the page.
 
-**What is still true.** A page with the focus can still test a guess of the
-whole text, word for word, while you read something else with the browser
-in front, for example the clipboard with Ctrl+Alt+T. It gets one guess per
-poll, every 400 ms, and only while the browser is in front: a read started
-in a terminal gives it nothing, unless you switch to the browser while that
-read plays.
+The single try came last. A first cut judged a page again at every poll,
+so a page with the focus could swap in a new guess of the whole text every
+400 ms. For a short read, a code you copied, guessing the whole text is
+guessing the code. Measured with a page that cycled through eight guesses:
+the first cut let it in at the right one, and the single try did not.
+
+**What is still true.** A page with the focus can still test one guess of
+the whole text, word for word, per read, while you read something else with
+the browser in front, for example the clipboard with Ctrl+Alt+T. A read
+started in a terminal gives it nothing, unless you switch to the browser
+while that read plays.
 
 **The lesson.** A shared browser API has two sides. The extension writes
 `CSS.highlights` and the page can read it, so anything painted with it is
