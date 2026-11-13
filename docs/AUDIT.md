@@ -4738,6 +4738,113 @@ validation (12 pass).
 
 **Not tested:** 1.2 in the user's desktop Chromium, with a real read.
 
+### FIXED 2026-11-14: extension 1.3 — a page is told about a read only if it is its own selection word for word, and it has the focus
+
+**Report:** the same reviewer, on the pushed fix
+([comment](https://github.com/omacom/omarchy-plugin-marketplace/issues/14706#issuecomment-6858050147)),
+still Low, `needs-fixes` kept: "The unrelated-selection case is fixed, but
+Low remains at 8937ef0 (extension/chromium/background.js:55–58;
+content.js:87–104): a 90% word-overlap check can still forward another
+application's read to page-visible highlights. With the optional extension
+installed and a malicious page already knowing most of that utterance, the
+highlights can reveal which matching candidate private words are spoken and
+their timing."
+
+**Mechanism:** 90% of the longer of the two word lists is a margin a page
+can spend. A page that knows a 50-word message except its code selects the
+message with "three seven nine" where the code goes: 50 of 52 words agree
+(need 46.8), the relay answers, and `content.js` maps "seven" onto the
+page's "seven". In 1.1 the page read it from `CSS.highlights`. In 1.2 the
+page cannot see the boxes (closed shadow root), but the private word still
+reached the page's renderer in `words`, and the page saw the read start and
+end: `<kokoro-highlight>` added, and the adopted `::selection` sheet, which
+the page's `document.adoptedStyleSheets` lists (measured).
+
+**Measured first: what each read path hands the server.** Headless Chromium
+155, a trusted mouse drag (CDP `Input.dispatchMouseEvent`) over each section
+of a test page. PRIMARY is read back by a middle-click into a textarea
+(headless keeps it in an in-memory clipboard), the copy by Ctrl+C then
+Ctrl+V.
+
+| Selection | `toString()` | PRIMARY (Linux hotkey) | Copy (Windows hotkey) |
+|---|---|---|---|
+| Two plain paragraphs | text | same | same |
+| After a `user-select:none` label | label left out | same | same |
+| An `<img alt>` mid-sentence | nothing for the image | U+FFFC | **the alt text, in place** |
+| `display:none` and `visibility:hidden` spans | left out | same | same |
+| `::before` content, list markers | left out | same | same |
+
+So the read's words are `toString()`'s words, plus alt text on the copy
+path. U+FFFC is not a word (`\p{L}\p{N}`). That one difference is what the
+90% margin was for, and it can be produced exactly instead. A
+`user-select:none` label must be skipped by a backward drag: a drag that
+starts on it selects nothing.
+
+**Fix (extension 1.3):**
+- `content.js` sends `selection: [toString()]`. When the selection holds an
+  `<img>` with alt text it also sends `toString()` with that alt text put in
+  where the image sits. The position comes from walking the range's text
+  nodes against `toString()`, whitespace aside; nodes it left out (hidden,
+  unselectable) do not advance the walk. There is no walk without an image.
+- `background.js` answers only if the read's words equal one of those
+  texts' words, one for one. No margin.
+- It also needs `focused: document.hasFocus()` from the frame and
+  `sender.tab.active`, but only to let a frame in: a frame let in during a
+  read (`utt`) keeps it, so a read begun in the browser keeps its highlight
+  when you switch away. Another frame, or the same one on the next read,
+  needs the focus again. A frame let in that changes its selection is
+  refused at once (its words no longer equal the read).
+- Version 1.3.
+
+**Measured** (headless Chromium 155, same mock `/now` + `/utterance`, pages at
+`evil.test`/`own.test`, each page logging what its scripts can see: added
+elements, `adoptedStyleSheets`, `CSS.highlights`; the content script's state
+read in its isolated world):
+
+| Scenario | 1.1 (8937ef0, reviewed) | 1.2 (dab1522) | 1.3 |
+|---|---|---|---|
+| R. The reviewer's case: 50-word message, the page selects it with "three seven nine" for "seven" | page logged the words as read, **seven** included | content script lit **seven**; page saw the overlay added and a sheet adopted, then dropped | nothing |
+| A. Off-screen digit list; "The code is four eight two one" read | nothing | nothing | nothing |
+| E. A guess one word off | nothing | nothing | nothing |
+| The page holds the read word for word, window minimized | – | lit | nothing |
+| Same, page focused | – | – | told: it learns nothing it did not have |
+| B. Own two paragraphs, PRIMARY text | lit | lit | lit |
+| C. Own sentence after a `user-select:none` label | nothing (one-text-node bug) | lit | lit |
+| Own sentence with an image, PRIMARY text | lit | lit | lit |
+| Same, copy text (alt added) | **nothing** (5 of 9 words) | **nothing** | lit |
+| Own selection, another tab in front | lit | lit | nothing |
+| Own selection, window minimized | lit | lit | nothing |
+| Own selection, another tab brought to front 1.2 s into the read | kept | kept | kept |
+
+"Lit" = the content script highlighted the words as they were read. At the
+mock's 0.15 s a word, the first word passes before the first poll.
+
+Headless has no OS focus between windows: a second window does not clear
+`document.hasFocus()`, while another tab or a minimized window does
+(measured). A minimized window stands in for "a terminal is focused".
+
+**What is still true:** a page with the focus can test a guess of the whole
+text, word for word, while something else is read with the browser in front
+(the clipboard with Ctrl+Alt+T). That is one guess per idle poll (400 ms).
+It also applies if you switch to the browser while a read from another
+program plays. A read started in another program with the browser behind it
+reaches no page. A page whose own selection is read learns that it is being
+read and which word is current: that is the feature.
+
+**Tests:** `node tests/test_extension.mjs`, 21 pass. New cases: the
+reviewer's case, one word missing, the alt-text text, U+FFFC, no focus, a
+background tab, a frame let in keeps the read, no other frame gets in on
+it, the next read needs the focus again, a frame that changes its selection
+is refused.
+
+**Not tested:** a real desktop. Two things only a desktop shows:
+- that `document.hasFocus()` is false while a terminal has the focus
+  (Wayland/Hyprland, and Windows);
+- that real reads (PRIMARY on Linux, the copy on Windows) still highlight.
+
+The harness (mock server, pages, CDP driver) was in the session scratchpad,
+not the repo.
+
 ---
 
 ## 9. Accepted trade-offs (settled — reopen only with new information)

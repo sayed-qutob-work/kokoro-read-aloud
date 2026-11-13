@@ -363,7 +363,13 @@ Follows [install.md](install.md#removing).
   3. Leave that paragraph selected, copy a line in Notepad, and press
      Ctrl+Alt+T.
   - **Expect:** the line is read and nothing is marked in the page. The
-    page is told only about reads of its own selection (AUDIT 2026-11-13).
+    page is told only about reads of its own selection (AUDIT 2026-11-13,
+    2026-11-14).
+  4. Read a paragraph that holds an image with alt text, such as a
+     Wikipedia paragraph with an inline icon.
+  - **Expect:** the words are marked as in step 2. A copy adds the alt text
+    to what is read, and the extension expects it (1.3, AUDIT 2026-11-14;
+    measured in headless Chromium only).
 - **Terminal text:** with copy-on-select **off** in Windows Terminal (the
   default), select text in it and press Ctrl+Alt+R.
   - **Expect:** the selection is read and the marker follows it. With

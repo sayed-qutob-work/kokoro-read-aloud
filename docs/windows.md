@@ -50,8 +50,9 @@ tints every other occurrence of the word. To turn that off for markdown only:
 `chrome://extensions` with Developer mode on, then "Load unpacked". It only
 reads the server's `/now` and `/utterance`, so it works on Linux too
 (Chromium on Omarchy, 2026-11-13). It marks words only in the page whose
-selection is being read: text read from another program never reaches a web
-page (AUDIT 2026-11-13). After updating the repo, press the extension's
+selection is being read, word for word, and only if that page has the focus
+when the read starts: text read from another program never reaches a web
+page (AUDIT 2026-11-13, 2026-11-14). After updating the repo, press the extension's
 reload button in `chrome://extensions`.
 
 Its toolbar button opens its settings (pin it from the puzzle-piece menu to

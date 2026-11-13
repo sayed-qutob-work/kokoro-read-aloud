@@ -261,19 +261,58 @@ Measured as above, in headless Chromium, with a mock server that read
 logged `four, eight, two, one`.
 
 **The fix.** The extension's background worker now answers a page only
-while the text being read is that page's own selection. At least 90% of the
-words have to agree, in order, both ways. The page logged nothing. A page
-that guessed the read one word off also got nothing. Its own selections
-still highlighted every word. Because the check runs in the extension's own
-process, the text of another program's read never reaches the page at all.
-The 10% margin is there because a copy includes images' alt text and
-`Selection.toString()` does not (measured).
+while the text being read is that page's own selection. At first (version
+1.1), at least 90% of the words had to agree, in order, both ways. The page
+logged nothing, and a page that guessed the read one word off got nothing
+either. Its own selections still highlighted every word. The check runs in
+the extension's own process, so the text of another program's read never
+reaches the page.
 
-Since version 1.2, the same day, the extension no longer paints with
-`CSS.highlights` at all: to give the highlight padding it draws boxes
-inside a closed shadow root. The check in the relay is still what keeps
-another program's text away from the page.
+**The second round.** The reviewer came back the same day: 90% is not
+enough. A page that already knows most of a message can select it with a
+few guesses where the unknown word goes. Take a 50-word message that ends
+"The code is seven". The page selects the same message with "The code is
+three seven nine". 50 of its 52 words agree, which is more than 90%, so the
+page was told about the read, and the highlight landed on "seven". Measured
+in headless Chromium, the page logged it.
+
+So version 1.3 asks for two things:
+
+- **The same words.** The words of the read must be the words of the
+  selection, one for one. The 10% margin only existed for one measured
+  difference: a copy, which is how the Windows hotkey reads, includes
+  images' alt text, and `Selection.toString()` does not. Now the page sends
+  both: the selection's text, and, when it holds an image with alt text,
+  the same text with the alt text where the image sits. The Linux hotkey
+  reads the PRIMARY selection, which has the same words as `toString()`
+  (an image becomes U+FFFC there). A page that is told about a read learns
+  nothing it did not already have.
+- **The focus.** A frame is let in only once it has the keyboard focus, in
+  the visible tab, while the read plays. When you read from a terminal, the
+  browser is not the focused window, so no page is told anything, not even
+  a page holding the very same text. Once let in, a frame keeps the read if
+  you switch away while it plays.
+
+Measured the same way: the guessing page logged nothing. A page's own
+selection still highlighted, and so did a selection with an image read
+through a copy, which 1.1 and 1.2 missed. A page in a background tab or a
+minimized window got nothing.
+
+Since version 1.2 the extension no longer paints with `CSS.highlights` at
+all: to give the highlight padding, it draws boxes inside a closed shadow
+root. The page cannot see which word is lit any more, but it can still see
+that a read started and ended, since an element and a stylesheet appear. So
+the check in the relay is what keeps another program's text from the page.
+
+**What is still true.** A page with the focus can still test a guess of the
+whole text, word for word, while you read something else with the browser
+in front, for example the clipboard with Ctrl+Alt+T. It gets one guess per
+poll, every 400 ms, and only while the browser is in front: a read started
+in a terminal gives it nothing, unless you switch to the browser while that
+read plays.
 
 **The lesson.** A shared browser API has two sides. The extension writes
 `CSS.highlights` and the page can read it, so anything painted with it is
-told to the page. Decide what the page may learn before you paint.
+told to the page. Decide what the page may learn before you paint. And a
+margin of tolerance is a door: whatever a check lets through as "close
+enough", a page can aim at.
