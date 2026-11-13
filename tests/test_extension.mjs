@@ -1,7 +1,8 @@
 // The Chromium extension's relay check (extension/chromium/background.js):
 // a frame is told what is being read only while that is its own selection.
 // No browser and no server: background.js runs in a Node vm with stand-ins
-// for chrome.runtime and fetch.
+// for chrome.runtime and fetch. Also the highlight settings' validation
+// (paint.js).
 //
 //     node tests/test_extension.mjs
 //
@@ -90,6 +91,29 @@ const cases = {
     assert.equal(await ask(OWN), null);
   },
 };
+
+// The highlight settings (paint.js): whatever storage holds, the page gets
+// valid values.
+const paint = vm.createContext({});
+vm.runInContext(readFileSync(
+  new URL("../extension/chromium/paint.js", import.meta.url), "utf8"), paint);
+const settings = (raw) =>
+  JSON.parse(JSON.stringify(vm.runInContext(`Kokoro.settings(${JSON.stringify(raw)})`, paint)));
+const DEFAULTS = { unit: "word", color: "#3d5afe", strength: 35, size: 3 };
+Object.assign(cases, {
+  "settings: nothing stored gives the defaults": () => {
+    assert.deepEqual(settings(undefined), DEFAULTS);
+  },
+  "settings: valid values are kept": () => {
+    const s = { unit: "both", color: "#ffd400", strength: 50, size: 7 };
+    assert.deepEqual(settings(s), s);
+  },
+  "settings: bad values fall back or are clamped": () => {
+    assert.deepEqual(
+      settings({ unit: "page", color: "red); x", strength: 500, size: -4 }),
+      { ...DEFAULTS, strength: 70, size: 0 });
+  },
+});
 
 let failed = 0;
 for (const [name, run] of Object.entries(cases)) {

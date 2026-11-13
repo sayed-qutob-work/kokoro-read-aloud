@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Kokoro highlight</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #ffffff; --fg: #1d1d21; --muted: #66666e; --line: #d8d8de;
+    --accent: #3d5afe; --on-accent: #ffffff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #1e1e22; --fg: #ececf1; --muted: #a2a2ab; --line: #3a3a42;
+            --accent: #8c9eff; --on-accent: #10102a; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; width: 300px; background: var(--bg); color: var(--fg);
+    font: 13px/1.4 system-ui, sans-serif;
+  }
+  main { padding: 14px 16px 16px; display: grid; gap: 14px; }
+  h1 { font-size: 14px; font-weight: 600; margin: 0; }
+  .field { display: grid; gap: 6px; border: 0; margin: 0; padding: 0; min-width: 0; }
+  .label { display: flex; justify-content: space-between; color: var(--muted); padding: 0; }
+  .label output { color: var(--fg); font-variant-numeric: tabular-nums; }
+
+  .seg { display: grid; grid-template-columns: repeat(3, 1fr);
+         border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .seg input { position: absolute; opacity: 0; pointer-events: none; }
+  .seg label { text-align: center; padding: 6px 4px; cursor: pointer; }
+  .seg label + input + label { border-left: 1px solid var(--line); }
+  .seg input:checked + label { background: var(--accent); color: var(--on-accent); }
+  .seg input:focus-visible + label { outline: 2px solid var(--fg); outline-offset: -3px; }
+
+  .swatches { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .swatch {
+    width: 24px; height: 24px; border-radius: 50%; padding: 0; cursor: pointer;
+    border: 1px solid rgb(0 0 0 / 0.15);
+  }
+  .swatch[aria-pressed="true"] { outline: 2px solid var(--fg); outline-offset: 2px; }
+  .custom { display: flex; align-items: center; gap: 6px; margin-left: auto; color: var(--muted); }
+  input[type="color"] {
+    width: 30px; height: 24px; padding: 0; border: 1px solid var(--line);
+    border-radius: 6px; background: none; cursor: pointer;
+  }
+  input[type="range"] { width: 100%; margin: 0; accent-color: var(--accent); }
+
+  #preview {
+    border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px;
+    margin: 0; line-height: 1.6;
+  }
+  .foot { display: flex; justify-content: space-between; align-items: center; color: var(--muted); }
+  button.reset {
+    font: inherit; color: var(--fg); background: none; cursor: pointer;
+    border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px;
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>Kokoro highlight</h1>
+
+  <fieldset class="field">
+    <legend class="label">Highlight</legend>
+    <div class="seg">
+      <input type="radio" name="unit" id="unit-word" value="word">
+      <label for="unit-word">Word</label>
+      <input type="radio" name="unit" id="unit-sentence" value="sentence">
+      <label for="unit-sentence">Sentence</label>
+      <input type="radio" name="unit" id="unit-both" value="both">
+      <label for="unit-both" title="The sentence, and the word in it stronger">Both</label>
+    </div>
+  </fieldset>
+
+  <fieldset class="field">
+    <legend class="label">Colour</legend>
+    <div class="swatches" id="swatches">
+      <label class="custom">Custom <input type="color" id="color"></label>
+    </div>
+  </fieldset>
+
+  <div class="field">
+    <label class="label" for="strength">Strength <output id="strength-out"></output></label>
+    <input type="range" id="strength" min="10" max="70" step="5">
+  </div>
+
+  <div class="field">
+    <label class="label" for="size">Size <output id="size-out"></output></label>
+    <input type="range" id="size" min="0" max="10" step="1">
+  </div>
+
+  <p id="preview">Dr. Kokoro reads what you select. The highlight follows each word as it is spoken.</p>
+
+  <div class="foot">
+    <span>Changes apply to open pages.</span>
+    <button type="button" class="reset" id="reset">Reset</button>
+  </div>
+</main>
+<script src="paint.js"></script>
+<script src="popup.js"></script>
+</body>
+</html>

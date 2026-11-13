@@ -1,15 +1,21 @@
 {
   "manifest_version": 3,
   "name": "Kokoro Read-Aloud Highlighter",
-  "version": "1.1",
-  "description": "Highlights the word being spoken by the local Kokoro TTS server, in place on the page, Speechify-style.",
+  "version": "1.2",
+  "description": "Highlights the word or sentence being spoken by the local Kokoro TTS server, in place on the page, Speechify-style.",
+  "permissions": ["storage"],
   "host_permissions": ["http://127.0.0.1:5111/*"],
+  "action": {
+    "default_title": "Kokoro highlight settings",
+    "default_popup": "popup.html"
+  },
+  "options_ui": { "page": "popup.html" },
   "background": { "service_worker": "background.js" },
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
       "all_frames": true,
-      "js": ["content.js"],
+      "js": ["paint.js", "content.js"],
       "run_at": "document_idle"
     }
   ]

@@ -5,8 +5,9 @@
 // already holds a snapshot of the selection as one Range per word. It polls
 // the server's /now (via the background relay) and, while speech is active,
 // aligns the chunk's spoken tokens against the snapshot in reading order and
-// paints the current word with the CSS Custom Highlight API - no DOM
-// mutation, so it cannot break page layout. Clears itself when speech ends.
+// highlights the current word, its sentence, or both (paint.js draws them).
+// The page's own elements are never moved or restyled, so it cannot break
+// page layout. Clears itself when speech ends.
 //
 // The relay (background.js) answers only while the text being read is this
 // frame's selection, so text read from other programs never reaches the page.
@@ -18,53 +19,64 @@
 
 const IDLE_MS = 400;
 const ACTIVE_MS = 60;
-const HL = "kokoro-word";
 
-let wordRanges = [];  // [{range, norm}] snapshot of the last real selection
+let snap = [];        // Kokoro.words() of the last real selection
 let selText = "";     // that selection's text, for the relay's check
 let cursor = 0;       // next unmatched snapshot word (reading order)
 let chunkKey = null;  // /now text of the chunk currently mapped
 let chunkMap = [];    // chunk token index -> snapshot index (-1 = no match)
+let current = -1;     // snapshot index of the word being read
 let active = false;
 let inactivePolls = 0;
 
-const sheet = new CSSStyleSheet();
-sheet.replaceSync(
-  `::highlight(${HL}){background:#3d5afe;color:#fff}`);
-document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+let opts = Kokoro.settings();
+const painter = new Kokoro.Painter(document);
 
-const norm = (s) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+// While a read is on, the page's selection colour is switched off: the
+// highlight is drawn over it, and a blue highlight on a blue selection hid
+// the word. The selection itself stays, and shows again when the read ends.
+const quiet = new CSSStyleSheet();
+quiet.replaceSync(
+  "::selection{background-color:transparent!important;color:currentcolor!important}");
+function selectionShown(shown) {
+  const rest = document.adoptedStyleSheets.filter((s) => s !== quiet);
+  document.adoptedStyleSheets = shown ? rest : [...rest, quiet];
+}
+
+function redraw() {
+  if (current < 0 || current >= snap.length) painter.clear();
+  else painter.draw(Kokoro.layers(snap, current, opts), opts);
+}
+
+// Settings come from the popup, live.
+chrome.storage.local.get("highlight").then((r) => {
+  opts = Kokoro.settings(r.highlight);
+  redraw();
+}, () => {});
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && changes.highlight) {
+    opts = Kokoro.settings(changes.highlight.newValue);
+    redraw();
+  }
+});
+
+// The boxes sit over the text, so they follow it when anything scrolls.
+let queued = false;
+const follow = () => {
+  if (current < 0 || queued) return;
+  queued = true;
+  requestAnimationFrame(() => { queued = false; redraw(); });
+};
+addEventListener("scroll", follow, { capture: true, passive: true });
+addEventListener("resize", follow, { passive: true });
 
 document.addEventListener("selectionchange", () => {
   if (active) return; // don't drop the snapshot mid-read
   const sel = document.getSelection();
   if (!sel || sel.isCollapsed || !sel.rangeCount) return;
-  const r = sel.getRangeAt(0);
-  const ranges = [];
-  // A selection inside one text node has that node as its common ancestor,
-  // and a TreeWalker never returns its own root: walk it on its own.
-  const root = r.commonAncestorContainer;
-  const nodes = [];
-  if (root.nodeType === Node.TEXT_NODE) {
-    nodes.push(root);
-  } else {
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-    for (let n = walker.nextNode(); n; n = walker.nextNode()) nodes.push(n);
-  }
-  for (const node of nodes) {
-    if (!r.intersectsNode(node)) continue;
-    const a = node === r.startContainer ? r.startOffset : 0;
-    const b = node === r.endContainer ? r.endOffset : node.nodeValue.length;
-    for (const m of node.nodeValue
-        .slice(a, b).matchAll(/[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu)) {
-      const wr = document.createRange();
-      wr.setStart(node, a + m.index);
-      wr.setEnd(node, a + m.index + m[0].length);
-      ranges.push({ range: wr, norm: norm(m[0]) });
-    }
-  }
-  if (ranges.length) {
-    wordRanges = ranges;
+  const ws = Kokoro.words(sel.getRangeAt(0));
+  if (ws.length) {
+    snap = ws;
     selText = sel.toString();
     cursor = 0;
     chunkKey = null;
@@ -78,12 +90,12 @@ function mapChunk(words) {
   chunkMap = [];
   let c = cursor;
   for (const [w] of words) {
-    const n = norm(w);
+    const n = Kokoro.norm(w);
     let found = -1;
     if (n) {
-      const stop = Math.min(c + 12, wordRanges.length);
+      const stop = Math.min(c + 12, snap.length);
       for (let i = c; i < stop; i++) {
-        if (wordRanges[i].norm === n) { found = i; break; }
+        if (snap[i].norm === n) { found = i; break; }
       }
     }
     chunkMap.push(found);
@@ -96,16 +108,18 @@ function mark(idx) {
   if (idx == null || idx < 0 || idx >= chunkMap.length) return;
   const s = chunkMap[idx];
   if (s < 0) return;
-  CSS.highlights.set(HL, new Highlight(wordRanges[s].range));
+  current = s;
+  redraw(); // every poll, so the boxes follow a reflow too
 }
 
 async function poll() {
-  if (!wordRanges.length) { setTimeout(poll, IDLE_MS); return; }
+  if (!snap.length) { setTimeout(poll, IDLE_MS); return; }
   let d = null;
   try {
     d = await chrome.runtime.sendMessage({ type: "now", selection: selText });
   } catch {}
-  if (d && d.active && wordRanges.length) {
+  if (d && d.active && snap.length) {
+    if (!active) selectionShown(false);
     active = true;
     inactivePolls = 0;
     if (d.text !== chunkKey) { chunkKey = d.text; mapChunk(d.words); }
@@ -114,7 +128,9 @@ async function poll() {
     return;
   }
   if (active && ++inactivePolls >= 3) {
-    CSS.highlights.delete(HL);
+    current = -1;
+    painter.clear();
+    selectionShown(true);
     active = false;
     chunkKey = null;
     cursor = 0; // re-reading the same selection starts over
