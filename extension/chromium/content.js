@@ -41,9 +41,17 @@ document.addEventListener("selectionchange", () => {
   if (!sel || sel.isCollapsed || !sel.rangeCount) return;
   const r = sel.getRangeAt(0);
   const ranges = [];
-  const walker = document.createTreeWalker(
-    r.commonAncestorContainer, NodeFilter.SHOW_TEXT);
-  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+  // A selection inside one text node has that node as its common ancestor,
+  // and a TreeWalker never returns its own root: walk it on its own.
+  const root = r.commonAncestorContainer;
+  const nodes = [];
+  if (root.nodeType === Node.TEXT_NODE) {
+    nodes.push(root);
+  } else {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) nodes.push(n);
+  }
+  for (const node of nodes) {
     if (!r.intersectsNode(node)) continue;
     const a = node === r.startContainer ? r.startOffset : 0;
     const b = node === r.endContainer ? r.endOffset : node.nodeValue.length;
