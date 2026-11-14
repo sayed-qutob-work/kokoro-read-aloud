@@ -3,6 +3,7 @@
 - [The logs](#the-logs)
 - [Reads stall or stutter partway through](#reads-stall-or-stutter-partway-through)
 - [The hotkey says "Kokoro is off" or "still loading"](#the-hotkey-says-kokoro-is-off-or-still-loading)
+- [The hotkey says "nothing was sent: another account ... is using Kokoro's port"](#the-hotkey-says-nothing-was-sent-another-account--is-using-kokoros-port)
 - ["No matching distribution found for kokoro"](#no-matching-distribution-found-for-kokoro)
 - [The server stops at "Error processing file ... phontab"](#the-server-stops-at-error-processing-file--phontab)
 - [`WinError 126` loading `c10.dll` (Windows)](#winerror-126-loading-c10dll)
@@ -39,6 +40,13 @@ clears, or use the GPU. See [how-it-works.md](how-it-works.md#cpu-or-gpu).
 On Linux, Kokoro was turned off from the bar or with `kokoroctl off`, or it
 is still loading its model, which takes about 6 s. Turn it back on from the
 bar icon, or with `kokoroctl gpu` (or `kokoroctl cpu`).
+
+## The hotkey says "nothing was sent: another account ... is using Kokoro's port"
+
+Linux. Another user on this computer is listening on port 5111, where
+Kokoro's server should be, so the hotkey sent it nothing, and Kokoro cannot
+start until that port is free. `ss -ltnpe 'sport = :5111'` shows the
+listener and its uid.
 
 ## "No matching distribution found for kokoro"
 
@@ -138,6 +146,7 @@ request, as `refused (<reason>): ...`:
 | `content-type` | Send POSTs as JSON: `-H 'Content-Type: application/json'`, with a JSON body, even an empty `{}` |
 | `host` | Call `127.0.0.1:5111` or `localhost:5111`, not another name for this machine |
 | `origin`, `sec-fetch-site` | The request came from a web page, which is refused on purpose |
+| `another account (uid N)` | The program runs as another user than the server (Linux). Run it as the same user. `uid None`: the kernel did not say who opened the connection |
 
 See [how-it-works.md](how-it-works.md#who-may-talk-to-the-server).
 

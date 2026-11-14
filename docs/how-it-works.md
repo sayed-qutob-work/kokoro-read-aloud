@@ -164,6 +164,15 @@ env\Scripts\python.exe -B tests\test_server.py                             # Win
 Any program running as you can still use the server, as with any local
 service: there is no password.
 
+**Other accounts on the same computer** reach 127.0.0.1 too, and their
+programs send the same headers as yours. On Linux the server asks the
+kernel which account opened the other end of each connection, and refuses
+any account but its own. The hotkey checks who listens on port 5111
+before it sends anything: if it is another account, nothing is sent, and a
+notification says so. Measured with a real second account in
+[security.md](security.md#postscript-2026-11-14-other-accounts-on-the-same-machine).
+Windows has neither check yet.
+
 ## Pinned and offline
 
 - **uv:** setup downloads it only if you have none, or one older than

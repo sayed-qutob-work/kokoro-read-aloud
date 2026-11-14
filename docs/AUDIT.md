@@ -4876,6 +4876,136 @@ own, no tab, and a frame that changes its selection is refused.
 The harness (mock server, pages, CDP driver) was in the session scratchpad,
 not the repo.
 
+### FIXED 2026-11-14: another account on the machine could read what was being read, or be sent the next selection; the logs were readable by other accounts
+
+**Report:** the same reviewer, on the pushed 1.3
+([issue](https://github.com/omacom/omarchy-plugin-marketplace/issues/14706)):
+"The extension findings are fixed at `e23c753`; Medium remains in
+`tts_server.py:1134–1169,1344–1348` and `read_aloud.sh:183–191`: another
+local account sharing the host network can read full private utterances
+through the unauthenticated loopback API, or receive the next hotkey
+selection/clipboard text by occupying port 5111 while the server is
+stopped. Separate Low in `read_aloud.sh:42,62–68,110,146–166`: the default
+log persists 48-character private excerpts readable by another account when
+a new log inherits umask `022` and its ancestors are searchable."
+
+**Mechanism.** 127.0.0.1 is one address for every account on the machine.
+The guard of 2026-10-18 tells web pages from local programs by their
+headers, and a program another user runs sends the same headers as ours.
+So it could `GET /utterance` (the text being read) and `/now`. And while
+Kokoro is off (`kokoroctl off` frees the VRAM for a game, AUDIT
+2026-10-07), the port is free: another account can listen on it, and
+`read_aloud.sh` POSTed the next selection to whoever answered.
+
+**A second account without root.** `unshare --user --map-auto --setuid 0
+--setgid 0` makes a user namespace whose root is the first of this
+account's subordinate uids (`/etc/subuid`: `mrsp:100000:65536`) and keeps
+the host's network. The kernel lists that process's sockets as uid 100000,
+not 1000 (measured: its listener showed `0100007F:B19F uid 100000` in
+`/proc/net/tcp`), so to the server it is another account.
+
+**Measured before the fix** (e23c753). The real Flask app and guard on a
+test port (15111), with the tests' stand-in player (no model, no audio);
+`read_aloud.sh` copied next to a stand-in `linux/xselection.py` that
+returns "The code is four eight two one", `notify-send` stubbed:
+
+| Attack | Before |
+|---|---|
+| uid 100000: `curl 127.0.0.1:15111/utterance` | `200 {"text":"the private text being read"}`, the same as you get |
+| uid 100000 listens on the port, the hotkey reads the clipboard | the listener got `{"text": "The code is four eight two one"}`; the script logged `SPOKE`, exited 0, no notification |
+
+**Fix 1, the server: refuse another account's connection.** The kernel
+records which account opened each socket. `_peer_uid()` takes the request's
+connection (`werkzeug.socket`, both ends), looks up the client's end, and
+`_refusal()` refuses with 403 `another account (uid N)` unless it is the
+server's own uid. That check runs first, for every route.
+- **Lookup: sock_diag**, the netlink interface `ss` uses: one exact lookup
+  of the 4-tuple, **0.004 ms**. **Fallback: `/proc/net/tcp`**, **0.96 ms**
+  on this desktop (624 lines, 593 of them TIME_WAIT, mostly left by `/now`
+  polls; each poll is a new connection). TIME_WAIT lines have no owner (uid
+  0) and are skipped.
+- **Fails closed:** a connection the kernel reports no owner for is refused
+  (`uid None`).
+- **Linux only** (`CHECK_ACCOUNT`). On Windows a program of any account is
+  still let in.
+
+No client needed a change: the hotkey script, `kokoroctl`, the Tk panel, the
+caption strip, the bar widget and the browser all run as you. Not run after
+the change: the caption strip (inactive; its GET is urllib, like
+`LiveServerTests`), the extension and the widget's `/now` poll during a
+real read (the user's desktop check).
+
+**Fix 2, the hotkey: send only to a server this account runs.** Before the
+POST, `read_aloud.sh` lists the listeners on the server's port in
+`/proc/net/tcp` and `/proc/net/tcp6` (state `0A`, uid in column 8). IPv6
+counts, because a `[::]` socket also takes connections to 127.0.0.1.
+- Another uid among them: nothing is sent. It notifies "Kokoro: nothing was
+  sent. Another account on this computer is using Kokoro's port (5111), so
+  Kokoro cannot start until it is free.", and logs `port held by uid N`.
+- Nobody listening: nothing is sent either, and the usual "off / still
+  loading / not running" message follows. Without that, a port that was
+  free at the check could be taken before curl connects.
+- Only when `KOKORO_SERVER` is local (`127.0.0.1`, `localhost`, `[::1]`).
+- Cost: about 5 ms per hotkey (log timestamps, awk and sort included).
+- What is left: if our own server ends in the few ms between the check and
+  the POST, another account could bind the port in that gap.
+
+**Fix 3, the logs: this account's alone.**
+- `paths.prepare()` makes the state folder 0700 and each file in it 0600
+  (`paths.private()`; never through a symlink). Every entry point calls it:
+  the server, the panel, the caption strip, `kokoroctl` (not `status`).
+- `read_aloud.sh` sets `umask 077`.
+- The server and caption-strip units set `UMask=0077`. Measured with a
+  transient unit: systemd then creates its `StandardOutput=truncate:` file
+  0600 (and 0644 without it). `install-systemd.sh` also does `chmod 700` on
+  the folder.
+- Existing logs keep their mode when truncated, so the server's unit alone
+  would not have fixed them: `prepare()` does.
+- `read_aloud.sh` kept `last-spoken` and `primary-owner` in `/tmp` when
+  `XDG_RUNTIME_DIR` was unset. Another account could create that folder
+  first, read the digest of the last read, and plant links where the
+  script writes. The fallback is now the state folder.
+
+What the logs hold: `read_aloud.log` a 48-character excerpt of each read;
+`server.log` a word now and then (`cutfix '<word>'`). On this desktop the
+home folder is 0700, so no other account could reach them even before. On
+a distribution that makes home folders 0755, they could.
+
+**Measured after**, the same harness, then on the deployed server:
+
+| Case | After |
+|---|---|
+| uid 100000 `GET /utterance` (test port) | 403 |
+| uid 100000 `GET /utterance`, **the live server on 5111** | `403 {"error":"refused: another account (uid 100000)"}`; you: 200 |
+| uid 100000 listens on the port (IPv4), hotkey | listener: nothing arrived; exit 1; the notification |
+| uid 100000 listens on `[::]` only, hotkey | the same |
+| **live: server stopped, uid 100000 on 5111**, hotkey | the same |
+| Your own server, hotkey | read as before (`POST /speak` arrived, exit 0, no notification) |
+| Nobody listening, hotkey | nothing sent, "server not running" |
+| The state folder after the restart | 0755 → 0700; its ten files 0644 → 0600 |
+| Real clients after the restart | `kokoroctl status`, `settings --json`, the bar widget's status polls (`GET /config`), `LiveServerTests`: all 200; the only refusals in `server.log` were the six attacks `LiveServerTests` sends |
+
+**Tests: `tests/test_server.py`, 30 pass** (were 20).
+- `AccountTests` (3): another uid, or an unknown one, is refused on every
+  route, and nothing is spoken or changed. Your own uid is let in.
+- `LookupTests` (3): both lookups find the client's end of a real
+  connection, find nothing for a connection that does not exist, and the
+  `/proc` reader skips TIME_WAIT.
+- `OtherAccountTests` (4), with a real uid 100000: it cannot read
+  `/utterance`, you can; the hotkey sends nothing to a port it holds, and
+  still reads with your own server. Skipped without `unshare --map-auto` or
+  `curl`. Run against the old `read_aloud.sh`, the hotkey test fails: the
+  listener got the text.
+
+**Not covered:**
+- **Windows.** The server lets in any account's programs, `read_aloud.ahk`
+  does not check who listens, and the logs sit next to the code. The
+  equivalent there would be `GetExtendedTcpTable` (owner PID) and the
+  process token's SID; not built, nothing measured.
+- **Holding the port is still possible.** Another account that holds 5111
+  keeps Kokoro from starting. The hotkey now says so instead of sending.
+- An account with root can read anything of yours anyway.
+
 ---
 
 ## 9. Accepted trade-offs (settled — reopen only with new information)

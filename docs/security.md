@@ -323,3 +323,46 @@ while that read plays.
 told to the page. Decide what the page may learn before you paint. And a
 margin of tolerance is a door: whatever a check lets through as "close
 enough", a page can aim at.
+
+## Postscript, 2026-11-14: other accounts on the same machine
+
+The same reviewer then looked past the browser. 127.0.0.1 is one address
+for every account on the machine. A program another user runs sends the
+same headers as ours, so the checks above let it in.
+
+**What it was.** Two things, both measured with a real second account (a
+subordinate uid from `/etc/subuid`, made with `unshare --map-auto`, no root
+needed; the kernel lists its sockets as uid 100000):
+- **Reading.** That account ran `curl 127.0.0.1:5111/utterance` and got the
+  text being read, exactly as you would.
+- **Taking the port.** Kokoro can be turned off to free the GPU for a game.
+  While it was off, that account listened on port 5111, and the next hotkey
+  sent it the clipboard: `{"text": "The code is four eight two one"}`. The
+  hotkey reported nothing wrong.
+
+**The fix.** The kernel records which account opened every socket, and
+both ends now ask it.
+- **The server** looks up the client's end of each connection (sock_diag,
+  the netlink interface `ss` uses: 0.004 ms) and refuses another account's
+  with 403. A connection whose owner the kernel does not report is refused
+  too.
+- **The hotkey** checks who listens on the port before it sends anything.
+  If it is another account, or nobody, nothing is sent, and a notification
+  says why.
+
+Measured again: the other account's read got `403 refused: another account
+(uid 100000)`, and its listener received nothing, over IPv4 and over IPv6.
+Your own programs all run as you, so none of them needed a change.
+
+**And the logs.** The hotkey's log keeps a short excerpt of each read, to
+diagnose wrong selections. Its folder was 0755 and the files 0644, so on a
+system where home folders are open to other users, they could read it. The
+folder is now 0700 and every file in it 0600.
+
+**Still true.** On Windows the server lets in any account's programs. And
+another account can still hold the port and keep Kokoro from starting; the
+hotkey now says so instead of sending.
+
+**The lesson.** "Local" names a machine, not a person. A loopback service
+that carries private data has to ask which account is calling, and its
+clients have to ask which account is listening.

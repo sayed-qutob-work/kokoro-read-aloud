@@ -181,6 +181,9 @@ setting, and in VS Code's terminal you turn on
   2026-10-18 a web page could make it speak and read what it was reading:
   [the three attacks, measured before and after the fix](docs/security.md).
   Any program running as you can still use it, as with any local service.
+- **Other accounts can't use it, on Linux.** The server refuses programs
+  of other users on the same computer, and the hotkey only sends text to a
+  server you run ([how](docs/security.md#postscript-2026-11-14-other-accounts-on-the-same-machine)).
 - **The clipboard is never polled.** On Linux the hotkey doesn't touch it at
   all.
 - **Pinned downloads.** Every package and every model file is checked
@@ -189,7 +192,7 @@ setting, and in VS Code's terminal you turn on
 - **The Omarchy plugin runs unsandboxed** in the shell, like every Omarchy
   plugin.
 - **The logs stay local.** `read_aloud.log` keeps a short excerpt of each
-  selection, for diagnosing wrong reads.
+  selection, for diagnosing wrong reads. On Linux only you can read them.
 
 ## Settings
 
