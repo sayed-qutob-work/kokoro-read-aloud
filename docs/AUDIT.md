@@ -5097,6 +5097,95 @@ is pending**: it names one exact SHA.
   torch in place, since pip removes nothing. The server then still picks
   Paradee (torch sees no GPU). Neither path has been measured.
 
+### DEPLOYED 2026-11-14: a URL is read as its host — "github dot com"
+
+**The report.** "The tool reads URLs": the user asked to skip them, or read
+only the main part.
+
+**Measured first**, misaki's English G2P on each kind of link, no model:
+- **A URL is spelled out whole.** "https://" is "H T T P S colon slash
+  slash", then every path segment, "slash" between each. A GitHub link to
+  `docs/AUDIT.md` is 155 phonemes, a Google search URL 194, a
+  `localhost:5111` one reads the port as "five thousand one hundred
+  eleven".
+- **The full stop after a URL is swallowed.** misaki takes it as part of
+  the URL, so "Watch https://youtu.be/x. Then stop." was one sentence.
+- **A dot inside a bare host is a full stop:** "github.com" is `ɡˈɪthʌb.kˈɑm`,
+  "github. com", with no "dot".
+- **A markdown link `[text](url)` was already read as its text.** misaki
+  takes `[text](target)` as its own markup and drops any target that is not
+  a number or a phoneme string. It fails on a target with a bracket in it
+  (Wikipedia's `.../Python_(programming_language)`): the link ends at the
+  first `)`.
+- **Emails are already read well** ("someone at example dot com", through
+  eSpeak).
+
+**Decision: the host, not silence.** In prose a skipped URL leaves a broken
+sentence ("See for details."), while the host keeps it whole and says where
+the link goes ("See github dot com for details."). No setting, as for emoji.
+
+**The rule**, `say_urls()`, first in `sanitize()`: the inline-markdown rule
+would split a URL at its underscores and tildes and leave the halves to be
+read as words.
+- **What counts as a URL:**
+  - a scheme (`http`, `https`, `ftp`, any case);
+  - `www.` followed by a host;
+  - a bare host under one of `com org net edu gov io dev ai co uk`, with or
+    without a path ("github.com/a/b", "Booking.com"). The TLD must be lower
+    case. The list leaves out TLDs that are also file extensions (`.sh`,
+    `.md`, `.app`) or words (`.me`, `.be`, `.us`). A bare host must not
+    follow a word character, `@`, `/` or `.`, so emails and file paths stay.
+- **What is read:** the host, without scheme, login, port or `www.`, lower
+  case (misaki spells out a word in capitals), with "dot" for each dot.
+- **Punctuation at the end of a URL** goes back to the sentence: `.,;:!?*_~`,
+  and a closing bracket the URL did not open.
+- **`<url>` autolinks** lose their brackets.
+- **A markdown link or image whose target is a URL** becomes its text. This
+  takes two passes, so a badge `[![alt](image)](link)` reads as "alt".
+  Relative targets are left to misaki.
+
+**Measured after:**
+- **The 27 samples** in phonemes: the GitHub link 155 → 34, the search URL
+  194 → 16, `localhost:5111/config` 106 → 35 ("localhost").
+- **Audio,** Paradee at model speed 1.0, before the playback stretch:
+
+  | Sample | Before | After |
+  |---|---|---|
+  | GitHub link sentence | 11.4 s | 2.5 s |
+  | nytimes sentence | 11.4 s | 2.9 s |
+  | Google search URL | 13.4 s | 1.7 s |
+  | `github.com/user/repo` sentence | 5.3 s | 2.6 s |
+  | `localhost` sentence | 7.8 s | 2.5 s |
+  | youtu.be + next sentence | 8.6 s | 2.6 s |
+
+- **No false positives.** Every rewrite was listed over 1,416 paragraphs of
+  the repo's docs (163 rewrites) and 980 of its code (`os.path.join`,
+  `node.js`, `install-hyprland.sh`...). Each one was a real URL or host.
+- **Cost:** 41 ms for the 284 KB AUDIT.md. Adversarial inputs (50,000
+  dotted labels, a 100 KB path, 30,000 brackets) take 2–17 ms, linear.
+- **Tests:** `tests/test_sanitize.py` (7 tests: rewrites, untouched
+  look-alikes, the sentence split after a URL) passes. `test_server.py` (30)
+  and `test_english_g2p.py` (5) still pass.
+
+**Highlighting, reasoned from the code, not measured on a page:**
+- **The caption strip** shows the chunk as sent: "github dot com".
+- **The Chromium extension** matches spoken words to the page's words in a
+  12-word forward window. "github" and "com" find the URL's own words;
+  "dot" finds none and keeps the highlight where it was. The path's words
+  are then skipped, as before.
+- **A pre-existing limit, not made worse:** a URL whose path holds more
+  than about 10 words (a long query string) can push the next spoken word
+  past that window. The read's highlight is then lost on the page. Before
+  this change the whole URL was one unmatched token and the window had to
+  cross the scheme and host words too.
+- **Windows:** the highlighter's FindText can claim a later "dot" in the
+  selection for the spoken "dot". This is the same risk as any spoken word
+  missing from the screen. Untested on Windows.
+
+**Deploy:** `systemctl --user restart kokoro-server`. **The restart cut off a
+read in progress:** the command printed `/now` (`active: true`) and
+restarted without checking it. Check `/now` first and stop if it is active.
+
 ---
 
 ## 9. Accepted trade-offs (settled — reopen only with new information)

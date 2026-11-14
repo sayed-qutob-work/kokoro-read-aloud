@@ -121,6 +121,13 @@ pronunciation.
 - **Emoji,** with their skin tones and flags. Kokoro would read their names,
   such as "grinning face".
 
+**Shortened:**
+- **A URL is read as its site's name.** "See
+  https://github.com/user/repo/blob/main/README.md for details" is read as
+  "See github dot com for details". The `https://`, `www.`, path and
+  query are left out. A bare name such as github.com is read the same way.
+- **A link written in Markdown, `[text](url)`,** is read as its text.
+
 **Kept:**
 - Symbols with a spoken name, such as ©, ™, °C, €, ½, x² and ≈.
 - A lone Greek letter such as π or Δ, which is read by its name.

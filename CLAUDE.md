@@ -133,7 +133,10 @@ via `unshare --map-auto`) and `tests/test_english_g2p.py` (server venv, `-B`);
 - `POST /speak {"text":...}`, `POST /stop`. `/speak` returns `atoms`, the
   chunks queued: **0 means nothing was readable**. `skip_unreadable()` drops
   every script but Latin (a lone Greek letter stays), `skip_emoji()` drops
-  emoji (© ® ™ stay), and `read_aloud.sh` notifies on 0 (AUDIT 2026-10-17)
+  emoji (© ® ™ stay), and `read_aloud.sh` notifies on 0 (AUDIT 2026-10-17).
+  `say_urls()` runs first in `sanitize()`: a URL is read as its host
+  ("github dot com"), a markdown link to one as its text (AUDIT 2026-11-14;
+  `tests/test_sanitize.py`)
 - `GET/POST /config` — live tuning; the tray persists it to `settings.json`,
   which the server loads at startup (`voice`, `model_speed`, `playback_speed`,
   `pause`, `first_chunk_audio`, `output_device`). GET also reports `engine`
