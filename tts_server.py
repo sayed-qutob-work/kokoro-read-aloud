@@ -385,10 +385,80 @@ def skip_emoji(text):
     return _EMOJI_GLUE.sub("", _EMOJI.sub(" ", text)).replace("\u200d", " ")
 
 
+# A URL is read as its host alone: "https://www.github.com/a/b?c=1" says
+# "github dot com". misaki spells a whole URL out ("H T T P S colon slash
+# slash github, com slash ..."): 155 phonemes for one GitHub link, 194 for a
+# search URL, and it swallows the full stop after one (AUDIT 2026-11-14).
+# A URL is anything with a scheme, anything starting "www.", or a bare host
+# under one of these top-level domains ("github.com/a/b", "Booking.com").
+# The list leaves out the ones that are also file extensions (.sh, .md,
+# .app) or English words (.me, .be, .us), and a bare host must not follow
+# a word, "@", "/" or ".", so emails (which misaki already reads as "at"
+# and "dot") and file paths are left as they are.
+_TLDS = "com|org|net|edu|gov|io|dev|ai|co|uk"
+_URL_CHAR = r"[^\s<>\"'`]"
+_URL = re.compile(
+    r"(?P<lt><)?(?P<url>"
+    r"(?<!\w)(?i:https?|ftp)://" + _URL_CHAR + "+"
+    r"|(?<![\w./@-])(?i:www\.[a-z0-9])" + _URL_CHAR + "*"
+    r"|(?<![\w./@:-])(?i:(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+)"
+    r"(?:" + _TLDS + r")(?![\w-])(?::\d+)?(?:[/?#]" + _URL_CHAR + "*)?"
+    r")(?(lt)>)")
+# A markdown link or image to a URL is read as its text. misaki drops the
+# target too, but not one with brackets in it (Wikipedia's
+# ".../Python_(language)"), and the caption strip shows the text as sent.
+# The text holds no bracket, so in a badge, [![alt](image)](link), the image
+# goes first and the link on a second pass.
+_MD_LINK = re.compile(r"!?\[([^\[\]\n]+)\]\(\s*<?(?:(?:https?|ftp)://|www\.)"
+                      r"[^\s()<>]*(?:\([^\s()<>]*\)[^\s()<>]*)*>?"
+                      r"(?:\s+\"[^\"\n]*\")?\s*\)", re.I)
+_CLOSES = {")": "(", "]": "[", "}": "{"}
+
+
+def _url_end(url):
+    """Split what the URL pattern matched (up to the next space) into the
+    URL and the punctuation after it, which belongs to the sentence: "see
+    https://x.com/a." ends a sentence. A closing bracket stays in the URL
+    only if the URL opened it."""
+    end = len(url)
+    while end:
+        c = url[end - 1]
+        if c in ".,;:!?*_~" or (
+                c in _CLOSES
+                and url.count(c, 0, end) > url.count(_CLOSES[c], 0, end)):
+            end -= 1
+        else:
+            break
+    return url[:end], url[end:]
+
+
+def _host_words(url):
+    """The host of a URL, as it is read: no scheme, login, port or www.,
+    lower case (misaki spells out a word in capitals), "dot" for each dot
+    (misaki reads a dot inside a word as a full stop: "github. com")."""
+    host = re.sub(r"^[a-z]+://", "", url, flags=re.I)
+    host = re.split(r"[/?#]", host, maxsplit=1)[0].rpartition("@")[2]
+    host = re.sub(r":\d*$", "", host).lower()
+    host = re.sub(r"^www\.", "", host)
+    return " dot ".join(p for p in host.split(".") if p)
+
+
+def say_urls(text):
+    def one(m):
+        url, tail = _url_end(m.group("url"))
+        return _host_words(url) + tail
+    for _ in range(2):
+        text = _MD_LINK.sub(r"\1", text)
+    return _URL.sub(one, text)
+
+
 def sanitize(text):
     """Strip markdown/TUI noise before synthesis. Inline **bold** and `code`
     are inert to Kokoro (measured - identical audio), but list markers add
-    real pauses and box-drawing/table chars come along with terminal text."""
+    real pauses and box-drawing/table chars come along with terminal text.
+    URLs go first: the inline-markdown rule below would split one at its
+    underscores and tildes, leaving the halves to be read as words."""
+    text = say_urls(text)
     text = re.sub(r"^[\s>]*[-*+•●○▪‣]+\s+", " ", text, flags=re.M)  # list markers
     text = re.sub(r"^#{1,6}\s+", " ", text, flags=re.M)             # md headers
     text = re.sub(r"[*_`~|]+", " ", text)                           # inline md, table pipes
