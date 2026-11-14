@@ -10,6 +10,7 @@
 - ["This app can't run on your PC" for `python.exe` (Windows)](#this-app-cant-run-on-your-pc-for-pythonexe)
 - [Changes to the server or the widget don't show up](#changes-to-the-server-or-the-widget-dont-show-up)
 - [A script of your own gets "refused"](#a-script-of-your-own-gets-refused)
+- [The Chromium extension highlights nothing after an update](#the-chromium-extension-highlights-nothing-after-an-update)
 - [Highlighting is wrong or missing (Windows)](#highlighting-is-wrong-or-missing)
 - [Reporting a bug](#reporting-a-bug)
 
@@ -149,6 +150,13 @@ request, as `refused (<reason>): ...`:
 | `another account (uid N)` | The program runs as another user than the server (Linux). Run it as the same user. `uid None`: the kernel did not say who opened the connection |
 
 See [how-it-works.md](how-it-works.md#who-may-talk-to-the-server).
+
+## The Chromium extension highlights nothing after an update
+
+Press the extension's reload button in `chrome://extensions`, then reload
+the page. Restarting the browser is not enough: Chromium then loads the new
+page scripts but keeps the old background script, and the two no longer
+understand each other, without any error (AUDIT 2026-11-14).
 
 ## Highlighting is wrong or missing
 

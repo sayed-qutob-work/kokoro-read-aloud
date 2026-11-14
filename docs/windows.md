@@ -53,7 +53,9 @@ reads the server's `/now` and `/utterance`, so it works on Linux too
 selection is being read, word for word, and only if that page has the focus
 when the read starts: text read from another program never reaches a web
 page (AUDIT 2026-11-13, 2026-11-14). After updating the repo, press the extension's
-reload button in `chrome://extensions`.
+reload button in `chrome://extensions`, then reload open tabs. Restarting
+the browser is not enough: it keeps the old background script, and nothing
+highlights.
 
 Its toolbar button opens its settings (pin it from the puzzle-piece menu to
 keep it in view): highlight the **word**, the **sentence**, or **both**, the

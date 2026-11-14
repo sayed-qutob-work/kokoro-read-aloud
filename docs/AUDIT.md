@@ -5006,6 +5006,44 @@ a distribution that makes home folders 0755, they could.
   keeps Kokoro from starting. The hotkey now says so instead of sending.
 - An account with root can read anything of yours anyway.
 
+### DIAGNOSED 2026-11-14: after an update, the extension did not highlight — Chromium restarted with 1.3's content scripts and 1.1's service worker
+
+**Symptom (user, after the fix above):** in Chromium, no highlighting on a
+hotkey read of a page's selection. The two Wikipedia reads (11:02:27 and
+11:03:01) played 4.4 s each.
+
+**Measured, not guessed:**
+- `server.log`: no `refused` line from the browser, no traceback, and **no
+  `GET /utterance`** during either read. `background.js` fetches it once per
+  read as soon as any frame holding a selection polls while `/now` is
+  active, before the focus check. So no request of the extension's got as
+  far as the server's guard.
+- A throwaway profile, Arch's Chromium 155 headless, the repo's extension,
+  the live Wikipedia main page: the content script was injected, snapshot
+  33 words, `selTexts` set, and the worker answered the content script's
+  message from `/now`. 1.3 works.
+- The user's profile (`Preferences`, read only):
+  `service_worker_registration_info: {"version":"1.1"}`, and
+  `last_update_time` 2026-11-13 17:44, when 1.1 was loaded. Chromium had
+  been restarted at 11:01 with 1.3 on disk.
+
+**Cause.** At a browser restart Chromium reads an unpacked extension's
+content scripts from disk again, but it keeps the service worker it has
+registered. So 1.3's `content.js` sent `selection: [texts]` to 1.1's
+`relay()`, whose first line is `if (typeof selection !== "string") return
+idle;`. Every poll got "idle", nothing was fetched, nothing showed, and
+nothing logged an error.
+
+**Fix:** the reload button in `chrome://extensions`, then a reload of open
+tabs (their content scripts are cut off from the reloaded extension).
+After it: registration `1.3`, a `GET /utterance` after each read, and the
+user confirmed the highlight.
+
+**Docs:** `troubleshooting.md` has the entry, and `windows.md` says that a
+browser restart is not enough. Not built: a version check between
+`content.js` and `background.js`. It would not have caught this case,
+because the stale worker is the old code, but it would catch the next one.
+
 ---
 
 ## 9. Accepted trade-offs (settled — reopen only with new information)
