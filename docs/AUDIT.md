@@ -5044,6 +5044,59 @@ browser restart is not enough. Not built: a version check between
 `content.js` and `background.js`. It would not have caught this case,
 because the stale worker is the old code, but it would catch the next one.
 
+### RELEASED 2026-11-14: v0.3.0 — the light CPU build, extension 1.3, two security fixes
+
+**Context.** The Omarchy marketplace published the plugin on 2026-11-14 at
+10:13 UTC ([#14706](https://github.com/omacom/omarchy-plugin-marketplace/issues/14706),
+`approved-and-verified` at `c20f2fc`, "maintainer-reviewed"). The GitHub
+release was still v0.2.0 (2026-10-20), 35 commits behind.
+
+**What v0.3.0 holds**, each with its entry above:
+- the light CPU build, Paradee alone (2026-11-01, steps 1–4) and the
+  "slightly lower quality" wording (2026-11-01, corrected);
+- the Hyprland owner wait (2026-10-25);
+- extension 1.2 (2026-11-13) and 1.3 (2026-11-14);
+- the two security fixes: the extension's relay to every page
+  (2026-11-13, present since extension 1.0, so in v0.2.0) and other
+  accounts (2026-11-14, also in v0.2.0).
+
+**Why 0.3.0, not 0.2.1.** These are new features (a new engine and a new
+default build, the extension's settings), not fixes alone. The 2026-10-17
+entry planned per-language routing for v0.3.0; it moves to the next minor
+version.
+
+**The bump.** `manifest.json`, `pyproject.toml` and the lock's own entry,
+nothing else. The version appears nowhere else in the code.
+- **`uv lock --offline` with the system uv failed:** spaCy's
+  `en_core_web_sm` is a URL wheel that only setup's cache holds. Run it
+  with setup's uv and cache:
+  `UV_NO_CONFIG=1 UV_CACHE_DIR=~/.local/share/kokoro-read-aloud/cache
+  ~/.local/share/kokoro-read-aloud/bin/uv lock --offline`.
+- **Measured:** "Updated kokoro-read-aloud v0.2.0 -> v0.3.0", a one-line
+  diff in `uv.lock`, and `tools/export-requirements.sh` rewrote both
+  requirements files byte-identical (84 and 121 packages).
+- `omarchy plugin validate .` passes.
+
+**The marketplace after a push** (read in its `VERIFICATION.md`): its
+verification is bound to the exact commit. Once `main` moves past
+`c20f2fc`, the detail page shows "Update unverified" and the card shows
+"Unverified", until a "Verify and publish a newer upstream commit" request
+(the plugin verification issue form) for the new HEAD is approved by a
+maintainer. Its install command clones the current HEAD either way, so users
+get the new code at once. **Push nothing else to `main` while that request
+is pending**: it names one exact SHA.
+
+**Tested, as the release notes state it:**
+- **Omarchy:** clean GPU install 2026-10-18 (Omarchy 4.0.4); the CPU
+  build's steps 1–4 and live reads 2026-11-01; extension 1.3 and the
+  account checks 2026-11-14 (Omarchy 4.5.0, Hyprland 0.56.2).
+- **Fedora:** last run 2026-09-30, setup never run there.
+- **Windows:** the 2026-10-19 VM retest predates Paradee. **The CPU build
+  that `requirements.txt` now installs has never run on Windows.**
+  Updating a v0.2.0 CPU install there with `pip install -r` again leaves
+  torch in place, since pip removes nothing. The server then still picks
+  Paradee (torch sees no GPU). Neither path has been measured.
+
 ---
 
 ## 9. Accepted trade-offs (settled — reopen only with new information)
