@@ -178,9 +178,39 @@ if blank "$text"; then
   exit 0
 fi
 
+# Send the text only to a server this account runs. 127.0.0.1 is shared by
+# every account: while Kokoro is off (kokoroctl off frees the VRAM), another
+# account can listen on its port and be sent the next selection (marketplace
+# review, AUDIT 2026-11-14). The kernel lists every listening socket with the
+# uid that opened it (st 0A, uid in column 8), IPv6 too, since a [::] socket
+# also takes 127.0.0.1. Nothing listening = nothing sent: if the check found
+# the port free, curl could reach whoever binds it a moment later.
+port_owners() {  # uids listening on $SERVER's port, one per line
+  local port=${SERVER##*:}; port=${port%%/*}
+  awk -v p="$(printf ':%04X' "$port")" \
+    '$4 == "0A" && substr($2, length($2) - 4) == p { print $8 }' \
+    /proc/net/tcp /proc/net/tcp6 2>/dev/null | sort -u
+}
+owners=$UID
+case $SERVER in
+  http://127.0.0.1:*|http://localhost:*|http://\[::1\]:*)
+    if [[ ! -r /proc/net/tcp ]]; then
+      note 'Kokoro' 'Cannot tell who runs the server (no /proc/net/tcp). Nothing was sent.'
+      exit 1
+    fi
+    owners=$(port_owners)
+    if [[ -n $owners && $owners != "$UID" ]]; then
+      log "port held by uid ${owners//$'\n'/,}, not $UID: nothing sent"
+      note 'Kokoro: nothing was sent' \
+        "Another account on this computer is using Kokoro's port (${SERVER##*:}), so Kokoro cannot start until it is free."
+      exit 1
+    fi
+    ;;
+esac
+
 # jq -Rs handles the JSON escaping that hand-rolled quoting always gets wrong
 # on text containing quotes, newlines or backslashes.
-if ! resp=$(printf '%s' "$text" | jq -Rs '{text: .}' |
+if [[ -z $owners ]] || ! resp=$(printf '%s' "$text" | jq -Rs '{text: .}' |
      curl -sf -m 10 -X POST "$SERVER/speak" \
           -H 'Content-Type: application/json' --data-binary @-); then
   # Off on purpose (kokoroctl off / the bar widget freeing VRAM) is not a

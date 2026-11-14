@@ -14,12 +14,25 @@ accepted them would do nothing.
 The header sets are the ones measured: what a real Chromium sent for each
 attack (driven over the DevTools protocol), and what each client of ours
 sends, read from its code.
+
+Another account on the same machine (AUDIT 2026-11-14): AccountTests stub
+the kernel lookup, LookupTests run both lookups on a real connection, and
+OtherAccountTests serve the app on a free port and call it from a real
+other uid, the first of this account's subordinate uids (unshare
+--map-auto, /etc/subuid), in the same network: reading /utterance, and the
+hotkey script facing a port that account holds. Skipped without them.
 """
 
 import http.client
 import os
+import shutil
+import socket
+import subprocess
 import sys
+import tempfile
+import threading
 import unittest
+from unittest import mock
 
 sys.dont_write_bytecode = True     # on Linux nothing may be written next to the code
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -46,6 +59,14 @@ JSON = {"Content-Type": "application/json"}                      # curl, urllib,
 AHK_JSON = {"Content-Type": "application/json; charset=utf-8"}   # WinHTTP
 EXTENSION_WORKER = {"Sec-Fetch-Site": "none"}                    # measured: no Origin
 USER_TYPED_URL = {"Sec-Fetch-Site": "none"}
+
+
+def as_own_account(test):
+    """Flask's test client has no socket, so no account to look up: say the
+    request comes from this account, as every real client of ours does."""
+    p = mock.patch.object(tts_server, "_peer_uid", lambda: tts_server.MY_UID)
+    p.start()
+    test.addCleanup(p.stop)
 
 
 class FakeEngine:
@@ -80,6 +101,7 @@ class FakePlayer:
 class GuardTests(unittest.TestCase):
 
     def setUp(self):
+        as_own_account(self)
         self.player = tts_server.player = FakePlayer()
         tts_server.list_output_devices = lambda: []
         self.client = tts_server.app.test_client()
@@ -207,6 +229,7 @@ class ConfigTests(unittest.TestCase):
     Kokoro garbles (AUDIT S6), and the UIs never ask for more."""
 
     def setUp(self):
+        as_own_account(self)
         self.player = tts_server.player = FakePlayer()
         self.client = tts_server.app.test_client()
 
@@ -220,6 +243,209 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(self.post(2.0), 1.3)
         self.assertEqual(self.post(0.1), 0.5)
         self.assertEqual(self.post(1.15), 1.15)
+
+
+LINUX_ONLY = unittest.skipUnless(tts_server.CHECK_ACCOUNT,
+                                 "the account check is Linux only")
+
+
+@LINUX_ONLY
+class AccountTests(unittest.TestCase):
+    """A request from another account is refused whatever it asks for
+    (marketplace review, AUDIT 2026-11-14)."""
+
+    def setUp(self):
+        self.player = tts_server.player = FakePlayer()
+        tts_server.list_output_devices = lambda: []
+        self.client = tts_server.app.test_client()
+
+    def calls_as(self, uid):
+        p = mock.patch.object(tts_server, "_peer_uid", lambda: uid)
+        p.start()
+        self.addCleanup(p.stop)
+        out = []
+        for method, path, body in (("GET", "/utterance", None), ("GET", "/now", None),
+                                   ("GET", "/config", None), ("GET", "/devices", None),
+                                   ("POST", "/speak", '{"text": "x"}'),
+                                   ("POST", "/stop", "{}"),
+                                   ("POST", "/config", '{"voice": "bf_emma"}')):
+            r = self.client.open(path, method=method, data=body, headers={
+                "Host": HOST, **(JSON if body else {})}, base_url="http://" + HOST)
+            out.append((method, path, r.status_code, r.get_json()))
+        return out
+
+    def test_another_account_refused(self):
+        for method, path, status, body in self.calls_as(tts_server.MY_UID + 1):
+            with self.subTest(path=path, method=method):
+                self.assertEqual(status, 403)
+                self.assertIn("another account", body["error"])
+                self.assertNotIn("private", str(body))
+        self.assertEqual(self.player.calls, [])
+        self.assertEqual(self.player.engine.voice, "af_heart")
+
+    def test_unknown_owner_refused(self):
+        # no socket, or the kernel would not say: fail closed
+        for method, path, status, _ in self.calls_as(None):
+            with self.subTest(path=path, method=method):
+                self.assertEqual(status, 403)
+        self.assertEqual(self.player.calls, [])
+
+    def test_own_account_allowed(self):
+        for method, path, status, _ in self.calls_as(tts_server.MY_UID):
+            with self.subTest(path=path, method=method):
+                self.assertEqual(status, 200)
+
+
+@LINUX_ONLY
+class LookupTests(unittest.TestCase):
+    """Both kernel lookups, on a real loopback connection."""
+
+    def setUp(self):
+        self.srv = socket.create_server(("127.0.0.1", 0))
+        self.cli = socket.create_connection(self.srv.getsockname())
+        self.conn, _ = self.srv.accept()
+        for s in (self.srv, self.cli, self.conn):
+            self.addCleanup(s.close)
+
+    def test_finds_the_client_end(self):
+        client, server = self.cli.getsockname(), self.srv.getsockname()
+        for lookup in (tts_server._socket_uid_netlink, tts_server._socket_uid_proc):
+            with self.subTest(lookup=lookup.__name__):
+                self.assertEqual(lookup(client, server), os.getuid())
+
+    def test_no_such_connection(self):
+        server = self.srv.getsockname()
+        nobody = ("127.0.0.1", 1)          # a port nothing connects from
+        for lookup in (tts_server._socket_uid_netlink, tts_server._socket_uid_proc):
+            with self.subTest(lookup=lookup.__name__):
+                self.assertIsNone(lookup(nobody, server))
+
+    def test_proc_skips_time_wait(self):
+        head = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
+        row = ("   0: 0100007F:D2A4 0100007F:13F7 {st} 00000000:00000000 "
+               "00:00000000 00000000  {uid}        0 0 1 0000000000000000\n")
+        with tempfile.NamedTemporaryFile("w", suffix=".tcp", delete=False) as f:
+            f.write(head + row.format(st="06", uid=0))
+        self.addCleanup(os.unlink, f.name)
+        client, server = ("127.0.0.1", 0xD2A4), ("127.0.0.1", 0x13F7)
+        if socket.htonl(1) == 1:
+            self.skipTest("table written for a little-endian host")
+        self.assertIsNone(tts_server._socket_uid_proc(client, server, f.name))
+        with open(f.name, "a") as t:
+            t.write(row.format(st="01", uid=1000))
+        self.assertEqual(tts_server._socket_uid_proc(client, server, f.name), 1000)
+
+
+def other_account(*cmd):
+    """cmd as another kernel uid in this network namespace: root of a new
+    user namespace is the first of this account's subordinate uids
+    (/etc/subuid), which is not this account."""
+    return ["unshare", "--user", "--map-auto", "--setuid", "0", "--setgid", "0",
+            "--", *cmd]
+
+
+def other_account_available():
+    if not (tts_server.CHECK_ACCOUNT and shutil.which("unshare") and shutil.which("curl")):
+        return False
+    try:
+        r = subprocess.run(other_account("sh", "-c", "id -u"), cwd="/",
+                           capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return r.returncode == 0 and r.stdout.strip() == "0"
+
+
+@unittest.skipUnless(other_account_available(),
+                     "needs Linux, curl and unshare --map-auto (an /etc/subuid range)")
+class OtherAccountTests(unittest.TestCase):
+    """The app on a real socket, called by a real other account: what the
+    reviewer described, as measured in AUDIT 2026-11-14."""
+
+    @classmethod
+    def setUpClass(cls):
+        from werkzeug.serving import make_server
+        cls.player = tts_server.player = FakePlayer()
+        tts_server.list_output_devices = lambda: []
+        cls.server = make_server("127.0.0.1", 0, tts_server.app, threaded=True)
+        cls.port = cls.server.server_port
+        threading.Thread(target=cls.server.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+
+    def curl(self, path, as_other):
+        cmd = ["curl", "-s", "-m", "5", "-H", f"Host: {HOST}",
+               "-w", "\n%{http_code}", f"http://127.0.0.1:{self.port}{path}"]
+        r = subprocess.run(other_account(*cmd) if as_other else cmd, cwd="/",
+                           capture_output=True, text=True, timeout=10)
+        body, _, status = r.stdout.rpartition("\n")
+        return int(status), body
+
+    def test_another_account_cannot_read(self):
+        status, body = self.curl("/utterance", as_other=True)
+        self.assertEqual(status, 403)
+        self.assertNotIn("private", body)
+        self.assertIn("another account", body)
+
+    def test_own_account_reads(self):
+        status, body = self.curl("/utterance", as_other=False)
+        self.assertEqual(status, 200)
+        self.assertIn("a private document", body)
+
+    # read_aloud.sh, copied next to a stand-in xselection.py that "reads" a
+    # fixed text, with notify-send stubbed: no real selection, no popup.
+    TEXT = "The code is four eight two one"
+
+    def hotkey(self, port):
+        if not shutil.which("jq"):
+            self.skipTest("read_aloud.sh needs jq")
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        os.makedirs(os.path.join(d, "linux"))
+        os.makedirs(os.path.join(d, "bin"))
+        shutil.copy(os.path.join(ROOT, "read_aloud.sh"), d)
+        with open(os.path.join(d, "linux", "xselection.py"), "w") as f:
+            f.write(f"import sys\nsys.stdout.write({self.TEXT!r})\n")
+        with open(os.path.join(d, "bin", "notify-send"), "w") as f:
+            f.write(f'#!/bin/sh\necho "$*" >> {d}/notes\n')
+        os.chmod(os.path.join(d, "bin", "notify-send"), 0o755)
+        env = {**os.environ, "KOKORO_SERVER": f"http://127.0.0.1:{port}",
+               "KOKORO_READ_LOG": os.path.join(d, "log"), "XDG_RUNTIME_DIR": d,
+               "PATH": os.path.join(d, "bin") + os.pathsep + os.environ["PATH"]}
+        r = subprocess.run([os.path.join(d, "read_aloud.sh"), "clipboard"],
+                           env=env, capture_output=True, text=True, timeout=20)
+        try:
+            with open(os.path.join(d, "notes")) as f:
+                return r.returncode, f.read()
+        except FileNotFoundError:
+            return r.returncode, ""
+
+    def test_hotkey_sends_nothing_to_another_accounts_port(self):
+        # the server is off and another account listens on its port
+        squatter = subprocess.Popen(other_account(
+            "python3", "-I", "-c",
+            "import socket\n"
+            "s = socket.create_server(('127.0.0.1', 0)); print(s.getsockname()[1], flush=True)\n"
+            "while True:\n"
+            "    c, _ = s.accept(); print('GOT', c.recv(65536), flush=True); c.close()\n"),
+            cwd="/", stdout=subprocess.PIPE, text=True)
+        self.addCleanup(squatter.kill)
+        port = int(squatter.stdout.readline())
+        rc, notes = self.hotkey(port)
+        squatter.kill()
+        got = squatter.stdout.read()
+        squatter.stdout.close()
+        self.assertEqual(rc, 1)
+        self.assertNotIn("GOT", got)
+        self.assertIn("Another account", notes)
+
+    def test_hotkey_reads_with_own_server(self):
+        hosts = {f"127.0.0.1:{self.port}"}
+        with mock.patch.object(tts_server, "ALLOWED_HOSTS", tts_server.ALLOWED_HOSTS | hosts):
+            rc, notes = self.hotkey(self.port)
+        self.assertEqual((rc, notes), (0, ""))
+        self.assertIn(("speak", self.TEXT), self.player.calls)
 
 
 class LiveServerTests(unittest.TestCase):

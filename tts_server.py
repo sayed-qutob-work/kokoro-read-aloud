@@ -18,6 +18,8 @@ requests from web pages are refused (see _only_local_programs).
 import json
 import os
 import re
+import socket
+import struct
 import sys
 import time
 import queue
@@ -1130,9 +1132,90 @@ ALLOWED_HOSTS = {f"127.0.0.1:{PORT}", f"localhost:{PORT}"}
 # at all for a host it has permission for; a Firefox port would send this.
 EXTENSION_ORIGINS = ("chrome-extension://", "moz-extension://")
 
+# Another account on this machine is not one of those local programs.
+# 127.0.0.1 is the same address for every account, and a program another
+# user runs sends the same headers as ours, so it could read /utterance, the
+# text being read (marketplace review, AUDIT 2026-11-14). The kernel records
+# which account opened each socket. sock_diag, the netlink interface `ss`
+# uses, looks up the client's end of this one connection and returns its
+# uid: 0.004 ms. /proc/net/tcp lists the same and is the fallback: 0.96 ms,
+# mostly reading the TIME_WAIT sockets that /now polls leave (measured).
+# Linux only: on Windows a program of any account is still let in.
+CHECK_ACCOUNT = sys.platform.startswith("linux")
+MY_UID = os.getuid() if CHECK_ACCOUNT else None
+
+
+def _socket_uid_netlink(local, remote):
+    """uid of the IPv4 TCP socket bound to `local` and connected to
+    `remote` ((ip, port) pairs), or None if the kernel does not say."""
+    def addr(ip):
+        return socket.inet_aton(ip).ljust(16, b"\0")
+    # struct inet_diag_req_v2: family, protocol, ext, pad, states, then the
+    # inet_diag_sockid: ports and addresses big-endian, interface 0, and
+    # INET_DIAG_NOCOOKIE. Without NLM_F_DUMP this is one exact lookup.
+    req = struct.pack("=BBBxI", socket.AF_INET, socket.IPPROTO_TCP, 0, 0xFFFFFFFF)
+    req += struct.pack("!HH16s16s", local[1], remote[1], addr(local[0]), addr(remote[0]))
+    req += struct.pack("=III", 0, 0xFFFFFFFF, 0xFFFFFFFF)
+    SOCK_DIAG_BY_FAMILY, NLM_F_REQUEST, NETLINK_SOCK_DIAG = 20, 1, 4
+    try:
+        with socket.socket(socket.AF_NETLINK, socket.SOCK_DGRAM,
+                           NETLINK_SOCK_DIAG) as s:
+            s.settimeout(1)
+            s.send(struct.pack("=IHHII", 16 + len(req), SOCK_DIAG_BY_FAMILY,
+                               NLM_F_REQUEST, 1, 0) + req)
+            r = s.recv(4096)
+    except OSError:
+        return None
+    # the answer: nlmsghdr (16 bytes), then inet_diag_msg: family, state,
+    # timer, retrans (4), the sockid (48), expires, rqueue, wqueue, uid.
+    # Anything else (NLMSG_ERROR: no such socket, or no inet_diag) is None.
+    if len(r) < 84 or struct.unpack_from("=H", r, 4)[0] != SOCK_DIAG_BY_FAMILY:
+        return None
+    return struct.unpack_from("=I", r, 16 + 4 + 48 + 12)[0]
+
+
+def _socket_uid_proc(local, remote, table="/proc/net/tcp"):
+    """The same, read from the kernel's socket table."""
+    def hexaddr(ip, port):
+        # the kernel prints the address as one native-endian word
+        return "%08X:%04X" % (struct.unpack("=I", socket.inet_aton(ip))[0], port)
+    key = f"{hexaddr(*local)} {hexaddr(*remote)} "
+    try:
+        with open(table) as f:
+            for line in f:
+                i = line.find(key)
+                if i < 0:
+                    continue
+                # local rem st tx:rx tr:when retrnsmt uid
+                fields = line[i:].split()
+                if fields[2] != "06":      # TIME_WAIT: no owner left (uid 0)
+                    return int(fields[6])
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+def _peer_uid():
+    """The account that opened the client's end of this request's
+    connection, or None if that cannot be told."""
+    conn = request.environ.get("werkzeug.socket")
+    try:
+        here, there = conn.getsockname(), conn.getpeername()
+    except (AttributeError, OSError):
+        return None
+    uid = _socket_uid_netlink(there, here)
+    return uid if uid is not None else _socket_uid_proc(there, here)
+
 
 def _refusal():
-    """Why this request must be refused, or None. Pure, so tests can call it."""
+    """Why this request must be refused, or None. It reads only the request
+    and, through _peer_uid, the kernel, so tests stub that and call it."""
+    if CHECK_ACCOUNT:
+        uid = _peer_uid()
+        if uid != MY_UID:
+            # fails closed: a connection whose owner the kernel does not
+            # report is refused too ("uid None" in the log)
+            return 403, f"another account (uid {uid})"
     origin = request.headers.get("Origin")
     if request.headers.get("Host", "") not in ALLOWED_HOSTS:
         # DNS rebinding: the page's own hostname now resolves to 127.0.0.1,
