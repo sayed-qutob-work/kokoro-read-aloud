@@ -13,6 +13,8 @@ WorkingDirectory=@ROOT@
 ExecStart=/usr/bin/python3 @ROOT@/overlay.py
 StandardOutput=truncate:@STATE@/overlay.log
 StandardError=truncate:@STATE@/overlay.err
+# the logs are this account's alone (AUDIT 2026-11-14)
+UMask=0077
 Restart=on-failure
 RestartSec=5
 

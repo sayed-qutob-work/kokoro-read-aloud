@@ -27,6 +27,7 @@ if [[ ! -x $PY ]]; then
 fi
 
 mkdir -p "$UNITS" "$STATE"
+chmod 700 "$STATE"    # the logs keep what was read (AUDIT 2026-11-14)
 for u in kokoro-server kokoro-overlay; do
   sed -e "s|@ROOT@|$ROOT|g" -e "s|@STATE@|$STATE|g" -e "s|@PYTHON@|$PY|g" \
       "$ROOT/linux/$u.service.in" > "$UNITS/$u.service"

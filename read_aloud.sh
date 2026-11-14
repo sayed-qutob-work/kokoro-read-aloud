@@ -34,13 +34,18 @@
 # Wire to GNOME Settings > Keyboard > View and Customize > Custom Shortcuts.
 
 set -uo pipefail
+# The log keeps excerpts of what was read: nothing this writes is for other
+# accounts (AUDIT 2026-11-14). paths.prepare() also makes the folder 0700.
+umask 077
 
 HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 SERVER="${KOKORO_SERVER:-http://127.0.0.1:5111}"
 # Kept with the other logs in the state folder, never next to the code
 # (paths.py says why). KOKORO_READ_LOG= (empty) disables it.
 LOG="${KOKORO_READ_LOG-${XDG_STATE_HOME:-$HOME/.local/state}/kokoro-read-aloud/read_aloud.log}"
-STATE="${XDG_RUNTIME_DIR:-/tmp}/kokoro-read-aloud"
+# Not /tmp without XDG_RUNTIME_DIR: another account could make that folder
+# first, read last-spoken and plant links where this writes.
+STATE="${XDG_RUNTIME_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}}/kokoro-read-aloud"
 SETTLE_TRIES="${KOKORO_SETTLE_TRIES:-5}"        # incl. the first read
 SETTLE_SLEEP="${KOKORO_SETTLE_SLEEP:-0.06}"
 OWNER_TRIES="${KOKORO_OWNER_TRIES:-15}"         # x OWNER_SLEEP = 300ms at most

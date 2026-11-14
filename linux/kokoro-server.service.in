@@ -18,6 +18,9 @@ ExecStart=@PYTHON@ @ROOT@/tts_server.py
 # exit 209/STDOUT, AUDIT 2026-10-17).
 StandardOutput=truncate:@STATE@/server.log
 StandardError=inherit
+# server.log and calibration.json are this account's alone: systemd makes
+# the log with this umask too (measured, AUDIT 2026-11-14)
+UMask=0077
 Restart=on-failure
 RestartSec=5
 

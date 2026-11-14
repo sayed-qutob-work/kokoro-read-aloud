@@ -78,6 +78,22 @@ else:
     GUI_PYTHON = "/usr/bin/python3"
 
 
+def private(folder):
+    """This account's alone: the folder 0700 and its files 0600, whatever
+    umask made them. The state folder's logs keep what was read
+    (read_aloud.log a 48-character excerpt of each read, server.log some
+    words), and a folder made under umask 022 was 0755 and its files 0644
+    (marketplace review, AUDIT 2026-11-14)."""
+    os.chmod(folder, 0o700)
+    for e in os.scandir(folder):
+        try:
+            if (e.is_file(follow_symlinks=False)
+                    and e.stat(follow_symlinks=False).st_mode & 0o077):
+                os.chmod(e.path, 0o600)
+        except OSError:
+            pass            # gone meanwhile, or not ours: never stop a start
+
+
 def prepare():
     """Create the folders, and move the files an older version kept next
     to the code to where they live now. Cheap and idempotent, so every
@@ -85,7 +101,8 @@ def prepare():
     if IS_WIN:
         return
     os.makedirs(CONFIG, exist_ok=True)
-    os.makedirs(STATE, exist_ok=True)
+    os.makedirs(STATE, mode=0o700, exist_ok=True)
+    private(STATE)
     for new in (SETTINGS, CALIBRATION):
         old = os.path.join(ROOT, os.path.basename(new))
         if os.path.exists(old) and not os.path.exists(new):
