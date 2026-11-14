@@ -573,7 +573,7 @@ wheels = [
 
 [[package]]
 name = "kokoro-read-aloud"
-version = "0.2.0"
+version = "0.3.0"
 source = { virtual = "." }
 dependencies = [
     { name = "comtypes", marker = "sys_platform == 'win32' or (extra == 'extra-17-kokoro-read-aloud-cpu' and extra == 'extra-17-kokoro-read-aloud-cuda')" },

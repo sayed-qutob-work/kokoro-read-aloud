@@ -16,7 +16,7 @@
 
 [project]
 name = "kokoro-read-aloud"
-version = "0.2.0"
+version = "0.3.0"
 description = "Select text anywhere, press a hotkey, hear it read aloud. Local Kokoro TTS."
 license = "MIT"
 # kokoro 0.9.4 needs >=3.10,<3.13; every measurement is on 3.12.
