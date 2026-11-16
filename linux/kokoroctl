@@ -332,6 +332,17 @@ def restart():
     return set_mode("cpu" if cpu else "gpu")
 
 
+class NeedsTk(Exception):
+    """A Tk window was asked for and the system Python has no Tk: optional
+    on Omarchy, so setup let it through (kokoro_setup.check_system)."""
+
+
+def require_tk(what):
+    if not kokoro_setup.has_tk():
+        raise NeedsTk(f"{what} needs Tk, which is not installed: "
+                      + kokoro_setup.install_command([kokoro_setup.TK_PACKAGE]))
+
+
 def captions(action):
     running = pids("overlay.py")
     if action == "toggle":
@@ -343,6 +354,7 @@ def captions(action):
         return "captions off"
     if running:
         return "captions already on"
+    require_tk("The caption strip")
     if managed(OVERLAY_UNIT):
         systemctl("start", OVERLAY_UNIT)
     else:
@@ -371,6 +383,7 @@ def settings():
             if out.strip() != "ok":
                 run(["hyprctl", "dispatch", "focuswindow", f"address:{addr}"])
             return "focused"
+    require_tk("The settings window")
     # tray.err catches what tray.py cannot log itself, e.g. a missing tkinter
     spawn([paths.GUI_PYTHON, os.path.join(ROOT, "tray.py"), "--settings"],
           paths.TRAY_ERR)
@@ -517,13 +530,20 @@ def main(argv):
         subprocess.Popen([os.path.join(ROOT, "read_aloud.sh"), "clipboard"],
                          stdin=subprocess.DEVNULL, start_new_session=True)
         msg = "reading the clipboard"
-    elif cmd == "captions":
-        msg = captions(argv[2] if len(argv) > 2 else "toggle")
-    elif cmd == "settings" and "--json" in argv[2:]:
+    elif cmd in ("captions", "settings") and "--json" not in argv[2:]:
+        try:
+            msg = (captions(argv[2] if len(argv) > 2 else "toggle")
+                   if cmd == "captions" else settings())
+        except NeedsTk as e:
+            # stderr is the widget's error line. More settings has none: the
+            # widget runs it detached and closes, so it gets a notification.
+            print(e, file=sys.stderr)
+            if cmd == "settings" and shutil.which("notify-send"):
+                run(["notify-send", "-a", "Kokoro read aloud", "Tk is missing", str(e)])
+            return 1
+    elif cmd == "settings":
         print(json.dumps(settings_json(), separators=(",", ":")))
         return 0
-    elif cmd == "settings":
-        msg = settings()
     elif cmd == "set":
         try:
             print(json.dumps(set_settings(argv[2:]), separators=(",", ":")))

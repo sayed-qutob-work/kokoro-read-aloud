@@ -5,7 +5,9 @@ code folder.
 
   1. Checks the system packages: Tk for the settings panel, PortAudio,
      wl-clipboard, jq, curl, notify-send. Setup has no root, so it cannot
-     install them; it prints the one command that does.
+     install them; it prints the one command that does. On Omarchy Tk is
+     optional, since the bar widget has the settings, and the rest ship
+     with it, so a stock Omarchy needs no command (AUDIT 2026-11-16).
   2. uv: the system's, when it is at least UV_MIN, else the pinned
      UV_VERSION from GitHub, checked against its SHA-256.
   3. Python 3.12 and the server's packages, `uv sync --frozen` from uv.lock.
@@ -16,7 +18,8 @@ code folder.
      in the cpu build, the CUDA torch in the cuda one.
   4. The model files (model_files.py), each checked against its SHA-256:
      Paradee's for cpu, Kokoro's and Paradee's for cuda.
-  5. The systemd units, the launcher entry, under Hyprland the hotkeys, and
+  5. The systemd units, the launcher entry (only with Tk: it opens the Tk
+     panel), under Hyprland the hotkeys, and
      a `kokoroctl` command in ~/.local/bin. Then it restarts the server and
      waits until it answers.
 
@@ -161,6 +164,34 @@ def _ok(cmd):
         return False
 
 
+def has_tk():
+    """The settings panel (tray.py) and the caption strip (overlay.py) are Tk
+    windows on the system Python. Stock Omarchy has no `tk`: of the 896
+    packages its base lists pull in, tk is the one Kokoro needs and lacks
+    (pactree, AUDIT 2026-11-16)."""
+    return _ok([paths.GUI_PYTHON, "-c", "import tkinter"])
+
+
+def omarchy():
+    """The Omarchy shell is here, so the bar widget can show the settings and
+    Tk is optional. kokoroctl's ping_widget looks for the same command."""
+    return shutil.which("omarchy-shell") is not None
+
+
+def install_command(packages):
+    """packages: [(Arch name, Fedora name)]. The one command that installs
+    them, for this distribution."""
+    ids = _os_release()
+    if "arch" in ids:
+        return "sudo pacman -S --needed " + " ".join(a for a, _f in packages)
+    if ids & {"fedora", "rhel"}:
+        return "sudo dnf install " + " ".join(f for _a, f in packages)
+    return "your package manager: " + ", ".join(a for a, _f in packages)
+
+
+TK_PACKAGE = ("tk", "python3-tkinter")
+
+
 def check_system(variant):
     if platform.machine() != "x86_64":
         raise SetupError(f"this needs an x86_64 machine, not {platform.machine()}: "
@@ -168,8 +199,6 @@ def check_system(variant):
     gnome = "GNOME" in os.environ.get("XDG_CURRENT_DESKTOP", "")
     # (what it is for, present?, Arch package, Fedora package)
     needs = [
-        ("Tk for the settings panel and caption strip",
-         _ok([paths.GUI_PYTHON, "-c", "import tkinter"]), "tk", "python3-tkinter"),
         ("PortAudio, for audio output",
          ctypes.util.find_library("portaudio") is not None, "portaudio", "portaudio"),
         ("wl-paste, to read the selection",
@@ -184,15 +213,15 @@ def check_system(variant):
         needs.append(("python-xlib for the system Python, to read the selection on GNOME",
                       _ok([paths.GUI_PYTHON, "-c", "import Xlib"]),
                       "python-xlib", "python3-xlib"))
+    # Elsewhere the Tk panel is the only settings window there is. On
+    # Omarchy the widget is, so a missing Tk costs only Captions and More
+    # settings, and those say what to install when clicked (kokoroctl).
+    if not omarchy():
+        needs.insert(0, ("Tk for the settings panel and caption strip",
+                         has_tk(), *TK_PACKAGE))
     missing = [n for n in needs if not n[1]]
     if missing:
-        ids = _os_release()
-        if "arch" in ids:
-            cmd = "sudo pacman -S --needed " + " ".join(m[2] for m in missing)
-        elif ids & {"fedora", "rhel"}:
-            cmd = "sudo dnf install " + " ".join(m[3] for m in missing)
-        else:
-            cmd = "your package manager: " + ", ".join(m[2] for m in missing)
+        cmd = install_command([(m[2], m[3]) for m in missing])
         raise SetupError("missing: " + "; ".join(m[0] for m in missing)
                          + f". Install them with: {cmd} -- then run setup again")
 
@@ -447,8 +476,12 @@ def install_services(progress):
                                   "kokoro-server.service"]).returncode == 0
     progress.update("systemd units")
     _script("install-systemd.sh")      # enables the server, and starts it if it was not
-    progress.update("launcher entry")
-    _script("install-desktop.sh")
+    tk = has_tk()      # False only on Omarchy: check_system stops elsewhere
+    if tk:
+        progress.update("launcher entry")
+        _script("install-desktop.sh")
+    else:              # it would open the Tk panel, which cannot start
+        progress.update("launcher entry: skipped, the settings window needs Tk")
     hyprland = bool(os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"))
     if hyprland:
         progress.update("Hyprland hotkeys")
@@ -468,7 +501,9 @@ def install_services(progress):
         raise SetupError(f"the server did not answer within 2 minutes; see "
                          f"{paths.SERVER_LOG}")
     if hyprland:
-        return "Ready. Select text and press Ctrl+Alt+R."
+        return "Ready. Select text and press Ctrl+Alt+R." + (
+            "" if tk else " Captions and More settings also need Tk: "
+            + install_command([TK_PACKAGE]))
     return ("Ready. Bind the hotkeys in Settings > Keyboard > Custom Shortcuts: "
             f"{ROOT}/read_aloud.sh selection | clipboard | stop")
 
