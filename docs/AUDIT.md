@@ -4873,6 +4873,13 @@ own, no tab, and a frame that changes its selection is refused.
   would still get one guess per read;
 - that real reads (PRIMARY on Linux, the copy on Windows) still highlight.
 
+**Tested on the desktop since (Omarchy/Hyprland, the user's Chromium, 1.3):**
+the second point on 2026-11-14 (a hotkey read of a page's own selection
+highlights; see the DIAGNOSED entry below), the first on 2026-11-16: the
+same text shown on a page and selected in a terminal, Ctrl+Alt+T with the
+terminal focused, and the page showed no highlight. Both halves are still
+untested on Windows.
+
 The harness (mock server, pages, CDP driver) was in the session scratchpad,
 not the repo.
 
