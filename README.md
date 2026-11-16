@@ -65,13 +65,12 @@ The details behind each of these are in
 ## Install
 
 On Linux, one command, `kokoroctl setup`, installs everything without root,
-outside the code folder. It needs a few system packages first.
+outside the code folder. Outside Omarchy it needs a few system packages first.
 
 <details open>
 <summary><b>Omarchy</b> (Hyprland)</summary>
 
 ```bash
-sudo pacman -S --needed tk portaudio wl-clipboard jq curl libnotify
 omarchy plugin add https://github.com/sayed-qutob-work/kokoro-read-aloud --enable
 ```
 
@@ -81,6 +80,13 @@ omarchy plugin add https://github.com/sayed-qutob-work/kokoro-read-aloud --enabl
    **CPU** (about 0.2 GB, the default) or **GPU** (about 4 GB, NVIDIA only).
 3. A notification says when Kokoro is ready. Ctrl+Alt+R, T and S are bound
    for you.
+
+The caption strip and the More settings window also need Tk, the one package
+a fresh Omarchy lacks. Reading works without it. To add them, any time:
+
+```bash
+sudo pacman -S --needed tk
+```
 
 To set up from a terminal instead:
 

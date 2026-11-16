@@ -158,6 +158,13 @@ the page. Restarting the browser is not enough: Chromium then loads the new
 page scripts but keeps the old background script, and the two no longer
 understand each other, without any error (AUDIT 2026-11-14).
 
+## Captions or More settings says "needs Tk, which is not installed"
+
+The caption strip and the settings window are Tk windows, and a fresh Omarchy
+has no Tk. Setup does not need it there, so it goes on without it. Install it
+with the command the message gives (`sudo pacman -S --needed tk` on Omarchy)
+and click again; nothing needs restarting.
+
 ## Highlighting is wrong or missing
 
 Windows only. Check the table in [windows.md](windows.md#in-place-highlighting)

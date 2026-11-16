@@ -18,11 +18,18 @@ Tested on Omarchy 4.0.4 (Arch, Hyprland 0.56.2) with an NVIDIA GPU, as a
 clean install by a new user from the GitHub URL.
 
 ```bash
-sudo pacman -S --needed tk portaudio wl-clipboard jq curl libnotify
 omarchy plugin add https://github.com/sayed-qutob-work/kokoro-read-aloud --enable
 ```
 
-On a fresh Omarchy, `tk` is the only one of those packages that is missing.
+Setup needs no system package that a fresh Omarchy lacks. One is optional:
+`tk`, for the caption strip and the More settings window. Without it, reading,
+the voice, the speed and GPU/CPU/off all work from the panel, and Captions and
+More settings show the command below when clicked. Install it any time; it
+takes effect at the next click:
+
+```bash
+sudo pacman -S --needed tk
+```
 
 `omarchy plugin add` first warns that plugins run unsandboxed inside the
 shell, and asks you to confirm. With `--enable` it then asks which bar section
@@ -88,7 +95,8 @@ panel opens from the app grid ("Kokoro Settings"), or with
 writes to that folder. It needs no root; only the system packages above do.
 
 1. **Checks the system packages.** If any are missing, it stops and prints
-   the `pacman` or `dnf` command that installs them.
+   the `pacman` or `dnf` command that installs them. On Omarchy, Tk is not
+   one of them: setup goes on without it and says so when it finishes.
 2. **Gets uv.** It uses yours if it is 0.12.10 or newer. Otherwise it
    downloads uv 0.12.24 and checks it against a pinned SHA-256.
 3. **Installs Python 3.12 and the server's packages** at the versions and
@@ -102,7 +110,8 @@ writes to that folder. It needs no root; only the system packages above do.
 5. **Installs the rest:**
    - autostart for the server;
    - the hotkeys, on Hyprland;
-   - a "Kokoro Settings" launcher entry;
+   - a "Kokoro Settings" launcher entry, if Tk is there (it opens the Tk
+     window; run setup again after adding Tk to get it);
    - the `kokoroctl` command in `~/.local/bin`.
 
    Then it starts the server.

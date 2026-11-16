@@ -5193,6 +5193,78 @@ read as words.
 read in progress:** the command printed `/now` (`active: true`) and
 restarted without checking it. Check `/now` first and stop if it is active.
 
+### CHANGED 2026-11-16 (not released): Tk is optional on Omarchy, so a stock Omarchy needs no root step
+
+**Why.** The marketplace listing carries `manual-setup` ("Standard install
+cannot produce a functioning plugin"), added by hand at approval with no
+reason given (#14706), so the catalog shows "Manual setup" with no install
+command. OmaPicks takes only plugins the marketplace marks installable, so
+it left Kokoro out of the `read-aloud` category it made at our request
+(BVisagie/omapicks#44). Peers with a setup step are "Available": hikari112's
+TTS sets itself up from its widget, as ours does, and calebhat's Read Aloud
+and OmaYap run a `bin/setup` from a terminal. What our README showed first
+was `sudo pacman -S --needed tk portaudio …`, and setup did stop without
+Tk. Asked on #14997 whether this change is enough to drop the label; no
+answer yet.
+
+**Measured: Tk is the one package a stock Omarchy lacks.** `pactree -u -l`
+over every package in Omarchy 4.5.0's `omarchy-base.packages` and
+`omarchy-x86_64-only.packages` (162; 160 installed here, and the other two,
+`fcitx5-table-extra` and `superwhisper-bin`, do not depend on Tk) gives 896
+packages. Of setup's checks, portaudio (through ffmpeg → libopenmpt, among
+others), wl-clipboard, jq, curl, libnotify, python and systemd are in it;
+`tk` is not, and nothing installed here requires it (`Required By: None`).
+Only the settings window (`tray.py`) and the caption strip (`overlay.py`)
+use it.
+
+**Change.**
+- `kokoro_setup.check_system`: Tk is required only when `omarchy-shell` is
+  not found (`omarchy()`). Everywhere else the Tk panel is the only
+  settings window, so it stays required. Omarchy 4 has `omarchy-shell` in
+  `/usr/bin` as well as `$OMARCHY_PATH/bin` (package `omarchy` 4.5.0).
+- `install_services`: without Tk, no launcher entry (it opens the Tk panel),
+  and the final message, which the "ready" notification shows, ends with
+  "Captions and More settings also need Tk: sudo pacman -S --needed tk".
+- `kokoroctl captions on` and `kokoroctl settings`: without Tk they print
+  "The caption strip / The settings window needs Tk, which is not
+  installed: <command>" to stderr and exit 1, instead of starting a Tk
+  process that dies. The widget shows a failed command's stderr in its
+  error line. More settings runs detached and the panel closes, so it also
+  sends a notification. `captions off` and `settings --json` need no Tk.
+  The check runs at each click, so installing Tk takes effect without a
+  restart.
+- README, `install.md`: the Omarchy install is `omarchy plugin add` alone,
+  with Tk as an optional extra. `troubleshooting.md` has the message.
+
+**Measured after**, in a `bwrap` mount namespace with `/dev/null` bound over
+`/usr/lib/libtk8.6.so` (`import tkinter` → `ImportError: libtk8.6.so: cannot
+open shared object file`, as without the package), the real probes, no mocks:
+- the old `check_system` (HEAD): `SetupError: missing: Tk for the settings
+  panel and caption strip. Install them with: sudo pacman -S --needed tk`;
+- the new one: `has_tk False omarchy True`, passes;
+- the new one with `/usr/bin/omarchy-shell` hidden too: the old error, Tk
+  still required;
+- `linux/kokoroctl captions on`: the message, exit 1, no `overlay.py`
+  started (`kokoroctl status` `captions: false`);
+- `linux/kokoroctl settings`: the message, exit 1, no `tray.py` started, and
+  `notify-send` (a recording stand-in on `PATH`) got
+  `-a|Kokoro read aloud|Tk is missing|The settings window needs Tk, …`.
+
+A first try at the process check used `pgrep -f overlay.py` and reported
+"running": it matched the shell whose own command line held that text.
+`pgrep -f '[o]verlay\.py'` and `status` showed nothing ran.
+
+**Tests:** `tests/test_setup.py`, 12 pass (system Python, everything
+probed is replaced): Omarchy without Tk passes, elsewhere it does not,
+Omarchy still requires the rest, the launcher is skipped and the message
+names Tk, and kokoroctl's refusals, notification and unchanged paths.
+`tests/test_server.py` still passes.
+
+**Not tested:** a full setup on a machine without Tk (step 5 for real), and
+the widget showing the refusal: its error line with this long message, and
+the notification on the desktop. Both need Tk removed from a real session
+(`sudo pacman -R tk`, then reinstall) or a fresh Omarchy.
+
 ---
 
 ## 9. Accepted trade-offs (settled — reopen only with new information)
