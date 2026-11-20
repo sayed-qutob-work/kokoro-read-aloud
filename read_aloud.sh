@@ -51,12 +51,19 @@ SETTLE_SLEEP="${KOKORO_SETTLE_SLEEP:-0.06}"
 OWNER_TRIES="${KOKORO_OWNER_TRIES:-15}"         # x OWNER_SLEEP = 300ms at most
 OWNER_SLEEP="${KOKORO_OWNER_SLEEP:-0.02}"
 OWNER="$STATE/primary-owner"                    # "<window address> <watcher pid>"
+# Whoever owns a selection decides how much it sends and how fast, and any
+# app can own one: a read ends after GRAB_SECS and keeps at most GRAB_BYTES,
+# the limits xselection.py has too (marketplace review, AUDIT 2026-11-20).
+GRAB_SECS="${KOKORO_GRAB_SECS:-3}"
+GRAB_BYTES=1048576
 
 # Called by `watch` (below) on every PRIMARY change, with the text on stdin:
 # note which window was focused. Browsers republish PRIMARY while you drag,
 # so this does nothing else and logs nothing.
 if [[ ${1:-} == primary-changed ]]; then
-  cat >/dev/null               # drain it, so the owner's write does not fail
+  # Drain it, so the owner's write does not fail; an owner that never stops
+  # writing gets a second, then the window is noted anyway.
+  timeout -k 1 1 cat >/dev/null
   read -r _ addr _ < <(hyprctl activewindow 2>/dev/null)
   mkdir -p "$STATE" && printf '%s %s\n' "${addr:-none}" "$PPID" >"$OWNER.$$" &&
     mv -f "$OWNER.$$" "$OWNER"
@@ -102,9 +109,17 @@ grab() {  # $1 = primary|clipboard -> GRAB_OUT, diagnostics in GRAB_RC/GRAB_ERR/
   GRAB_RC=$?
   if (( GRAB_RC == 2 )) || [[ ! -f $XSEL ]]; then
     GRAB_VIA=wl
-    if [[ $1 == primary ]]; then out=$(wl-paste --primary --no-newline 2>"$ERRF")
-    else                         out=$(wl-paste           --no-newline 2>"$ERRF"); fi
+    # wl-paste copies until the owner closes the pipe. head stops it at
+    # GRAB_BYTES (its pipe closes, so wl-paste stops too); timeout ends a
+    # transfer that never finishes, and then nothing of it is kept.
+    local sel=(); [[ $1 == primary ]] && sel=(--primary)
+    out=$(timeout -k 1 "$GRAB_SECS" wl-paste "${sel[@]}" --no-newline 2>"$ERRF" |
+          head -c "$GRAB_BYTES")
     GRAB_RC=$?
+    if (( GRAB_RC == 124 || GRAB_RC == 137 )); then
+      out=
+      echo "wl-paste: no end after ${GRAB_SECS}s" >>"$ERRF"
+    fi
   fi
   GRAB_ERR=$(tr '\n' ';' <"$ERRF")
   GRAB_OUT=$out
