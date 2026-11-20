@@ -5267,6 +5267,80 @@ the notification on the desktop. Both need Tk removed from a real session
 
 ---
 
+### FIXED 2026-11-20 (not released): a selection's owner could stall the hotkey and grow its memory
+
+**The finding** (HANCORE-linux, omacom/omarchy-plugin-marketplace#14997,
+2026-11-19 22:32 UTC, review blocked at `c789c47`), Medium: "The Xwayland
+selection reader retains every chunk and resets its wait on each
+iteration, without a total byte or time limit (`linux/xselection.py:79–95`)."
+The owner of a selection is whichever app set it last, and on X11 that is
+any client.
+
+**Verified in the code, and wider than reported.** In `xselection.py`:
+- **INCR** (the transfer for large selections): the one-second deadline was
+  reset before each chunk and every chunk was kept, so an owner sending a
+  chunk a second for ever kept the read going for ever and the helper
+  growing;
+- **events**: `next_event` only looked at the clock while nothing was
+  pending, and any client may change a property on our window, so a flood
+  of unrelated PropertyNotify events kept it in the loop without a timeout;
+- **one-shot properties**: `get_full_property` fetched the whole property,
+  whatever its size.
+
+Not in the report, the same class on the Wayland side, **which every read
+on Omarchy takes** (`via=wl`, no python-xlib there):
+- `grab()` ran `out=$(wl-paste ...)`, which copies until the owner closes
+  the pipe, into a shell variable, with no time or byte limit;
+- the watcher's `primary-changed` drained the selection with
+  `cat >/dev/null`, waiting just as long, before it noted the window.
+
+**Change.** The same two limits everywhere, so a read ends and holds a
+bounded amount, whatever the owner does:
+- `xselection.py`: one deadline for the whole INCR transfer
+  (`TRANSFER` = 2 s, after `TIMEOUT` = 1 s for the answer); the deadline is
+  checked before every event, pending or not; every property read asks for
+  at most `MAX_BYTES` (1 MiB) and the INCR loop stops there. Text past it is
+  cut at a character boundary (`utf8_prefix`: an incremental decoder holds
+  back a half sequence; bytes that are not UTF-8 pass unchanged) and stderr
+  says `xselection: cut at N bytes`, which the log shows as `err=`.
+- `read_aloud.sh`: `timeout -k 1 $GRAB_SECS wl-paste ... | head -c $GRAB_BYTES`
+  (3 s, `KOKORO_GRAB_SECS`; 1 MiB). After a timeout nothing is kept and the
+  error says `wl-paste: no end after 3s`. The drain is `timeout -k 1 1 cat`.
+- 1 MiB is 145 times the largest read in `read_aloud.log` (7,234
+  characters, 2026-11-20), so no real read is affected. A selection past it
+  is cut, not refused.
+
+**Measured.**
+- `tests/test_xselection.py` (stdlib, no X: a fake Xlib plays the owner,
+  with a fake clock). The fix passes 11 of 11. The code before it
+  (`XSELECTION=<copy of c789c47>`), on the same owners: an endless INCR was
+  still being read past 64 MiB; ten bytes every 0.9 s were still being read
+  after 600 fake seconds; an event flood had used 200,000 events and 200
+  fake seconds without ending; a 2 MiB property came back whole. Ordinary
+  reads (small, INCR in three chunks, unowned, refused) pass on both.
+- `tests/test_read_aloud.py` (the real script, stand-ins on PATH, nothing
+  sent to a server). The fix passes 4 of 4: an endless owner is cut at
+  1,048,576 characters in under a second; an owner that never finishes ends
+  after 1 s (`KOKORO_GRAB_SECS=1`) with nothing kept and "nothing selected";
+  the watcher notes the window within 3 s while `yes` is still writing. The
+  script before it (`READ_ALOUD=<copy>`) passes only the ordinary read: the
+  other three were still running when killed at 15 s.
+- The real `wl-paste` on this Omarchy desktop, through the new pipeline
+  (byte count only): 17 bytes, rc 0, 2–3 ms, five runs.
+
+**Not tested:** `xselection.py` against a real X server. This desktop has
+no python-xlib, and it is the path GNOME takes (Fedora, input-remapper), so
+it was checked only against the fake. What exit status the real `wl-paste`
+gives when `head` closes its pipe was not measured either (the comment says
+only that it stops). A hotkey read through the deployed script waits for
+the user's next read: the binds and the watcher run `read_aloud.sh` from
+this folder, so the change is live there.
+
+**Next:** the fix is a new commit, so it needs its own update request; it
+will also carry the five local commits (URL reading, Tk optional).
+
+---
+
 ## 9. Accepted trade-offs (settled — reopen only with new information)
 
 - **Bottom caption strip — NARROWLY REOPENED 2026-07-22.** "No bottom
