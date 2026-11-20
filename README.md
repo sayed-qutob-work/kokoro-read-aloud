@@ -54,7 +54,8 @@ The details behind each of these are in
   sound, not for speed. Paradee's sound quality is slightly lower, most
   noticeably on headphones, but on an i5-12400F it starts speaking as fast as
   the GPU does ([measurements](docs/how-it-works.md#cpu-or-gpu)).
-- **No in-place highlighting on Linux,** only the caption strip.
+- **On Linux, in-place highlighting only in Chromium,** through the bundled
+  extension. Other apps have the caption strip.
 
 | Platform | Tested |
 |---|---|
@@ -171,6 +172,8 @@ setting, and in VS Code's terminal you turn on
 - **On Windows,** the spoken word is also tinted in the app itself: in
   Firefox, in Notepad, and in Chrome or Edge with the bundled extension
   ([details](docs/windows.md)).
+- **On Linux,** the same extension tints it in Chromium
+  ([details](docs/windows.md#in-place-highlighting)).
 - **From a terminal** on Linux, `kokoroctl` turns the model off and on,
   switches GPU and CPU, and changes the voice and speed
   ([reference](docs/omarchy.md#kokoroctl)).

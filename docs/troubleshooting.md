@@ -167,10 +167,14 @@ and click again; nothing needs restarting.
 
 ## Highlighting is wrong or missing
 
-Windows only. Check the table in [windows.md](windows.md#in-place-highlighting)
-first.
+**On Linux,** only the Chromium extension highlights, and only in the page
+whose selection is being read. After updating the repo, press its reload
+button in `chrome://extensions` and reload the tab: restarting the browser
+is not enough ([details](windows.md#in-place-highlighting)).
 
-The highlighter writes `highlighter.log`: the document it anchored to, and the
+**On Windows,** check the table in
+[windows.md](windows.md#in-place-highlighting) first. The Windows
+highlighter writes `highlighter.log`: the document it anchored to, and the
 rectangle for every word. Diagnose from that log, as described in
 [AUDIT.md](AUDIT.md) §8, "Round 4". A crash before logging starts lands in
 `highlighter.err`.
